@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -23,11 +23,6 @@ build/
 # Logs
 logs/
 *.log
-
-# Assets - sounds (large binary files)
-assets/sounds/*.wav
-assets/sounds/*.mp3
-assets/sounds/*.ogg
 
 # Assets - generated cache
 assets/__pycache__/
