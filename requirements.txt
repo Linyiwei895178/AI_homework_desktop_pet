@@ -1,0 +1,18 @@
+# AI_Desktop_Pet 依赖
+# 运行时依赖
+Pillow>=10.0.0          # 图片处理
+python-dotenv>=1.0.0    # .env 配置读取
+tkinter                 # Python标准库（无需pip安装）
+
+# API 调用（后续对接时启用）
+# requests>=2.31.0
+# websocket-client>=1.6.0
+
+# TTS（后续启用）
+# pyttsx3>=2.90
+# gTTS>=2.3.0
+# playsound>=1.3.0
+
+# 开发工具
+pytest>=7.0.0           # 单元测试
+pytest-cov>=4.1.0       # 测试覆盖率
