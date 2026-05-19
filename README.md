@@ -88,15 +88,20 @@ AI_Desktop_Pet/
 | 声音 | `{pet_id}_sound_{state}_{action}_{seq}.wav` | `cat_sound_happy_speak_001.wav` |
 
 ## 快速开始
-```
+
 ### 1. 克隆仓库
+```
 git clone https://github.com/SWT-0407/AI_homework_desktop_pet.git
 cd AI_homework_desktop_pet
+```
 
 ### 2. 安装依赖
+```
 pip install -r requirements.txt
+```
 
 ### 3. 运行程序
+```
 python app/main.py
 ```
 
@@ -105,8 +110,9 @@ python app/main.py
 - **左键点击**触发动作
 - **右键点击** → 点击“退出” → 确认退出
 - 
-```
+
 ### 4. 运行测试
+```
 python tests/test_pet_state.py
 ```
 
