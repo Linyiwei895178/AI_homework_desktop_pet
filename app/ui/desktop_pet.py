@@ -47,6 +47,7 @@ class DesktopPet:
         # 回调函数（由外部绑定）
         self.on_drag_callback = None
         self.on_click_callback = None
+        self.on_right_click_callback = None  # TO_DO: 右键回调（弹出退出提示框）
 
         # 初始化UI
         self._init_ui()
@@ -74,6 +75,8 @@ class DesktopPet:
         self.label.bind("<B1-Motion>", self._on_drag_motion)
         self.label.bind("<ButtonRelease-1>", self._on_drag_end)
         self.label.bind("<Button-1>", self._on_click)
+        # TO_DO: 右键点击：弹出退出提示框
+        self.label.bind("<Button-3>", self._on_right_click)
 
     def _load_image(self):
         """加载并缩放图片"""
@@ -146,6 +149,29 @@ class DesktopPet:
         """
         # TO_DO: 处理鼠标点击逻辑
         pass
+
+    # TO_DO: 右键点击事件 - 弹出退出提示框
+    def _on_right_click(self, event):
+        """
+        鼠标右键点击：弹出退出提示框
+        """
+        # TO_DO: 创建右键菜单，提供"退出"选项
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="退出", command=self._on_exit_confirm)
+        menu.post(event.x_root, event.y_root)
+
+    def _on_exit_confirm(self):
+        """
+        确认退出：弹出确认提示框，用户点击"退出"后结束程序
+        """
+        from tkinter import messagebox
+        result = messagebox.askokcancel("退出", "确定要退出桌宠吗？")
+        if result:
+            print("[DesktopPet] 用户确认退出")
+            if self.on_right_click_callback:
+                self.on_right_click_callback()
+            else:
+                self.close()
 
     def set_image(self, image_path: str):
         """

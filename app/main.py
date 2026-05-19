@@ -49,21 +49,20 @@ def main():
     # 将 event_handler 注册到 pet 的事件回调
     pet.on_drag_callback = event_handler.handle_drag
     pet.on_click_callback = event_handler.handle_click
+    # TO_DO: 右键退出回调
+    pet.on_right_click_callback = pet.close
 
-    # TO_DO: 启动事件循环
+    # TO_DO: 启动事件循环（Tkinter主事件循环）
     logger.info("启动桌面宠物事件循环...")
     try:
-        while True:
-            pet.draw()
-            # 模拟事件获取（后续接入真实GUI事件循环）
-            event = event_handler.get_next_event()
-            if event:
-                event_handler.dispatch(event)
+        # 使用Tkinter的mainloop处理所有鼠标事件（拖拽/点击/右键退出）
+        pet.root.mainloop()
     except KeyboardInterrupt:
         logger.info("用户中断，桌宠退出。")
     except Exception as e:
         logger.error(f"运行时异常: {e}")
     finally:
+        pet.close()
         logger.info("AI_Desktop_Pet 已退出。")
 
 
