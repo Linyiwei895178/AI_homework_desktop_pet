@@ -2,7 +2,13 @@
 # 运行时依赖
 Pillow>=10.0.0          # 图片处理
 python-dotenv>=1.0.0    # .env 配置读取
-tkinter                 # Python标准库（无需pip安装）
+#tkinter                 # Python标准库（无需pip安装）
+
+# B模块：用户状态感知
+opencv-python>=4.8.0    # 摄像头读取、图像处理
+mediapipe>=0.10.0       # 人脸/关键点检测
+numpy>=1.24.0           # 数值计算
+requests>=2.31.0        # 调用 Qwen-VL API
 
 # API 调用（后续对接时启用）
 # requests>=2.31.0
