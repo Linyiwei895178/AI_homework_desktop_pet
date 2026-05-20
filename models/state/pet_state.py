@@ -5,6 +5,9 @@
 将用户状态识别结果映射为桌宠自身的 mood/energy/intimacy 变化。
 """
 
+import json
+import os
+import time
 from typing import Optional
 
 
@@ -109,6 +112,15 @@ class PetState:
             # 未知事件，保持当前状态
             pass
 
+        # 记录状态变化历史（结构化快照）
+        self._history.append({
+            "event": event,
+            "mood": self.mood,
+            "energy": self.energy,
+            "intimacy": self.intimacy,
+            "timestamp": time.time(),
+        })
+
     # TO_DO: update_from_user_state() - 根据用户状态字典更新桌宠状态
     def update_from_user_state(self, user_state: dict):
         """
@@ -168,6 +180,15 @@ class PetState:
         print(f"[PetState] 根据用户状态更新: {state_code} → mood={self.mood}, "
               f"energy={self.energy}, intimacy={self.intimacy}")
 
+        # 记录状态变化历史（结构化快照）
+        self._history.append({
+            "event": f"user_state:{state_code}",
+            "mood": self.mood,
+            "energy": self.energy,
+            "intimacy": self.intimacy,
+            "timestamp": time.time(),
+        })
+
     # TO_DO: get_last_user_state() - 获取最近一次用户状态
     def get_last_user_state(self) -> Optional[dict]:
         """
@@ -176,6 +197,89 @@ class PetState:
         :return: 用户状态字典，如果从未接收过则返回 None
         """
         return self._last_user_state
+
+    def save_state(self, filepath: Optional[str] = None):
+        """
+        将当前状态持久化到 JSON 文件（状态持久化）
+
+        :param filepath: 保存路径，默认保存到项目根目录下的 logs/pet_state.json
+        """
+        if filepath is None:
+            logs_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "logs",
+            )
+            os.makedirs(logs_dir, exist_ok=True)
+            filepath = os.path.join(logs_dir, "pet_state.json")
+
+        state_data = {
+            "mood": self.mood,
+            "energy": self.energy,
+            "intimacy": self.intimacy,
+        }
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(state_data, f, ensure_ascii=False, indent=2)
+        print(f"[PetState] 状态已保存到: {filepath}")
+
+    def load_state(self, filepath: Optional[str] = None):
+        """
+        从 JSON 文件恢复状态（状态持久化）
+
+        :param filepath: 读取路径，默认从 logs/pet_state.json 读取
+        :return: self（支持链式调用）
+        """
+        if filepath is None:
+            logs_dir = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "logs",
+            )
+            filepath = os.path.join(logs_dir, "pet_state.json")
+
+        if not os.path.exists(filepath):
+            print(f"[PetState] 状态文件不存在: {filepath}，保持当前状态")
+            return self
+
+        with open(filepath, "r", encoding="utf-8") as f:
+            state_data = json.load(f)
+
+        self.mood = state_data.get("mood", self.mood)
+        self.energy = max(0, min(100, state_data.get("energy", self.energy)))
+        self.intimacy = max(0, min(100, state_data.get("intimacy", self.intimacy)))
+        print(f"[PetState] 状态已从 {filepath} 恢复: {self}")
+        return self
+
+    def get_history(self, n: Optional[int] = None) -> list:
+        """
+        获取状态变化历史记录
+
+        :param n: 返回最近 n 条记录，None 返回全部
+        :return: 历史记录列表，每条为包含 event/mood/energy/intimacy/timestamp 的字典
+        """
+        if n is None:
+            return list(self._history)
+        return self._history[-n:]
+
+    def reset_history(self):
+        """
+        清空状态变化历史记录（配合 api_reset_ai_memory 使用）
+        """
+        self._history.clear()
+        self._last_event = None
+        self._last_user_state = None
+        print("[PetState] 历史记录已清空。")
+
+    def reset_state(self, mood: str = "neutral", energy: int = 100, intimacy: int = 50):
+        """
+        重置桌宠状态为指定值（默认为初始值）
+
+        :param mood: 目标心情
+        :param energy: 目标能量 (0-100)
+        :param intimacy: 目标亲密度 (0-100)
+        """
+        self.mood = mood
+        self.energy = max(0, min(100, energy))
+        self.intimacy = max(0, min(100, intimacy))
+        print(f"[PetState] 状态已重置: {self}")
 
     def get_state_info(self) -> dict:
         """
