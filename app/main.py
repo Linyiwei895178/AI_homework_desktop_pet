@@ -13,8 +13,10 @@ from app.controller.event_handler import EventHandler
 from app.controller.pet_controller import PetController
 from models.state.pet_state import PetState
 from models.state.behavior_rules import decide_action
+from models.state.echo_team_d_interface import EchoTeamDInterface
 from models.nlp.deepseek_api import generate_pet_reply, DeepSeekClient
 from models.tts.tts_manager import speak
+from models.tts.echo_team_c_interface import EchoTeamCInterface
 from models.vision.qwen_vl_api import get_user_state, QwenVLClient
 from models.vision.user_state_detector import (
     UserStateDetector,
@@ -24,84 +26,147 @@ from models.vision.user_state_detector import (
 )
 from utils.logger import setup_logger
 
-# TO_DO: 初始化桌面UI，加载桌宠图片
-# TO_DO: 绑定鼠标拖动事件和点击事件
-# TO_DO: 启动事件循环
-# TO_DO: 启动用户状态检测循环（UserStateDetector）
-# TO_DO: 根据用户状态自动调整桌宠行为和对话
-
 
 def main():
     """
-    主函数：初始化桌宠、状态、控制器，启动事件循环
+    主函数：初始化所有模块，通过接口层串联，启动事件循环
+
+    模块分工：
+    - 队员A (UI):  DesktopPet, EventHandler, PetController
+    - 队员B (Vision): UserStateDetector, QwenVLClient
+    - 队员C (TTS/NLP): EchoTeamCInterface, DeepSeekClient, speak
+    - 队员D (State):  EchoTeamDInterface, PetState, BehaviorRules
     """
     # 初始化日志
     logger = setup_logger("AI_Desktop_Pet")
+    logger.info("=" * 50)
     logger.info("AI_Desktop_Pet 启动中...")
+    logger.info("=" * 50)
 
-    # ====== 1. 初始化桌宠 UI ======
+    # ====== 1. 初始化桌宠 UI (队员A) ======
     pet_image_path = os.path.join(
         "assets", "images", "cat_image_smile_001.png"
     )
     pet = DesktopPet(image_path=pet_image_path, position=(100, 100))
     logger.info(f"桌宠图片加载: {pet_image_path}")
 
-    # ====== 2. 初始化桌宠状态 ======
+    # ====== 2. 初始化桌宠状态 (队员D) ======
     pet_state = PetState()
-    logger.info(f"桌宠状态初始化: mood={pet_state.mood}, energy={pet_state.energy}, intimacy={pet_state.intimacy}")
+    team_d = EchoTeamDInterface(pet_state)
+    logger.info(f"[队员D] 状态初始化: mood={pet_state.mood}, energy={pet_state.energy}, intimacy={pet_state.intimacy}")
 
-    # ====== 3. 初始化控制器和事件处理器 ======
+    # ====== 3. 初始化 TTS/NLP 接口 (队员C) ======
+    team_c = EchoTeamCInterface()
+
+    # 队员C ← 注册队员D的状态回调（对话结束后通知队员D）
+    team_c.api_register_logic_callback(team_d.api_on_chat_finished)
+
+    # 队员D ← 注册队员C的状态监听（状态变化时通知队员C）
+    team_d.api_register_status_listener(lambda event: logger.info(f"[队员C←队员D] 状态事件: {event}"))
+
+    logger.info("[队员C←→队员D] 双向接口绑定完成")
+
+    # ====== 4. 初始化控制器和事件处理器 (队员A) ======
     pet_controller = PetController(pet, pet_state)
     event_handler = EventHandler(pet, pet_controller)
 
-    # ====== 4. 绑定鼠标事件回调 ======
+    # ====== 5. 绑定鼠标事件回调 (队员A) ======
     pet.on_drag_callback = event_handler.handle_drag
     pet.on_click_callback = event_handler.handle_click
     pet.on_right_click_callback = pet.close
+    logger.info("[队员A] 鼠标事件回调绑定完成")
 
-    # ====== 5. TO_DO: 初始化用户状态检测器（UserStateDetector） ======
-    # 取消以下注释即可启用用户状态检测：
-    #
-    # user_detector = UserStateDetector()
-    # user_detector.set_mock_state(STATE_NORMAL)  # demo阶段可设置模拟状态
+    # ====== 6. 初始化用户状态检测器 (队员B) ======
+    # 取消注释以下代码即可启用摄像头检测：
+    # user_detector = UserStateDetector(enable_vlm=False)
+    # user_detector.set_mock_state(STATE_NORMAL)
+    # team_d.api_bind_vision_detector(user_detector)  # 队员B → 队员D 自动同步
     # user_detector.start()
-    # logger.info("用户状态检测器已启动")
+    # logger.info("[队员B] 用户状态检测器已启动，已绑定队员D")
 
-    # ====== 6. TO_DO: 启动定时状态检测 + 自动回应 ======
-    # 使用 Tkinter 的 after() 实现定时检测循环：
-    #
-    # def check_user_state():
-    #     """定时检测用户状态，更新桌宠行为和对话"""
-    #     # 6a. 获取用户状态（来自 UserStateDetector）
-    #     user_state = user_detector.get_state()
-    #     logger.info(f"用户状态检测: {user_state['state_code']} (置信度: {user_state['confidence']})")
-    #
-    #     # 6b. 更新桌宠状态（将用户状态映射为桌宠 mood/energy/intimacy）
-    #     pet_state.update_from_user_state(user_state)
-    #
-    #     # 6c. 如果用户需要主动回应，生成上下文感知的对话
-    #     if user_state.get("need_response", False):
-    #         suggestion = user_state.get("suggestion", "")
-    #         reply = generate_pet_reply(
-    #             text_prompt=suggestion or "根据用户当前状态，做出合适的回应。",
-    #             user_state=user_state,
-    #         )
-    #         logger.info(f"桌宠主动回应: {reply}")
-    #         # TO_DO: 在桌宠气泡中显示回复 / TTS 播放
-    #         # pet.show_speech_bubble(reply)
-    #         # speak(reply, state=user_state.get('state_code', 'neutral'), action='speak')
-    #
-    #     # 6d. 根据桌宠状态决定动作，触发桌宠表情/动画切换
-    #     action = decide_action(pet_state)
-    #     pet_controller.trigger_action(pet, action)
-    #
-    #     # 6e. 定时循环（每 3 秒检测一次）
-    #     pet.root.after(3000, check_user_state)
-    #
-    # # 启动定时检测（延迟 1 秒后首次执行）
-    # pet.root.after(1000, check_user_state)
+    # ====== 7. 启动定时状态检测 + 自动回应 ======
+    MOCK_ENABLED = True  # demo阶段使用模拟状态
 
-    # ====== 7. 启动事件循环（Tkinter主事件循环） ======
+    def check_user_state():
+        """定时检测用户状态，更新桌宠行为和对话"""
+        if MOCK_ENABLED:
+            # demo阶段：使用模拟状态轮换展示功能
+            mock_states_cycle = [
+                STATE_NORMAL,
+                STATE_FOCUSED,
+                STATE_DISTRACTED,
+                STATE_TIRED,
+                STATE_RETURN,
+            ]
+            import time
+            idx = int(time.time() / 10) % len(mock_states_cycle)
+            mock_code = mock_states_cycle[idx]
+
+            # 构建模拟状态字典
+            user_state = {
+                "state_code": mock_code,
+                "state_name": {
+                    STATE_NORMAL: "正常状态",
+                    STATE_FOCUSED: "专注学习",
+                    STATE_DISTRACTED: "疑似分心",
+                    STATE_TIRED: "疑似疲劳",
+                    STATE_RETURN: "回到座位",
+                }.get(mock_code, "未知"),
+                "description": f"模拟状态: {mock_code}",
+                "tags": [mock_code, "mock"],
+                "confidence": 0.85,
+                "duration": 10.0,
+                "need_response": mock_code in (STATE_DISTRACTED, STATE_TIRED),
+                "suggestion": "根据用户状态做出合适的回应。",
+                "source": ["mock"],
+            }
+        else:
+            # 正式模式：从 UserStateDetector 获取真实状态
+            # user_state = user_detector.get_state()
+            return  # 暂不执行
+
+        # 6a. 更新桌宠状态（队员B → 队员D）
+        team_d.api_apply_user_state(user_state)
+        logger.info(f"[队员B→队员D] 用户状态: {user_state['state_code']} "
+                    f"(置信度: {user_state['confidence']})")
+
+        # 6b. 如果用户需要主动回应，通过队员C生成对话
+        if user_state.get("need_response", False):
+            suggestion = user_state.get("suggestion", "根据用户当前状态，做出合适的回应。")
+            reply = generate_pet_reply(
+                text_prompt=suggestion,
+                user_state=user_state,
+            )
+            logger.info(f"[队员C] 桌宠主动回应: {reply}")
+
+            # 播放语音（队员C TTS）
+            speak(reply, state=user_state.get("state_code", "neutral"), action="speak")
+
+            # 对话结束后通知队员D更新状态
+            team_d.api_on_chat_finished(len(reply))
+
+        # 6c. 根据桌宠状态决定动作（队员D），触发桌宠表情/动画切换（队员A）
+        action = team_d.api_decide_action()
+        logger.info(f"[队员D→队员A] 决策动作: {action}")
+        pet_controller.trigger_action(pet, action)
+
+        # 6d. 检查是否需要主动语音提示（队员D → 队员C）
+        if team_d.api_should_speak():
+            hint = team_d.api_get_speech_hint()
+            if hint:
+                logger.info(f"[队员D→队员C] 主动语音提示: {hint}")
+                # 播放提示语音（队员C TTS）
+                speak(hint, state="hint", action="speak")
+                # 注意：主动提示不计入对话字数，不更新状态
+
+        # 6e. 定时循环（每 3 秒检测一次）
+        pet.root.after(3000, check_user_state)
+
+    # 启动定时检测（延迟 1 秒后首次执行）
+    pet.root.after(1000, check_user_state)
+    logger.info("[主循环] 定时状态检测已启动（每3秒一次）")
+
+    # ====== 8. 启动事件循环（Tkinter主事件循环） ======
     logger.info("启动桌面宠物事件循环...")
     try:
         pet.root.mainloop()
@@ -110,8 +175,8 @@ def main():
     except Exception as e:
         logger.error(f"运行时异常: {e}")
     finally:
-        # TO_DO: 停止用户状态检测器
-        # if 'user_detector' in dir() and user_detector:
+        # 停止用户状态检测器（如果已启动）
+        # if "user_detector" in dir() and user_detector:
         #     user_detector.stop()
         pet.close()
         logger.info("AI_Desktop_Pet 已退出。")
