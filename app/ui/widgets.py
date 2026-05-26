@@ -1,100 +1,2379 @@
 """
-UI控件（按钮、状态面板等）
+PySide6 UI 控件：右键菜单、弧形动作菜单、气泡、输入框、控制台等。
 """
-import tkinter as tk
+from __future__ import annotations
+
+import datetime
+import json
+import math
+import os
+import re
+import shutil
+import sys
+from collections import defaultdict
+from typing import Any, Callable, Optional
+
+from PySide6.QtCore import (
+    QEasingCurve,
+    QPoint,
+    QPointF,
+    QPropertyAnimation,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QFontDatabase,
+    QIcon,
+    QMouseEvent,
+    QMovie,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QWheelEvent,
+)
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+# ---------------------------------------------------------------------------
+# 样式常量
+# ---------------------------------------------------------------------------
+
+GLASS_FRAME = """
+QFrame#glass {{
+    background-color: rgba(255, 255, 255, 248);
+    border: 1px solid rgba(226, 232, 240, 220);
+    border-radius: {radius}px;
+}}
+"""
+
+D_ACTION_CODES = ("happy", "sad", "hungry", "angry", "idle")
+D_ACTION_LABELS = {
+    "happy": "开心",
+    "sad": "伤心",
+    "hungry": "吃饭",
+    "angry": "生气",
+    "idle": "待机",
+}
 
 
-# TO_DO: 定义可扩展UI控件，如按钮、状态面板
-# TO_DO: 提供接口供controller调用
+def _glass_style(radius: int) -> str:
+    return GLASS_FRAME.format(radius=radius)
+
+BTN_GLASS = """
+QPushButton {
+    background-color: rgba(255, 255, 255, 230);
+    border: 1px solid rgba(226, 232, 240, 200);
+    border-radius: 12px;
+    padding: 8px 14px;
+    color: #23232d;
+}
+QPushButton:hover {
+    background-color: rgba(220, 235, 255, 230);
+}
+"""
+
+BTN_PRIMARY = """
+QPushButton {
+    background-color: #1e293b;
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 8px 14px;
+}
+QPushButton:hover { background-color: #334155; }
+"""
+
+BTN_SWITCH = """
+QPushButton#switchPetBtn {
+    background-color: #7c3aed;
+    color: white;
+    border: none;
+    border-radius: 12px;
+    padding: 10px 22px;
+    font-weight: bold;
+}
+QPushButton#switchPetBtn:hover {
+    background-color: #6d28d9;
+}
+QPushButton#switchPetBtn:pressed {
+    background-color: #5b21b6;
+}
+"""
 
 
-class StatusPanel:
-    """
-    状态面板：显示桌宠当前心情、能量、亲密度
-    """
-
-    # TO_DO: 实现状态面板控件
-
-    def __init__(self, parent=None):
-        """
-        初始化状态面板
-        :param parent: 父级Tkinter容器
-        """
-        # TO_DO: 初始化状态面板UI
-        self.parent = parent
-        self.frame = None
-        self.mood_label = None
-        self.energy_label = None
-        self.intimacy_label = None
-
-        if parent:
-            self._build_ui()
-
-    def _build_ui(self):
-        """构建UI控件"""
-        # TO_DO: 创建标签显示心情、能量、亲密度
-        self.frame = tk.Frame(self.parent, bg="lightgray", padx=10, pady=10)
-        self.frame.pack(side=tk.TOP, fill=tk.X)
-
-        tk.Label(self.frame, text="=== 桌宠状态 ===", bg="lightgray", font=("Arial", 10, "bold")).pack()
-
-        self.mood_label = tk.Label(self.frame, text="心情: neutral", bg="lightgray")
-        self.mood_label.pack(anchor=tk.W)
-
-        self.energy_label = tk.Label(self.frame, text="能量: 100", bg="lightgray")
-        self.energy_label.pack(anchor=tk.W)
-
-        self.intimacy_label = tk.Label(self.frame, text="亲密度: 50", bg="lightgray")
-        self.intimacy_label.pack(anchor=tk.W)
-
-    def update_display(self, pet_state):
-        """
-        更新状态面板显示
-        :param pet_state: PetState对象，包含mood/energy/intimacy属性
-        """
-        # TO_DO: 刷新UI显示最新状态数据
-        if self.mood_label:
-            self.mood_label.config(text=f"心情: {pet_state.mood}")
-        if self.energy_label:
-            self.energy_label.config(text=f"能量: {pet_state.energy}")
-        if self.intimacy_label:
-            self.intimacy_label.config(text=f"亲密度: {pet_state.intimacy}")
+def _app_font(size: int, bold: bool = False) -> QFont:
+    if sys.platform == "win32":
+        for name in ("Microsoft YaHei UI", "Microsoft YaHei", "SimHei", "Arial"):
+            if QFontDatabase.hasFamily(name):
+                f = QFont(name, size)
+                f.setBold(bold)
+                return f
+    f = QFont("Arial", size)
+    f.setBold(bold)
+    return f
 
 
-class ActionButtonPanel:
-    """
-    动作按钮面板：触发桌宠动作
-    """
+def _load_pixmap(path: str, size: QSize | None = None) -> QPixmap:
+    pm = QPixmap(path) if path and os.path.isfile(path) else QPixmap()
+    if pm.isNull():
+        pm = QPixmap(size or QSize(64, 64))
+        pm.fill(QColor(220, 230, 255))
+    elif size:
+        pm = pm.scaled(size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    return pm
 
-    # TO_DO: 实现按钮控件
 
-    def __init__(self, parent=None, button_callbacks=None):
-        """
-        初始化按钮面板
-        :param parent: 父级Tkinter容器
-        :param button_callbacks: 按钮回调字典 {"按钮名": 回调函数}
-        """
-        # TO_DO: 初始化按钮面板UI
-        self.parent = parent
-        self.button_callbacks = button_callbacks or {}
-        self.buttons = {}
-        self.frame = None
+# ---------------------------------------------------------------------------
+# 右键菜单 & 二级菜单（自绘 overlay）
+# ---------------------------------------------------------------------------
 
-        if parent:
-            self._build_ui()
 
-    def _build_ui(self):
-        """构建按钮UI"""
-        # TO_DO: 创建多个动作按钮
-        self.frame = tk.Frame(self.parent, bg="lightblue", padx=5, pady=5)
-        self.frame.pack(side=tk.BOTTOM, fill=tk.X)
+class RightClickMenu(QFrame):
+    ITEMS = (
+        "状态栏",
+        "AI对话",
+        "设置面板",
+        "动作展示",
+        "待机",
+        "置顶设置",
+        "悬停淡出",
+        "退出",
+        "关闭",
+    )
+    WIDTH = 200
+    ITEM_HEIGHT = 40
+    PADDING = 8
+    item_selected = Signal(str)
 
-        for btn_name, callback in self.button_callbacks.items():
-            btn = tk.Button(
-                self.frame,
-                text=btn_name,
-                command=callback,
-                width=10
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("glass")
+        self.setStyleSheet(_glass_style(16))
+        self.visible = False
+        self.x = self.y = 0
+        self.hover_index = -1
+        self._selected: Optional[str] = None
+        self._font = _app_font(16)
+        self.setMouseTracking(True)
+        self.hide()
+
+    @property
+    def rect(self) -> QRect:
+        return self.geometry()
+
+    def show(self, x: int, y: int) -> None:
+        self.x, self.y = x, y
+        h = self.PADDING * 2 + len(self.ITEMS) * self.ITEM_HEIGHT
+        self.setGeometry(x, y, self.WIDTH, h)
+        self.visible = True
+        self.hover_index = -1
+        self._selected = None
+        self.raise_()
+        super().show()
+
+    def hide(self) -> None:
+        self.visible = False
+        self.hover_index = -1
+        super().hide()
+
+    def update_hover(self, mouse_pos: tuple[int, int]) -> None:
+        if not self.visible:
+            self.hover_index = -1
+            return
+        self.hover_index = -1
+        if not self.rect.contains(QPoint(*mouse_pos)):
+            return
+        local_y = mouse_pos[1] - self.y - self.PADDING
+        idx = local_y // self.ITEM_HEIGHT
+        if 0 <= idx < len(self.ITEMS):
+            self.hover_index = int(idx)
+        self.repaint()
+
+    def handle_click(self, mouse_pos: tuple[int, int]) -> Optional[str]:
+        if not self.visible:
+            return None
+        self.update_hover(mouse_pos)
+        if self.hover_index < 0:
+            return None
+        self._selected = self.ITEMS[self.hover_index]
+        return self._selected
+
+    def item_rect(self, index: int) -> QRect:
+        return QRect(
+            self.x,
+            self.y + self.PADDING + index * self.ITEM_HEIGHT,
+            self.WIDTH,
+            self.ITEM_HEIGHT,
+        )
+
+    def _index_at(self, local_y: float) -> int:
+        idx = int((local_y - self.PADDING) // self.ITEM_HEIGHT)
+        if 0 <= idx < len(self.ITEMS):
+            return idx
+        return -1
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self.visible:
+            self.hover_index = self._index_at(event.position().y())
+            self.repaint()
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.visible:
+            idx = self._index_at(event.position().y())
+            if idx >= 0:
+                self._selected = self.ITEMS[idx]
+                self.item_selected.emit(self._selected)
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def paintEvent(self, _event) -> None:
+        if not self.visible:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setFont(self._font)
+        bg = QPainterPath()
+        bg.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 16, 16)
+        p.fillPath(bg, QColor(255, 255, 255, 248))
+        p.setPen(QPen(QColor(226, 232, 240, 220), 1))
+        p.drawPath(bg)
+        for i, label in enumerate(self.ITEMS):
+            item_r = QRect(0, self.PADDING + i * self.ITEM_HEIGHT, self.WIDTH, self.ITEM_HEIGHT)
+            if i == self.hover_index:
+                path = QPainterPath()
+                path.addRoundedRect(QRectF(item_r.adjusted(4, 2, -4, -2)), 8, 8)
+                p.fillPath(path, QColor(220, 235, 255, 230))
+            p.setPen(QColor(35, 35, 45))
+            p.drawText(item_r.adjusted(16, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, label)
+        p.end()
+
+
+class SubMenu(QFrame):
+    WIDTH = 160
+    ITEM_HEIGHT = 36
+    PADDING = 6
+    item_selected = Signal(str)
+
+    def __init__(
+        self,
+        items: tuple[str, ...] = ("开始置顶", "关闭置顶"),
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.ITEMS = items
+        self.setObjectName("glass")
+        self.setStyleSheet(_glass_style(12))
+        self.visible = False
+        self.x = self.y = 0
+        self.hover_index = -1
+        self._selected: Optional[str] = None
+        self.active_index = 1
+        self._font = _app_font(15)
+        self.setMouseTracking(True)
+        self.hide()
+
+    @property
+    def rect(self) -> QRect:
+        return self.geometry()
+
+    def set_active(self, enabled: bool) -> None:
+        self.active_index = 0 if enabled else 1
+
+    def show(self, x: int, y: int) -> None:
+        self.x, self.y = x, y
+        h = self.PADDING * 2 + len(self.ITEMS) * self.ITEM_HEIGHT
+        self.setGeometry(x, y, self.WIDTH, h)
+        self.visible = True
+        self.hover_index = -1
+        self._selected = None
+        self.raise_()
+        super().show()
+
+    def hide(self) -> None:
+        self.visible = False
+        self.hover_index = -1
+        super().hide()
+
+    def update_hover(self, mouse_pos: tuple[int, int]) -> None:
+        if not self.visible:
+            self.hover_index = -1
+            return
+        self.hover_index = -1
+        if not self.rect.contains(QPoint(*mouse_pos)):
+            return
+        local_y = mouse_pos[1] - self.y - self.PADDING
+        idx = local_y // self.ITEM_HEIGHT
+        if 0 <= idx < len(self.ITEMS):
+            self.hover_index = int(idx)
+        self.repaint()
+
+    def handle_click(self, mouse_pos: tuple[int, int]) -> Optional[str]:
+        if not self.visible:
+            return None
+        self.update_hover(mouse_pos)
+        if self.hover_index < 0:
+            return None
+        if self.hover_index == self.active_index:
+            return None
+        self._selected = self.ITEMS[self.hover_index]
+        self.active_index = self.hover_index
+        return self._selected
+
+    def _index_at(self, local_y: float) -> int:
+        idx = int((local_y - self.PADDING) // self.ITEM_HEIGHT)
+        if 0 <= idx < len(self.ITEMS):
+            return idx
+        return -1
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self.visible:
+            self.hover_index = self._index_at(event.position().y())
+            self.repaint()
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.visible:
+            idx = self._index_at(event.position().y())
+            if idx >= 0 and idx != self.active_index:
+                self._selected = self.ITEMS[idx]
+                self.active_index = idx
+                self.item_selected.emit(self._selected)
+                self.repaint()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def paintEvent(self, _event) -> None:
+        if not self.visible:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setFont(self._font)
+        bg = QPainterPath()
+        bg.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 12, 12)
+        p.fillPath(bg, QColor(255, 255, 255, 248))
+        p.setPen(QPen(QColor(226, 232, 240, 220), 1))
+        p.drawPath(bg)
+        for i, label in enumerate(self.ITEMS):
+            item_r = QRect(0, self.PADDING + i * self.ITEM_HEIGHT, self.WIDTH, self.ITEM_HEIGHT)
+            color = QColor(150, 150, 160) if i == self.active_index else QColor(35, 35, 45)
+            if i == self.hover_index and i != self.active_index:
+                path = QPainterPath()
+                path.addRoundedRect(QRectF(item_r.adjusted(4, 2, -4, -2)), 8, 8)
+                p.fillPath(path, QColor(220, 235, 255, 230))
+            p.setPen(color)
+            p.drawText(item_r.adjusted(12, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, label)
+        p.end()
+
+
+# ---------------------------------------------------------------------------
+# 弧形动作菜单
+# ---------------------------------------------------------------------------
+
+
+def _ease_out_back(t: float) -> float:
+    if t <= 0.0:
+        return 0.0
+    if t >= 1.0:
+        return 1.0
+    c1, c3 = 1.70158, 2.70158
+    return 1.0 + c3 * (t - 1.0) ** 3 + c1 * (t - 1.0) ** 2
+
+
+class ArcMotionMenu(QWidget):
+    RADIUS = 120
+    BUTTON_SIZE = 48
+    HOVER_SCALE = 1.1
+    ANIM_DURATION = 0.42
+    STAGGER = 0.055
+
+    picked = Signal(dict)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.visible = False
+        self.center_x = self.center_y = 0
+        self.items: list[dict[str, Any]] = []
+        self.hover_index = -1
+        self._selected: Optional[dict[str, Any]] = None
+        self._elapsed = 0.0
+        self._font = _app_font(12)
+        self.hide()
+
+    def show_menu(self, center_x: int, center_y: int, items: list[dict[str, Any]]) -> None:
+        self.center_x, self.center_y = center_x, center_y
+        self.items = list(items)
+        self.visible = True
+        self.hover_index = -1
+        self._elapsed = 0.0
+        pad = self.RADIUS + self.BUTTON_SIZE + 20
+        self.setGeometry(center_x - pad, center_y - pad, pad * 2, pad * 2)
+        super().show()
+        self.raise_()
+
+    def show(self, center_x: int, center_y: int, items: list[dict[str, Any]]) -> None:
+        self.show_menu(center_x, center_y, items)
+
+    def hide(self) -> None:
+        self.visible = False
+        super().hide()
+
+    def tick(self, dt: float) -> None:
+        if self.visible:
+            self._elapsed += dt
+            self.update()
+
+    def _angle_deg(self, index: int) -> float:
+        n = len(self.items)
+        if n <= 1:
+            return 0.0
+        return -90.0 + 180.0 * index / (n - 1)
+
+    def _btn_center(self, index: int) -> tuple[int, int]:
+        deg = math.radians(self._angle_deg(index))
+        x = self.center_x + int(self.RADIUS * math.sin(deg))
+        y = self.center_y - int(self.RADIUS * math.cos(deg))
+        return x - self.x(), y - self.y()
+
+    def _pop_scale(self, index: int) -> float:
+        start = index * self.STAGGER
+        if self._elapsed < start:
+            return 0.0
+        return _ease_out_back(min(1.0, (self._elapsed - start) / self.ANIM_DURATION))
+
+    def button_rect(self, index: int, hover: bool = False) -> QRect:
+        pop = self._pop_scale(index)
+        if pop <= 0.01:
+            return QRect(0, 0, 0, 0)
+        scale = pop * (self.HOVER_SCALE if hover else 1.0)
+        size = max(4, int(self.BUTTON_SIZE * scale))
+        cx, cy = self._btn_center(index)
+        return QRect(cx - size // 2, cy - size // 2, size, size)
+
+    def hit_region(self) -> QRect:
+        if not self.items:
+            return QRect()
+        pts = [self._btn_center(i) for i in range(len(self.items))]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        pad = self.RADIUS + self.BUTTON_SIZE
+        return QRect(min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + pad * 2, max(ys) - min(ys) + pad * 2)
+
+    def hover_at(self, mouse_pos: tuple[int, int] | None = None) -> None:
+        if not self.visible:
+            self.hover_index = -1
+            return
+        lp = self.mapFromGlobal(QPoint(*mouse_pos)) if mouse_pos else None
+        self.hover_index = -1
+        if lp:
+            for i in range(len(self.items)):
+                if self._pop_scale(i) > 0.2 and self.button_rect(i).contains(lp):
+                    self.hover_index = i
+                    break
+        QWidget.update(self)
+
+    def update(self, mouse_pos: tuple[int, int] | None = None) -> None:
+        self.hover_at(mouse_pos)
+
+    def handle_click(self, mouse_pos: tuple[int, int]) -> Optional[dict[str, Any]]:
+        lp = self.mapFromGlobal(QPoint(*mouse_pos))
+        self.hover_index = -1
+        for i in range(len(self.items)):
+            if self.button_rect(i).contains(lp):
+                self._selected = self.items[i]
+                return self._selected
+        return None
+
+    def paintEvent(self, _event) -> None:
+        if not self.visible:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setFont(self._font)
+        for i, item in enumerate(self.items):
+            pop = self._pop_scale(i)
+            if pop <= 0.01:
+                continue
+            hovered = i == self.hover_index
+            r = self.button_rect(i, hovered)
+            path = QPainterPath()
+            path.addEllipse(QRectF(r))
+            p.fillPath(path, QColor(230, 240, 255, 220) if hovered else QColor(255, 255, 255, 180))
+            label = str(item.get("label", ""))
+            if len(label) > 5:
+                label = label[:4] + "…"
+            p.setPen(QColor(30, 30, 40))
+            p.drawText(r, Qt.AlignmentFlag.AlignCenter, label)
+        p.end()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        for i in range(len(self.items)):
+            if self.button_rect(i).contains(event.pos()):
+                self._selected = self.items[i]
+                self.picked.emit(self._selected)
+                return
+        self.hide()
+
+
+RadialMenu = ArcMotionMenu
+
+
+# ---------------------------------------------------------------------------
+# 气泡 & 输入框
+# ---------------------------------------------------------------------------
+
+
+class InfoBubble(QFrame):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("glass")
+        self.setAutoFillBackground(True)
+        self.setStyleSheet(_glass_style(14))
+        self.visible = False
+        self.mood, self.affection, self.energy = 85, 72, 90
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 12, 12, 12)
+        self._lbl = QLabel()
+        self._lbl.setFont(_app_font(15))
+        lay.addWidget(self._lbl)
+        self.hide()
+
+    @property
+    def rect(self) -> QRect:
+        return self.geometry()
+
+    def show(self, x: int, y: int) -> None:
+        self._lbl.setText(
+            f"心情❤️{self.mood}\n好感度⭐{self.affection}\n能量⚡{self.energy}"
+        )
+        self.adjustSize()
+        self.move(x, y)
+        self.visible = True
+        super().show()
+
+    def hide(self) -> None:
+        self.visible = False
+        super().hide()
+
+
+class ChatBubble(QFrame):
+    WIDTH = 280
+    RADIUS = 20
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("glass")
+        self.setStyleSheet(_glass_style(self.RADIUS))
+        self.setFixedWidth(self.WIDTH)
+        self.visible = False
+        self.text = ""
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(14, 14, 14, 14)
+        self._lbl = QLabel()
+        self._lbl.setFont(_app_font(15))
+        self._lbl.setWordWrap(True)
+        lay.addWidget(self._lbl)
+        self.hide()
+
+    @property
+    def rect(self) -> QRect:
+        return self.geometry()
+
+    def set_text(self, text: str) -> None:
+        self.text = text
+        self._lbl.setText(text)
+
+    def show(self, x: int, y: int, text: str) -> None:
+        self.set_text(text)
+        self.adjustSize()
+        self.move(x, y)
+        self.visible = True
+        super().show()
+
+    def hide(self) -> None:
+        self.visible = False
+        super().hide()
+
+
+class InputBox(QFrame):
+    WIDTH = 260
+    HEIGHT = 40
+    RADIUS = 24
+
+    submitted = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("glass")
+        self.setStyleSheet(_glass_style(self.RADIUS))
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
+        self.visible = False
+        self.focused = False
+        self.text = ""
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 4, 8, 4)
+        self._field = QLineEdit()
+        self._field.setPlaceholderText("输入消息…")
+        self._field.setFrame(False)
+        self._field.setFont(_app_font(15))
+        self._field.returnPressed.connect(self._submit)
+        self._btn = QPushButton("发送")
+        self._btn.setStyleSheet(BTN_PRIMARY)
+        self._btn.clicked.connect(self._submit)
+        lay.addWidget(self._field, 1)
+        lay.addWidget(self._btn)
+        self.hide()
+
+    @property
+    def rect(self) -> QRect:
+        return self.geometry()
+
+    def show(self, x: int, y: int) -> None:
+        self.move(x, y)
+        self.visible = True
+        self.focused = True
+        super().show()
+        self._field.setFocus()
+
+    def hide(self) -> None:
+        self.visible = False
+        super().hide()
+
+    def set_text(self, text: str) -> None:
+        self.text = text
+        self._field.setText(text)
+
+    def get_text(self) -> str:
+        return self._field.text().strip()
+
+    def _submit(self) -> None:
+        t = self.get_text()
+        if t:
+            self.submitted.emit(t)
+
+    def is_send_click(self, mouse_pos: tuple[int, int]) -> bool:
+        return self._btn.geometry().contains(self.mapFromGlobal(QPoint(*mouse_pos)))
+
+    def handle_event(self, _event) -> bool:
+        return False
+
+    def is_enter_submit(self, _event) -> bool:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# 控制台
+# ---------------------------------------------------------------------------
+
+
+class _PetCellButton(QFrame):
+    """角色卡片：图片在上、名称在下；单击详情，双击切换；右键管理。"""
+
+    single_clicked_pet = Signal(dict)
+    double_clicked_pet = Signal(dict)
+    pet_context_action = Signal(str, dict)
+
+    def __init__(self, pet: dict, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._pet = pet
+        self.setFixedSize(128, 150)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet(BTN_GLASS)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 4)
+        lay.setSpacing(4)
+        self._pic = QLabel()
+        self._pic.setFixedSize(116, 108)
+        self._pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._pic.setStyleSheet(
+            "background: rgba(255,255,255,0.55); border-radius: 10px;"
+        )
+        self._pic.setPixmap(_load_pixmap(pet.get("thumb", ""), QSize(100, 100)))
+        self._name_lbl = QLabel(pet.get("name", ""))
+        self._name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._name_lbl.setFont(_app_font(12))
+        self._name_lbl.setWordWrap(True)
+        lay.addWidget(self._pic)
+        lay.addWidget(self._name_lbl, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.setInterval(220)
+        self._click_timer.timeout.connect(self._emit_single_click)
+
+    def _on_context_menu(self, pos: QPoint) -> None:
+        menu = QMenu(self)
+        for label, action in (
+            ("删除角色", "delete"),
+            ("重命名角色", "rename"),
+            ("编辑性格简介", "personality"),
+            ("管理动作", "actions"),
+        ):
+            menu.addAction(label, lambda _=False, a=action: self.pet_context_action.emit(a, self._pet))
+        menu.exec(self.mapToGlobal(pos))
+
+    def update_pet(self, pet: dict) -> None:
+        self._pet = pet
+        self._name_lbl.setText(pet.get("name", ""))
+        self._pic.setPixmap(_load_pixmap(pet.get("thumb", ""), QSize(100, 100)))
+
+    def _emit_single_click(self) -> None:
+        self.single_clicked_pet.emit(self._pet)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        self._click_timer.stop()
+        self.double_clicked_pet.emit(self._pet)
+        event.accept()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._click_timer.start()
+        super().mousePressEvent(event)
+
+
+# ---------------------------------------------------------------------------
+# 聊天记录 / 上传 / Live2D 预览
+# ---------------------------------------------------------------------------
+
+
+class ChatHistoryStore:
+    """按角色名持久化聊天记录到 assets/chat_history/角色名.json"""
+
+    def __init__(self, project_root: str) -> None:
+        self._dir = os.path.join(project_root, "assets", "chat_history")
+        os.makedirs(self._dir, exist_ok=True)
+
+    @staticmethod
+    def _safe_name(name: str) -> str:
+        return re.sub(r'[\\/:*?"<>|]', "_", name.strip()) or "未命名"
+
+    def path_for(self, name: str) -> str:
+        return os.path.join(self._dir, f"{self._safe_name(name)}.json")
+
+    def load(self, name: str) -> list[tuple[str, str]]:
+        path = self.path_for(name)
+        if not os.path.isfile(path):
+            return []
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            msgs = data.get("msgs", data if isinstance(data, list) else [])
+            out: list[tuple[str, str]] = []
+            for item in msgs:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    out.append((str(item[0]), str(item[1])))
+            return out
+        except (OSError, json.JSONDecodeError):
+            return []
+
+    def save(self, name: str, msgs: list[tuple[str, str]]) -> None:
+        path = self.path_for(name)
+        payload = {"name": name, "msgs": [[r, t] for r, t in msgs]}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    def list_characters(self) -> list[str]:
+        names: list[str] = []
+        if not os.path.isdir(self._dir):
+            return names
+        for fname in os.listdir(self._dir):
+            if fname.endswith(".json"):
+                names.append(os.path.splitext(fname)[0])
+        return sorted(names)
+
+
+def _stem_no_ext(path: str) -> str:
+    base = os.path.basename(path)
+    if base.lower().endswith(".motion3.json"):
+        return base[: -len(".motion3.json")]
+    return os.path.splitext(base)[0]
+
+
+MAO_PRO_ZH_DISPLAY = "小魔女"
+
+
+def is_mao_pro_zh_model(model_path: str) -> bool:
+    return "mao_pro_zh" in model_path.replace("\\", "/").lower()
+
+
+def motion_label_from_filename(filename: str) -> str:
+    """从文件名提取 anim_ 后面的动作名，如 这狗_anim_爱你.gif → 爱你。"""
+    base = os.path.splitext(os.path.basename(filename))[0]
+    m = re.search(r"anim_(.+)$", base, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return base
+
+
+def resolve_mao_pro_motion_preview(model_path: str) -> str:
+    """mao_pro_zh：优先使用 runtime 下缓存的首帧预览图。"""
+    if not model_path or not os.path.isfile(model_path):
+        return ""
+    runtime = os.path.dirname(os.path.abspath(model_path))
+    cache = os.path.join(runtime, "_preview_first_motion.png")
+    if os.path.isfile(cache):
+        return cache
+    motions_dir = os.path.join(runtime, "motions")
+    if os.path.isdir(motions_dir):
+        for fname in sorted(os.listdir(motions_dir)):
+            if fname.lower().endswith(".motion3.json"):
+                stem = _stem_no_ext(fname)
+                for png in sorted(os.listdir(motions_dir)):
+                    if png.lower().startswith(stem.lower()) and png.lower().endswith(".png"):
+                        return os.path.join(motions_dir, png)
+                break
+    return resolve_live2d_thumb(model_path)
+
+
+def build_mao_pro_pet_record(model_path: str, available_motions: list[str]) -> dict:
+    preview = resolve_mao_pro_motion_preview(model_path)
+    motions = [
+        {"id": m, "label": m, "gif": "", "frames": []}
+        for m in available_motions
+    ] or [{"id": "mtn_01", "label": "mtn_01", "gif": "", "frames": []}]
+    return {
+        "id": "mao_pro_zh",
+        "name": MAO_PRO_ZH_DISPLAY,
+        "thumb": preview,
+        "personality": "活泼可爱的小魔女，喜欢陪伴你学习与工作。",
+        "motions": motions,
+        "model_path": model_path,
+        "is_flat": False,
+    }
+
+
+def custom_pets_json_path(project_root: str) -> str:
+    return os.path.join(project_root, "assets", "custom_pets.json")
+
+
+def load_custom_pet_ids(project_root: str) -> list[str]:
+    path = custom_pets_json_path(project_root)
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return [str(x) for x in data.get("ids", [])]
+        if isinstance(data, list):
+            return [str(x) for x in data]
+    except (OSError, json.JSONDecodeError):
+        pass
+    return []
+
+
+def save_custom_pet_ids(project_root: str, ids: list[str]) -> None:
+    path = custom_pets_json_path(project_root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"ids": list(dict.fromkeys(ids))}, f, ensure_ascii=False, indent=2)
+
+
+def _gif_first_frame_to_png(gif_path: str, png_path: str) -> bool:
+    try:
+        from PIL import Image as PILImage
+        with PILImage.open(gif_path) as img:
+            img.convert("RGBA").save(png_path, "PNG")
+        return os.path.isfile(png_path)
+    except Exception as exc:
+        print(f"[FlatUpload] 提取 GIF 首帧失败: {exc}")
+        return False
+
+
+def find_flat_idle_gif(project_root: str, pet_id: str) -> str:
+    """查找 idle GIF；若无 idle 则返回该角色第一个 GIF。"""
+    idle_path = ""
+    first_path = ""
+    scan: list[tuple[str, str]] = []
+    sub = os.path.join(project_root, "assets", "animations", pet_id)
+    root = os.path.join(project_root, "assets", "animations")
+    if os.path.isdir(sub):
+        scan.append((sub, ""))
+    if os.path.isdir(root):
+        scan.append((root, f"{pet_id}_"))
+    for folder, prefix in scan:
+        try:
+            files = sorted(os.listdir(folder))
+        except OSError:
+            continue
+        for fname in files:
+            if not fname.lower().endswith(".gif"):
+                continue
+            if prefix and not fname.startswith(prefix):
+                continue
+            path = os.path.normpath(os.path.join(folder, fname))
+            if not first_path:
+                first_path = path
+            if "idle" in fname.lower():
+                idle_path = path
+                break
+        if idle_path:
+            break
+    return idle_path or first_path
+
+
+def apply_zhegou_idle_thumb(project_root: str, pet: dict) -> dict:
+    """这狗：贴图使用 idle 动作首帧，无 idle 则用第一个动作首帧。"""
+    if pet.get("id") != "这狗":
+        return pet
+    pet = dict(pet)
+    gif = pet.get("idle_gif") or ""
+    if not gif or not os.path.isfile(gif):
+        gif = find_flat_idle_gif(project_root, "这狗")
+    if not gif or not os.path.isfile(gif):
+        return pet
+    images_dir = os.path.join(project_root, "assets", "images")
+    os.makedirs(images_dir, exist_ok=True)
+    out = os.path.join(images_dir, "这狗_idle_frame.png")
+    if _gif_first_frame_to_png(gif, out):
+        pet["thumb"] = out
+        pet["idle_image"] = out
+        pet["idle_gif"] = gif
+    return pet
+
+
+def scan_flat_pets(project_root: str) -> list[dict]:
+    """扫描 assets 下 GIF/PNG 与静态图，生成平面角色列表。"""
+    assets_dir = os.path.join(project_root, "assets")
+    images_dir = os.path.join(assets_dir, "images")
+    anims_dir = os.path.join(assets_dir, "animations")
+    portrait_exact_re = re.compile(r"^(.+)_image\.png$", re.IGNORECASE)
+    portrait_loose_re = re.compile(r"^(.+)_image_.+\.png$", re.IGNORECASE)
+    anim_gif_re = re.compile(r"^(.+)_anim_(.+)\.gif$", re.IGNORECASE)
+    anim_png_re = re.compile(r"^(.+)_anim_(.+)_(\d+)\.png$", re.IGNORECASE)
+
+    def _clean_fname(fname: str) -> str:
+        return re.sub(r"\s+\.", ".", fname.strip())
+
+    def _abspath(base: str, fname: str) -> str:
+        return os.path.normpath(os.path.join(base, fname.strip()))
+
+    portrait_by_pet: dict[str, str] = {}
+    portrait_rank: dict[str, int] = {}
+    gifs_by_pet: dict[str, dict[str, str]] = defaultdict(dict)
+    png_by_pet: dict[str, dict[str, list[tuple[int, str]]]] = defaultdict(lambda: defaultdict(list))
+    pet_ids: set[str] = set()
+
+    if os.path.isdir(images_dir):
+        for raw_fname in os.listdir(images_dir):
+            fname = _clean_fname(raw_fname)
+            pet_id = None
+            rank = 99
+            exact = portrait_exact_re.match(fname)
+            loose = portrait_loose_re.match(fname)
+            if exact:
+                pet_id, rank = exact.group(1), 0
+            elif loose:
+                pet_id, rank = loose.group(1), 1
+            if pet_id is None:
+                continue
+            pet_ids.add(pet_id)
+            if pet_id not in portrait_rank or rank < portrait_rank[pet_id]:
+                portrait_by_pet[pet_id] = _abspath(images_dir, raw_fname)
+                portrait_rank[pet_id] = rank
+
+    if os.path.isdir(anims_dir):
+        for raw_fname in os.listdir(anims_dir):
+            name = _clean_fname(raw_fname)
+            gif_match = anim_gif_re.match(name)
+            if gif_match:
+                pet_id, action = gif_match.group(1), gif_match.group(2)
+                pet_ids.add(pet_id)
+                gifs_by_pet[pet_id][action] = _abspath(anims_dir, raw_fname)
+                continue
+            png_match = anim_png_re.match(name)
+            if png_match:
+                pet_id, action, seq = png_match.group(1), png_match.group(2), int(png_match.group(3))
+                pet_ids.add(pet_id)
+                png_by_pet[pet_id][action].append((seq, _abspath(anims_dir, raw_fname)))
+
+    def _pick_idle_gif(pet_id: str) -> str:
+        gifs = gifs_by_pet.get(pet_id, {})
+        if gifs.get("idle") and os.path.isfile(gifs["idle"]):
+            return gifs["idle"]
+        explicit = _abspath(anims_dir, f"{pet_id}_anim_idle.gif")
+        if os.path.isfile(explicit):
+            return explicit
+        for action in sorted(gifs.keys()):
+            path = gifs[action]
+            if path and os.path.isfile(path):
+                return path
+        return ""
+
+    pets: list[dict] = []
+    for pet_id in sorted(pet_ids):
+        thumb = portrait_by_pet.get(pet_id, "")
+        idle_gif = _pick_idle_gif(pet_id)
+        gifs = gifs_by_pet.get(pet_id, {})
+        png_actions = png_by_pet.get(pet_id, {})
+        all_actions = sorted(set(gifs.keys()) | set(png_actions.keys()))
+        motions: list[dict] = []
+        for action in all_actions:
+            if action.lower() == "idle":
+                continue
+            gif_path = gifs.get(action, "")
+            frames = [path for _seq, path in sorted(png_actions.get(action, []), key=lambda x: x[0])]
+            if gif_path and not os.path.isfile(gif_path):
+                gif_path = ""
+            if not gif_path and not frames:
+                continue
+            label = motion_label_from_filename(f"{pet_id}_anim_{action}.gif")
+            motions.append(
+                {
+                    "id": action,
+                    "label": label,
+                    "gif": gif_path,
+                    "frames": frames,
+                }
             )
-            btn.pack(side=tk.LEFT, padx=2)
-            self.buttons[btn_name] = btn
+        pets.append(
+            {
+                "id": pet_id,
+                "name": pet_id,
+                "thumb": thumb,
+                "idle_image": thumb,
+                "idle_gif": idle_gif,
+                "personality": f"平面素材角色 · {pet_id}",
+                "motions": motions,
+                "is_flat": True,
+            }
+        )
+    return pets
+
+
+def synonyms_path(project_root: str) -> str:
+    return os.path.join(project_root, "assets", "synonyms.json")
+
+
+def remove_pet_from_synonyms(project_root: str, pet_name: str) -> None:
+    path = synonyms_path(project_root)
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        pets = data.get("_pets", {})
+        if pet_name in pets:
+            del pets[pet_name]
+            data["_pets"] = pets
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+
+def rename_pet_in_synonyms(project_root: str, old_name: str, new_name: str) -> None:
+    path = synonyms_path(project_root)
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        pets = data.get("_pets", {})
+        if old_name in pets:
+            pets[new_name] = pets.pop(old_name)
+            data["_pets"] = pets
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+
+class ManageActionsDialog(QDialog):
+    """管理角色动作：查看 / 添加 / 删除 / 重新映射。"""
+
+    def __init__(self, pet: dict, project_root: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._pet = pet
+        self._root = project_root
+        self.setWindowTitle(f"管理动作 - {pet.get('name', '')}")
+        self.resize(520, 460)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel(f"<h3>{pet.get('name', '')} 的动作列表</h3>"))
+        self._list = QListWidget()
+        lay.addWidget(self._list, 1)
+        row = QHBoxLayout()
+        add_btn = QPushButton("添加动作")
+        del_btn = QPushButton("删除选中")
+        map_btn = QPushButton("重新映射")
+        add_btn.clicked.connect(self._add_action)
+        del_btn.clicked.connect(self._delete_action)
+        map_btn.clicked.connect(self._remap_actions)
+        row.addWidget(add_btn)
+        row.addWidget(del_btn)
+        row.addWidget(map_btn)
+        lay.addLayout(row)
+        close_btn = QPushButton("关闭")
+        close_btn.clicked.connect(self.accept)
+        lay.addWidget(close_btn)
+        self._refresh_list()
+
+    def _anim_dir(self) -> str:
+        pet_id = self._pet.get("id", "")
+        d = os.path.join(self._root, "assets", "animations", pet_id)
+        if os.path.isdir(d):
+            return d
+        return os.path.join(self._root, "assets", "animations")
+
+    def _refresh_list(self) -> None:
+        self._list.clear()
+        pet_id = self._pet.get("id", "")
+        prefix = f"{pet_id}_"
+        folder = self._anim_dir()
+        if os.path.isdir(folder):
+            for fname in sorted(os.listdir(folder)):
+                if fname.lower().endswith((".gif", ".png")):
+                    self._list.addItem(fname)
+
+    def _add_action(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "添加动作", self._root, "动画 (*.gif *.png)"
+        )
+        if not path:
+            return
+        os.makedirs(self._anim_dir(), exist_ok=True)
+        shutil.copy2(path, os.path.join(self._anim_dir(), os.path.basename(path)))
+        self._refresh_list()
+
+    def _delete_action(self) -> None:
+        item = self._list.currentItem()
+        if not item:
+            return
+        fp = os.path.join(self._anim_dir(), item.text())
+        if os.path.isfile(fp) and QMessageBox.question(self, "确认", f"删除 {item.text()}？") == QMessageBox.StandardButton.Yes:
+            os.remove(fp)
+            self._refresh_list()
+
+    def _remap_actions(self) -> None:
+        files = [self._list.item(i).text() for i in range(self._list.count())]
+        dlg = ActionMappingDialog(self._pet.get("name", ""), files, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            save_pet_action_mapping(self._root, self._pet.get("name", ""), dlg.mapping())
+
+
+class PetCharacterOps:
+    """角色卡片右键：删除 / 重命名 / 改简介。"""
+
+    @staticmethod
+    def delete_pet(console: "ControlConsole", pet: dict) -> None:
+        name = pet.get("name", pet.get("id", ""))
+        if QMessageBox.question(
+            console, "删除角色", f"确定删除「{name}」及其所有素材与配置？"
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        root = console._project_root
+        pet_id = pet.get("id", "")
+        if pet.get("is_flat"):
+            anim_dir = os.path.join(root, "assets", "animations", pet_id)
+            if os.path.isdir(anim_dir):
+                shutil.rmtree(anim_dir, ignore_errors=True)
+            for fname in os.listdir(os.path.join(root, "assets", "animations")) if os.path.isdir(os.path.join(root, "assets", "animations")) else []:
+                if fname.startswith(f"{pet_id}_"):
+                    try:
+                        os.remove(os.path.join(root, "assets", "animations", fname))
+                    except OSError:
+                        pass
+            img = os.path.join(root, "assets", "images", f"{pet_id}_image.png")
+            if os.path.isfile(img):
+                os.remove(img)
+            ids = [i for i in load_custom_pet_ids(root) if i != pet_id]
+            save_custom_pet_ids(root, ids)
+        else:
+            model_dir = os.path.join(root, "assets", "models", pet_id)
+            if os.path.isdir(model_dir):
+                shutil.rmtree(model_dir, ignore_errors=True)
+            console._live2d = [p for p in console._live2d if p.get("id") != pet_id]
+        remove_pet_from_synonyms(root, name)
+        console._rescan_flat_pets()
+        console._custom_ids = load_custom_pet_ids(root)
+        console._reload_character_tabs()
+        console._show_toast(f"已删除角色: {name}")
+
+    @staticmethod
+    def rename_pet(console: "ControlConsole", pet: dict) -> None:
+        old_name = pet.get("name", pet.get("id", ""))
+        new_name, ok = QInputDialog.getText(console, "重命名角色", "新名称：", text=old_name)
+        if not ok or not new_name.strip() or new_name.strip() == old_name:
+            return
+        new_name = new_name.strip()
+        root = console._project_root
+        pet_id = pet.get("id", "")
+        new_id = re.sub(r"\s+", "_", new_name)
+        if pet.get("is_flat"):
+            old_dir = os.path.join(root, "assets", "animations", pet_id)
+            new_dir = os.path.join(root, "assets", "animations", new_id)
+            if os.path.isdir(old_dir) and old_dir != new_dir:
+                if os.path.isdir(new_dir):
+                    shutil.rmtree(new_dir, ignore_errors=True)
+                shutil.move(old_dir, new_dir)
+            old_img = os.path.join(root, "assets", "images", f"{pet_id}_image.png")
+            new_img = os.path.join(root, "assets", "images", f"{new_id}_image.png")
+            if os.path.isfile(old_img):
+                shutil.move(old_img, new_img)
+            ids = load_custom_pet_ids(root)
+            if pet_id in ids:
+                ids = [new_id if i == pet_id else i for i in ids]
+                save_custom_pet_ids(root, ids)
+        rename_pet_in_synonyms(root, old_name, new_name)
+        pet["id"] = new_id
+        pet["name"] = new_name
+        console._rescan_flat_pets()
+        console._custom_ids = load_custom_pet_ids(root)
+        console._reload_character_tabs()
+        console._show_toast(f"已重命名为: {new_name}")
+
+    @staticmethod
+    def edit_personality(console: "ControlConsole", pet: dict) -> None:
+        text, ok = QInputDialog.getMultiLineText(
+            console, "编辑性格简介", "性格描述：", pet.get("personality", "")
+        )
+        if ok:
+            pet["personality"] = text.strip()
+            console._show_toast("性格简介已更新")
+
+    @staticmethod
+    def manage_actions(console: "ControlConsole", pet: dict) -> None:
+        dlg = ManageActionsDialog(pet, console._project_root, console)
+        dlg.exec()
+        console._rescan_flat_pets()
+        console._reload_character_tabs()
+
+
+def resolve_live2d_thumb(model_path: str) -> str:
+    """解析 Live2D 预览图；无 textures 时尝试 motions 目录或模型目录内 PNG。"""
+    if not model_path or not os.path.isfile(model_path):
+        return ""
+    runtime = os.path.dirname(os.path.abspath(model_path))
+    for tex_dir_name in ("mao_pro.4096", "textures", "texture"):
+        tex_dir = os.path.join(runtime, tex_dir_name)
+        if os.path.isdir(tex_dir):
+            for fname in sorted(os.listdir(tex_dir)):
+                if fname.lower().endswith(".png"):
+                    return os.path.join(tex_dir, fname)
+    motions_dir = os.path.join(runtime, "motions")
+    if os.path.isdir(motions_dir):
+        for fname in sorted(os.listdir(motions_dir)):
+            if fname.lower().endswith(".png"):
+                return os.path.join(motions_dir, fname)
+    for dirpath, _dn, files in os.walk(runtime):
+        for fname in sorted(files):
+            if fname.lower().endswith(".png"):
+                return os.path.join(dirpath, fname)
+    return ""
+
+
+def list_live2d_motion_stems(model_path: str) -> list[str]:
+    if not model_path or not os.path.isfile(model_path):
+        return []
+    runtime = os.path.dirname(os.path.abspath(model_path))
+    stems: list[str] = []
+    seen: set[str] = set()
+    for dirpath, _dn, files in os.walk(runtime):
+        for fname in sorted(files):
+            if not fname.lower().endswith(".motion3.json"):
+                continue
+            stem = _stem_no_ext(fname)
+            if stem not in seen:
+                seen.add(stem)
+                stems.append(stem)
+    return stems
+
+
+def validate_live2d_model(model_path: str) -> tuple[bool, str]:
+    if not model_path or not os.path.isfile(model_path):
+        return False, "请选择有效的 .model3.json 文件"
+    runtime = os.path.dirname(model_path)
+    try:
+        with open(model_path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        return False, f"无法读取模型 JSON: {exc}"
+    refs = data.get("FileReferences", {})
+    moc = refs.get("Moc") or ""
+    moc_path = os.path.join(runtime, moc) if moc else ""
+    if not moc_path or not os.path.isfile(moc_path):
+        return False, "缺少 .moc3 文件"
+    textures = refs.get("Textures") or []
+    has_tex = any(os.path.isfile(os.path.join(runtime, t)) for t in textures)
+    if not has_tex:
+        preview = resolve_live2d_thumb(model_path)
+        if not preview:
+            return False, "缺少贴图文件夹，且无法找到备用预览图"
+    return True, "验证通过"
+
+
+def load_synonyms_json(project_root: str) -> dict:
+    path = os.path.join(project_root, "assets", "synonyms.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_pet_action_mapping(project_root: str, pet_name: str, mapping: dict[str, list[str]]) -> None:
+    path = os.path.join(project_root, "assets", "synonyms.json")
+    data = load_synonyms_json(project_root)
+    pets = data.setdefault("_pets", {})
+    pets[pet_name] = {k: list(v) for k, v in mapping.items()}
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+class ActionMappingDialog(QDialog):
+    """为 D 动作类型选择对应素材文件（支持多选）。"""
+
+    def __init__(
+        self,
+        pet_name: str,
+        motion_files: list[str],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"动作映射 - {pet_name}")
+        self.resize(520, 420)
+        self._mapping: dict[str, list[str]] = {}
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel(f"<h3>为「{pet_name}」配置动作映射</h3>"))
+        lay.addWidget(QLabel("为每个状态选择对应的动作文件（可多选）："))
+        self._lists: dict[str, QListWidget] = {}
+        for code in D_ACTION_CODES:
+            row = QVBoxLayout()
+            row.addWidget(QLabel(f"<b>{D_ACTION_LABELS.get(code, code)}</b> ({code})"))
+            lw = QListWidget()
+            lw.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+            for fname in motion_files:
+                lw.addItem(fname)
+            self._lists[code] = lw
+            row.addWidget(lw)
+            lay.addLayout(row)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+
+    def mapping(self) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        for code, lw in self._lists.items():
+            selected = [item.text() for item in lw.selectedItems()]
+            if selected:
+                out[code] = selected
+        return out
+
+
+class Live2dUploadDialog(QDialog):
+    def __init__(self, project_root: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._root = project_root
+        self._model_path = ""
+        self.setWindowTitle("上传 Live2D 模型")
+        self.resize(480, 320)
+        lay = QVBoxLayout(self)
+        self._name = QLineEdit()
+        self._name.setPlaceholderText("角色姓名（必填）")
+        lay.addWidget(QLabel("角色姓名"))
+        lay.addWidget(self._name)
+        self._personality = QLineEdit()
+        self._personality.setPlaceholderText("性格描述（可选）")
+        lay.addWidget(QLabel("性格描述"))
+        lay.addWidget(self._personality)
+        pick_row = QHBoxLayout()
+        self._path_lbl = QLabel("未选择文件")
+        pick_btn = QPushButton("选择 .model3.json")
+        pick_btn.clicked.connect(self._pick_model)
+        pick_row.addWidget(self._path_lbl, 1)
+        pick_row.addWidget(pick_btn)
+        lay.addLayout(pick_row)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self._on_ok)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+        self._result_pet: dict | None = None
+
+    def _pick_model(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "选择模型", self._root, "Live2D Model (*.model3.json)")
+        if path:
+            self._model_path = path
+            self._path_lbl.setText(os.path.basename(path))
+
+    def _on_ok(self) -> None:
+        name = self._name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "提示", "请填写角色姓名")
+            return
+        ok, msg = validate_live2d_model(self._model_path)
+        if not ok:
+            QMessageBox.warning(self, "验证失败", msg)
+            return
+        pet_id = re.sub(r"\s+", "_", name)
+        dest_root = os.path.join(self._root, "assets", "models", pet_id)
+        src_dir = os.path.dirname(self._model_path)
+        os.makedirs(dest_root, exist_ok=True)
+        for item in os.listdir(src_dir):
+            s = os.path.join(src_dir, item)
+            d = os.path.join(dest_root, item)
+            if os.path.isdir(s):
+                if os.path.exists(d):
+                    shutil.copytree(s, d, dirs_exist_ok=True)
+                else:
+                    shutil.copytree(s, d)
+            else:
+                shutil.copy2(s, d)
+        dest_model = os.path.join(dest_root, os.path.basename(self._model_path))
+        if not os.path.isfile(dest_model):
+            shutil.copy2(self._model_path, dest_model)
+        stems = list_live2d_motion_stems(dest_model)
+        map_dlg = ActionMappingDialog(name, stems, self)
+        if map_dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        save_pet_action_mapping(self._root, name, map_dlg.mapping())
+        thumb = resolve_live2d_thumb(dest_model)
+        self._result_pet = {
+            "id": pet_id,
+            "name": name,
+            "personality": self._personality.text().strip(),
+            "thumb": thumb,
+            "model_path": dest_model,
+            "is_flat": False,
+            "motions": [{"id": s, "label": s, "gif": "", "frames": []} for s in stems],
+        }
+        self.accept()
+
+    def result_pet(self) -> dict | None:
+        return self._result_pet
+
+
+class FlatUploadDialog(QDialog):
+    def __init__(self, project_root: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._root = project_root
+        self._uploaded_files: list[str] = []
+        self.setWindowTitle("上传平面素材")
+        self.resize(480, 280)
+        lay = QVBoxLayout(self)
+        self._name = QLineEdit()
+        lay.addWidget(QLabel("角色姓名（必填）"))
+        lay.addWidget(self._name)
+        self._personality = QLineEdit()
+        lay.addWidget(QLabel("性格描述（可选）"))
+        lay.addWidget(self._personality)
+        self._hint = QLabel("准备上传动作…")
+        lay.addWidget(self._hint)
+        upload_btn = QPushButton("上传当前动作")
+        upload_btn.clicked.connect(self._upload_one)
+        lay.addWidget(upload_btn)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self._finish)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+        self._action_index = 1
+        self._result_pet: dict | None = None
+
+    def _upload_one(self) -> None:
+        name = self._name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "提示", "请先填写角色姓名")
+            return
+        self._hint.setText(f"这是动作{self._action_index}，请选择 GIF 或多张 PNG 序列帧")
+        gif_path, _ = QFileDialog.getOpenFileName(self, "选择 GIF", self._root, "GIF (*.gif)")
+        dest_dir = os.path.join(self._root, "assets", "animations", name)
+        os.makedirs(dest_dir, exist_ok=True)
+        if gif_path:
+            dest = os.path.join(dest_dir, os.path.basename(gif_path))
+            shutil.copy2(gif_path, dest)
+            self._uploaded_files.append(os.path.basename(dest))
+            self._action_index += 1
+            cont = QMessageBox.question(self, "继续", "是否继续添加动作？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if cont == QMessageBox.StandardButton.No:
+                self._finish()
+            return
+        png_paths, _ = QFileDialog.getOpenFileNames(self, "选择 PNG 序列帧", self._root, "PNG (*.png)")
+        if not png_paths:
+            return
+        png_paths.sort()
+        prefix = _stem_no_ext(png_paths[0])
+        for i, src in enumerate(png_paths, 1):
+            dest = os.path.join(dest_dir, f"{prefix}_{i:03d}.png")
+            shutil.copy2(src, dest)
+            self._uploaded_files.append(os.path.basename(dest))
+        self._action_index += 1
+        cont = QMessageBox.question(self, "继续", "是否继续添加动作？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if cont == QMessageBox.StandardButton.No:
+            self._finish()
+
+    def _finish(self) -> None:
+        name = self._name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "提示", "请填写角色姓名")
+            return
+        if not self._uploaded_files:
+            QMessageBox.warning(self, "提示", "请至少上传一个动作")
+            return
+        map_dlg = ActionMappingDialog(name, self._uploaded_files, self)
+        if map_dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        save_pet_action_mapping(self._root, name, map_dlg.mapping())
+        images_dir = os.path.join(self._root, "assets", "images")
+        os.makedirs(images_dir, exist_ok=True)
+        thumb = os.path.join(images_dir, f"{name}_image.png")
+        dest_dir = os.path.join(self._root, "assets", "animations", name)
+        if os.path.isdir(dest_dir):
+            for fname in sorted(os.listdir(dest_dir)):
+                if fname.lower().endswith(".gif"):
+                    _gif_first_frame_to_png(os.path.join(dest_dir, fname), thumb)
+                    break
+        self._result_pet = {
+            "id": name,
+            "name": name,
+            "personality": self._personality.text().strip(),
+            "thumb": thumb if os.path.isfile(thumb) else "",
+            "idle_image": thumb if os.path.isfile(thumb) else "",
+            "is_flat": True,
+            "is_custom": True,
+            "motions": [],
+            "anim_dir": dest_dir,
+        }
+        self.accept()
+
+    def result_pet(self) -> dict | None:
+        return self._result_pet
+
+
+class ControlConsole(QMainWindow):
+    def __init__(
+        self,
+        project_root: str,
+        model_path: str,
+        available_motions: list[str],
+        motion_name_map: dict[str, str],
+        on_play_motion: Callable[[str], bool] | None = None,
+        on_pet_changed: Callable[[dict], None] | None = None,
+    ) -> None:
+        super().__init__()
+        self._project_root = project_root
+        self.model_path = model_path
+        self.available_motions = available_motions
+        self.motion_name_map = motion_name_map
+        self.on_play_motion = on_play_motion
+        self.on_pet_changed = on_pet_changed
+        self.stats = {"mood": 85, "energy": 72, "affection": 90}
+        self._page = "dashboard"
+        self._pet_main_id: str | None = None
+        self._sel_pet: str | None = None
+        self._char_tab = 0
+        self._ai_i = -1
+        self._detail_pic: QLabel | None = None
+        self._anim_frames: list[str] = []
+        self._anim_index = 0
+        self._anim_idle_path = ""
+        self._anim_pic_size = QSize(260, 170)
+        self._anim_movie: QMovie | None = None
+        self._anim_timer = QTimer(self)
+        self._anim_timer.timeout.connect(self._on_anim_frame)
+        self._toast: QLabel | None = None
+        self._chat_store = ChatHistoryStore(project_root)
+        self._custom_ids = load_custom_pet_ids(project_root)
+        if is_mao_pro_zh_model(model_path):
+            self._live2d = [build_mao_pro_pet_record(model_path, available_motions)]
+        else:
+            tex = resolve_live2d_thumb(model_path) or os.path.join(
+                os.path.dirname(model_path), "mao_pro.4096", "texture_00.png"
+            )
+            motions = [
+                {"id": m, "label": m, "gif": "", "frames": []}
+                for m in available_motions
+            ] or [{"id": "mtn_01", "label": "mtn_01", "gif": "", "frames": []}]
+            self._live2d = [
+                {
+                    "id": "mao",
+                    "name": "小黑",
+                    "thumb": tex,
+                    "personality": "活泼可爱的 AI 桌宠，喜欢陪伴你学习与工作。",
+                    "motions": motions,
+                    "model_path": model_path,
+                    "is_flat": False,
+                },
+            ]
+        self._flat = [
+            apply_zhegou_idle_thumb(project_root, p)
+            for p in scan_flat_pets(project_root)
+        ]
+        self._custom_pets = self._build_custom_pet_list()
+        self._current_pet_id = self._live2d[0]["id"] if self._live2d else (self._flat[0]["id"] if self._flat else "")
+        self._chats: list[dict] = []
+        self._load_chat_histories()
+        self._build_ui()
+
+    def _rescan_flat_pets(self) -> None:
+        self._flat = [
+            apply_zhegou_idle_thumb(self._project_root, p)
+            for p in scan_flat_pets(self._project_root)
+        ]
+
+    def _build_custom_pet_list(self) -> list[dict]:
+        pets: list[dict] = []
+        for p in self._flat:
+            if p.get("id") in self._custom_ids:
+                p = self._enrich_pet_motions(dict(p))
+                p["is_custom"] = True
+                pets.append(p)
+        return pets
+
+    def _flat_library_pets(self) -> list[dict]:
+        """平面素材库：不含自定义标签页上传的角色。"""
+        return [p for p in self._flat if p.get("id") not in self._custom_ids]
+
+    def _enrich_pet_motions(self, pet: dict) -> dict:
+        pet = dict(pet)
+        if pet.get("is_flat"):
+            pet_id = pet.get("id", "")
+            motions: list[dict] = []
+            anim_dir = os.path.join(self._project_root, "assets", "animations", pet_id)
+            scan_dirs = [anim_dir] if os.path.isdir(anim_dir) else []
+            root_anim = os.path.join(self._project_root, "assets", "animations")
+            if os.path.isdir(root_anim):
+                scan_dirs.append(root_anim)
+            seen: set[str] = set()
+            for folder in scan_dirs:
+                in_sub = folder.endswith(pet_id)
+                for fname in sorted(os.listdir(folder)):
+                    if not fname.lower().endswith(".gif"):
+                        continue
+                    if not in_sub and not fname.startswith(f"{pet_id}_"):
+                        continue
+                    path = os.path.normpath(os.path.join(folder, fname))
+                    if path in seen:
+                        continue
+                    seen.add(path)
+                    motions.append(
+                        {
+                            "id": f"file:{fname}",
+                            "label": motion_label_from_filename(fname),
+                            "gif": path,
+                            "frames": [],
+                        }
+                    )
+            if motions:
+                pet["motions"] = motions
+        return apply_zhegou_idle_thumb(self._project_root, pet)
+
+    def _log(self, msg: str) -> None:
+        print(f"[ControlConsole] {msg}")
+
+    def _load_chat_histories(self) -> None:
+        self._chats = []
+        for name in self._chat_store.list_characters():
+            msgs = self._chat_store.load(name)
+            if msgs:
+                self._chats.append({"name": name, "color": "#ec4899", "msgs": msgs})
+        if not self._chats:
+            self._chats.append({"name": "默认", "color": "#3b82f6", "msgs": []})
+
+    def _save_current_chat(self) -> None:
+        if self._ai_i < 0 or self._ai_i >= len(self._chats):
+            return
+        chat = self._chats[self._ai_i]
+        self._chat_store.save(chat["name"], chat["msgs"])
+
+    def _build_ui(self) -> None:
+        self.setWindowTitle("桌面宠物控制台")
+        self.resize(800, 600)
+        self.setMinimumSize(720, 540)
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        sidebar = QFrame()
+        sidebar.setFixedWidth(260)
+        sidebar.setStyleSheet("background: rgba(255,255,255,220);")
+        sb_lay = QVBoxLayout(sidebar)
+        sb_lay.setContentsMargins(16, 24, 16, 16)
+        title = QLabel("Pet Console")
+        title.setFont(_app_font(20, True))
+        sb_lay.addWidget(title)
+        sb_lay.addWidget(QLabel("桌面宠物"))
+        self._menu_btns: dict[str, QPushButton] = {}
+        for pid, icon, label in (
+            ("dashboard", "📊", "仪表盘"),
+            ("characters", "👤", "角色选择"),
+            ("ai_settings", "💬", "AI对话"),
+            ("permissions", "🔒", "权限设置"),
+            ("synonyms", "📖", "同义词管理"),
+            ("theme", "🎨", "主题"),
+            ("exit", "🚪", "退出"),
+        ):
+            btn = QPushButton(f"{icon}  {label}")
+            btn.setStyleSheet(BTN_GLASS)
+            btn.setCheckable(True)
+            btn.clicked.connect(lambda _=False, p=pid: self._nav(p))
+            sb_lay.addWidget(btn)
+            self._menu_btns[pid] = btn
+        sb_lay.addStretch()
+        root.addWidget(sidebar)
+
+        right = QVBoxLayout()
+        chrome = QHBoxLayout()
+        chrome.addStretch()
+        for label, slot in (("—", self.showMinimized), ("□", self._toggle_max), ("×", self.close)):
+            b = QPushButton(label)
+            b.setFixedSize(28, 28)
+            b.clicked.connect(slot)
+            chrome.addWidget(b)
+        right.addLayout(chrome)
+        self._stack = QStackedWidget()
+        self._stack.addWidget(self._page_dashboard())
+        self._stack.addWidget(self._page_characters())
+        self._stack.addWidget(self._page_ai())
+        self._stack.addWidget(self._page_placeholder("权限设置"))
+        self._stack.addWidget(self._page_synonyms_placeholder())
+        self._stack.addWidget(self._page_placeholder("主题"))
+        self._stack.addWidget(self._page_pet_main())
+        right.addWidget(self._stack, 1)
+        root.addLayout(right, 1)
+        self._nav("dashboard")
+
+    def _toggle_max(self) -> None:
+        self.showNormal() if self.isMaximized() else self.showMaximized()
+
+    def _nav(self, page: str) -> None:
+        if page == "exit":
+            self.close()
+            return
+        self._page = page
+        idx = {
+            "dashboard": 0,
+            "characters": 1,
+            "ai_settings": 2,
+            "permissions": 3,
+            "synonyms": 4,
+            "theme": 5,
+            "pet_main": 6,
+        }.get(page, 0)
+        self._stack.setCurrentIndex(idx)
+        for pid, btn in self._menu_btns.items():
+            btn.setChecked(pid == page or (page == "pet_main" and pid == "characters"))
+        if page == "pet_main":
+            self._refresh_pet_main()
+        if page == "dashboard":
+            self._refresh_dashboard()
+        self._log(f"切换: {page}")
+
+    def _get_pet(self, pet_id: str | None) -> dict | None:
+        if not pet_id:
+            return None
+        for pet in self._live2d + self._flat:
+            if pet["id"] == pet_id:
+                return pet
+        return None
+
+    def _pet_idle_path(self, pet: dict) -> str:
+        return pet.get("idle_image") or pet.get("thumb", "")
+
+    def _motion_playable(self, motion: dict) -> bool:
+        gif = motion.get("gif") or ""
+        frames = motion.get("frames") or []
+        return bool(gif and os.path.isfile(gif)) or bool(frames)
+
+    def _stop_animation(self) -> None:
+        if self._anim_timer.isActive():
+            self._anim_timer.stop()
+        if self._anim_movie is not None:
+            self._anim_movie.stop()
+            try:
+                self._anim_movie.finished.disconnect(self._on_gif_finished)
+            except (RuntimeError, TypeError):
+                pass
+            if self._detail_pic is not None:
+                self._detail_pic.setMovie(None)
+            self._anim_movie = None
+        self._anim_frames = []
+        self._anim_index = 0
+
+    def _restore_idle_pic(self) -> None:
+        if self._detail_pic is None or not self._anim_idle_path:
+            return
+        self._detail_pic.setMovie(None)
+        self._detail_pic.setPixmap(_load_pixmap(self._anim_idle_path, self._anim_pic_size))
+
+    def _play_motion(self, motion: dict, pic_label: QLabel, idle_path: str, size: QSize) -> None:
+        gif = motion.get("gif") or ""
+        frames = motion.get("frames") or []
+        if not self._motion_playable(motion):
+            if motion.get("id") and self.on_play_motion:
+                self.on_play_motion(motion["id"])
+            return
+        self._stop_animation()
+        self._detail_pic = pic_label
+        self._anim_idle_path = idle_path
+        self._anim_pic_size = size
+        if gif and os.path.isfile(gif):
+            self._anim_movie = QMovie(gif)
+            self._anim_movie.setScaledSize(size)
+            pic_label.setMovie(self._anim_movie)
+            self._anim_movie.setLoopCount(1)
+            self._anim_movie.finished.connect(self._on_gif_finished)
+            self._anim_movie.start()
+            return
+        self._anim_frames = frames
+        self._anim_index = 0
+        self._on_anim_frame()
+        self._anim_timer.start(100)
+
+    def _on_gif_finished(self) -> None:
+        self._restore_idle_pic()
+        if self._anim_movie is not None:
+            try:
+                self._anim_movie.finished.disconnect(self._on_gif_finished)
+            except (RuntimeError, TypeError):
+                pass
+            self._anim_movie = None
+
+    def _on_anim_frame(self) -> None:
+        if not self._anim_frames or self._detail_pic is None:
+            self._stop_animation()
+            return
+        path = self._anim_frames[self._anim_index]
+        self._detail_pic.setPixmap(_load_pixmap(path, self._anim_pic_size))
+        self._anim_index += 1
+        if self._anim_index >= len(self._anim_frames):
+            self._anim_timer.stop()
+            self._restore_idle_pic()
+            self._anim_frames = []
+            self._anim_index = 0
+
+    def _current_pet(self) -> dict | None:
+        return self._get_pet(self._current_pet_id)
+
+    def _refresh_dashboard(self) -> None:
+        pet = self._current_pet()
+        if not pet or not hasattr(self, "_dash_pet_pic"):
+            return
+        thumb = pet.get("thumb") or self._pet_idle_path(pet)
+        self._dash_pet_pic.setPixmap(_load_pixmap(thumb, QSize(100, 100)))
+        self._dash_pet_name.setText(f"<b>{pet['name']}</b>")
+        self._dash_pet_personality.setText(pet.get("personality", ""))
+
+    def _switch_current_pet(self, pet: dict) -> None:
+        self._apply_pet_switch(pet)
+
+    def _open_pet_main(self, pet: dict) -> None:
+        self._pet_main_id = pet["id"]
+        self._nav("pet_main")
+        self._log(f"查看角色: {pet['name']}")
+
+    def _apply_pet_switch(self, pet: dict) -> None:
+        self._rescan_flat_pets()
+        pet = self._get_pet(pet["id"]) or pet
+        self._current_pet_id = pet["id"]
+        self._sel_pet = pet["id"]
+        self._pet_main_id = pet["id"]
+        self._stop_animation()
+        self._show_toast(f"已切换到 {pet['name']}")
+        self._nav("dashboard")
+        self._log(f"切换角色: {pet['name']} ({pet['id']})")
+        if self.on_pet_changed:
+            self.on_pet_changed(pet)
+
+    def _show_toast(self, message: str) -> None:
+        if self._toast is None:
+            self._toast = QLabel(self)
+            self._toast.setStyleSheet(
+                "background-color: rgba(30, 41, 59, 220); color: white;"
+                "border-radius: 10px; padding: 10px 18px; font-size: 14px;"
+            )
+            self._toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._toast.setText(message)
+        self._toast.adjustSize()
+        x = (self.width() - self._toast.width()) // 2
+        y = self.height() - self._toast.height() - 36
+        self._toast.move(max(16, x), max(16, y))
+        self._toast.raise_()
+        self._toast.show()
+        QTimer.singleShot(2200, self._toast.hide)
+
+    def _on_pet_main_switch(self) -> None:
+        pet = self._get_pet(self._pet_main_id)
+        if pet:
+            self._apply_pet_switch(pet)
+
+    def _stat_card(self, icon: str, title: str, val: int, color: str) -> QFrame:
+        f = QFrame()
+        f.setStyleSheet(_glass_style(14))
+        lay = QVBoxLayout(f)
+        row = QHBoxLayout()
+        row.addWidget(QLabel(icon))
+        row.addWidget(QLabel(title))
+        row.addStretch()
+        row.addWidget(QLabel(str(val)))
+        lay.addLayout(row)
+        bar = QProgressBar()
+        bar.setRange(0, 100)
+        bar.setValue(val)
+        bar.setTextVisible(False)
+        bar.setStyleSheet(f"QProgressBar {{ background:#e2e8f0; border-radius:4px; height:8px; }} QProgressBar::chunk {{ background:{color}; border-radius:4px; }}")
+        lay.addWidget(bar)
+        return f
+
+    def _page_dashboard(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(24, 16, 24, 24)
+        now = datetime.datetime.now()
+        wd = "一二三四五六日"[now.weekday()]
+        lay.addWidget(QLabel(f"<h2>欢迎回来，用户</h2><p>{now.year}年{now.month}月{now.day}日 星期{wd}</p>"))
+        cards = QHBoxLayout()
+        for icon, title, key, col in (("🐾", "宠物心情", "mood", "#3b82f6"), ("🔥", "能量值", "energy", "#fb923c"), ("❤️", "好感度", "affection", "#ec4899")):
+            cards.addWidget(self._stat_card(icon, title, self.stats[key], col))
+        lay.addLayout(cards)
+        lay.addWidget(QLabel("<h3>当前宠物简介</h3>"))
+        intro = QFrame()
+        intro.setStyleSheet(_glass_style(14))
+        il = QHBoxLayout(intro)
+        self._dash_pet_pic = QLabel()
+        self._dash_pet_pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        il.addWidget(self._dash_pet_pic)
+        tx = QVBoxLayout()
+        self._dash_pet_name = QLabel()
+        self._dash_pet_personality = QLabel()
+        self._dash_pet_personality.setWordWrap(True)
+        tx.addWidget(self._dash_pet_name)
+        tx.addWidget(self._dash_pet_personality)
+        il.addLayout(tx, 1)
+        lay.addWidget(intro)
+        lay.addStretch()
+        return w
+
+    def _page_synonyms_placeholder(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addWidget(QLabel("<h2>同义词管理</h2>"))
+        ph = QLabel("请从桌宠设置面板打开以管理同义词。")
+        ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ph.setStyleSheet("color:#94a3b8;font-size:16px;")
+        lay.addWidget(ph, 1)
+        return w
+
+    def _page_characters(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(24, 16, 24, 24)
+        lay.addWidget(QLabel("<h2>角色选择</h2>"))
+        outer = QHBoxLayout()
+        self._tabs = QTabWidget()
+        self._tabs.addTab(self._char_grid(self._live2d, add_plus=True, on_plus=self._upload_live2d), "Live2D库")
+        self._tabs.addTab(self._char_grid(self._flat_library_pets(), add_plus=False), "平面素材库")
+        custom_wrap = QWidget()
+        custom_lay = QVBoxLayout(custom_wrap)
+        custom_lay.addWidget(self._char_grid(self._custom_pets, add_plus=False), 1)
+        up_row = QHBoxLayout()
+        up_row.addStretch()
+        up = QPushButton("上传平面素材")
+        up.setStyleSheet(BTN_PRIMARY)
+        up.clicked.connect(self._upload_flat)
+        up_row.addWidget(up)
+        up_row.addStretch()
+        custom_lay.addLayout(up_row)
+        self._tabs.addTab(custom_wrap, "自定义")
+        outer.addWidget(self._tabs, 1)
+        self._detail = QFrame()
+        self._detail.setFixedWidth(300)
+        self._detail.setStyleSheet(_glass_style(16))
+        self._detail_lay = QVBoxLayout(self._detail)
+        self._detail.hide()
+        outer.addWidget(self._detail)
+        lay.addLayout(outer, 1)
+        return w
+
+    def _char_grid(
+        self,
+        pets: list[dict],
+        add_plus: bool = False,
+        on_plus: Callable[[], None] | None = None,
+    ) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        grid = QGridLayout(inner)
+        if not pets and not add_plus:
+            hint = QLabel("暂无平面素材\n请将 {pet_id}_image.png 放入 assets/images/\n动图放入 assets/animations/")
+            hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            hint.setStyleSheet("color:#94a3b8;padding:32px;")
+            grid.addWidget(hint, 0, 0, 1, 4)
+        for i, pet in enumerate(pets):
+            cell = self._pet_cell(pet)
+            grid.addWidget(cell, i // 4, i % 4)
+        if add_plus:
+            plus = QPushButton("+")
+            plus.setFixedSize(128, 128)
+            plus.clicked.connect(on_plus or (lambda: self._log("上传")))
+            grid.addWidget(plus, len(pets) // 4, len(pets) % 4)
+        scroll.setWidget(inner)
+        return scroll
+
+    def _upload_live2d(self) -> None:
+        dlg = Live2dUploadDialog(self._project_root, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            pet = dlg.result_pet()
+            if pet:
+                self._live2d.append(pet)
+                self._reload_character_tabs()
+                self._show_toast(f"已添加 Live2D 角色: {pet['name']}")
+
+    def _upload_flat(self) -> None:
+        dlg = FlatUploadDialog(self._project_root, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            pet = dlg.result_pet()
+            if pet:
+                pet_id = pet.get("id", "")
+                ids = load_custom_pet_ids(self._project_root)
+                if pet_id not in ids:
+                    ids.append(pet_id)
+                save_custom_pet_ids(self._project_root, ids)
+                self._custom_ids = ids
+                self._rescan_flat_pets()
+                self._custom_pets = self._build_custom_pet_list()
+                self._reload_character_tabs()
+                self._tabs.setCurrentIndex(2)
+                self._show_toast(f"已添加自定义角色: {pet['name']}")
+
+    def _on_pet_context_action(self, action: str, pet: dict) -> None:
+        if action == "delete":
+            PetCharacterOps.delete_pet(self, pet)
+        elif action == "rename":
+            PetCharacterOps.rename_pet(self, pet)
+        elif action == "personality":
+            PetCharacterOps.edit_personality(self, pet)
+        elif action == "actions":
+            PetCharacterOps.manage_actions(self, pet)
+
+    def _reload_character_tabs(self) -> None:
+        if not hasattr(self, "_tabs"):
+            return
+        idx = self._tabs.currentIndex()
+        self._custom_pets = self._build_custom_pet_list()
+        while self._tabs.count():
+            self._tabs.removeTab(0)
+        self._tabs.addTab(
+            self._char_grid(self._live2d, add_plus=True, on_plus=self._upload_live2d),
+            "Live2D库",
+        )
+        self._tabs.addTab(self._char_grid(self._flat_library_pets(), add_plus=False), "平面素材库")
+        custom_wrap = QWidget()
+        custom_lay = QVBoxLayout(custom_wrap)
+        custom_lay.addWidget(self._char_grid(self._custom_pets, add_plus=False), 1)
+        up_row = QHBoxLayout()
+        up_row.addStretch()
+        up = QPushButton("上传平面素材")
+        up.setStyleSheet(BTN_PRIMARY)
+        up.clicked.connect(self._upload_flat)
+        up_row.addWidget(up)
+        up_row.addStretch()
+        custom_lay.addLayout(up_row)
+        self._tabs.addTab(custom_wrap, "自定义")
+        self._tabs.setCurrentIndex(min(idx, self._tabs.count() - 1))
+
+    def _pet_cell(self, pet: dict) -> _PetCellButton:
+        btn = _PetCellButton(pet)
+        btn.single_clicked_pet.connect(self._select_pet)
+        btn.double_clicked_pet.connect(self._open_pet_main)
+        btn.pet_context_action.connect(self._on_pet_context_action)
+        return btn
+
+    def _select_pet(self, pet: dict) -> None:
+        if pet.get("is_flat"):
+            pet = self._enrich_pet_motions(pet)
+        self._sel_pet = pet["id"]
+        self._show_detail(pet)
+        self._log(f"选中: {pet['name']}")
+
+    def _open_pet_main(self, pet: dict) -> None:
+        if pet.get("is_flat") or pet.get("is_custom"):
+            pet = self._enrich_pet_motions(pet)
+            self._apply_pet_switch(pet)
+            return
+        self._pet_main_id = pet["id"]
+        self._nav("pet_main")
+        self._log(f"查看角色: {pet['name']}")
+
+    def _show_detail(self, pet: dict) -> None:
+        self._stop_animation()
+        while self._detail_lay.count():
+            w = self._detail_lay.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        idle_path = self._pet_idle_path(pet)
+        pic = QLabel()
+        pic.setPixmap(_load_pixmap(idle_path, QSize(260, 170)))
+        pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._detail_pic = pic
+        self._detail_lay.addWidget(pic)
+        self._detail_lay.addWidget(QLabel(f"<b>{pet['name']}</b>"))
+        self._detail_lay.addWidget(QLabel(pet["personality"]))
+        self._detail_lay.addWidget(QLabel("动作展示"))
+        row = QHBoxLayout()
+        motions = [m for m in pet.get("motions", []) if self._motion_playable(m) or not pet.get("is_flat")]
+        if not motions:
+            b = QPushButton("暂无动作")
+            b.setEnabled(False)
+            b.setStyleSheet(BTN_GLASS)
+            row.addWidget(b)
+        else:
+            for m in motions:
+                b = QPushButton(m["label"][:8])
+                b.setStyleSheet(BTN_GLASS)
+                if self._motion_playable(m):
+                    b.clicked.connect(
+                        lambda _=False, motion=m, p=pet, label=pic: self._play_motion(
+                            motion, label, self._pet_idle_path(p), QSize(260, 170)
+                        )
+                    )
+                elif self.on_play_motion:
+                    b.clicked.connect(lambda _=False, mid=m["id"]: self.on_play_motion(mid))
+                row.addWidget(b)
+        row.addStretch()
+        self._detail_lay.addLayout(row)
+        self._detail.show()
+
+    def _page_pet_main(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(24, 16, 24, 24)
+        top = QHBoxLayout()
+        back = QPushButton("← 返回")
+        back.clicked.connect(lambda: self._nav("dashboard"))
+        top.addStretch()
+        top.addWidget(back)
+        lay.addLayout(top)
+        body = QHBoxLayout()
+        left = QFrame()
+        left.setStyleSheet(_glass_style(16))
+        ll = QVBoxLayout(left)
+        self._pet_main_name = QLabel()
+        ll.addWidget(self._pet_main_name)
+        self._pet_main_switch_btn = QPushButton("切换该角色")
+        self._pet_main_switch_btn.setObjectName("switchPetBtn")
+        self._pet_main_switch_btn.setStyleSheet(BTN_SWITCH)
+        self._pet_main_switch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pet_main_switch_btn.clicked.connect(self._on_pet_main_switch)
+        ll.addWidget(self._pet_main_switch_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        row = QHBoxLayout()
+        self._pet_main_pic = QLabel()
+        self._pet_main_pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        row.addWidget(self._pet_main_pic)
+        tx = QVBoxLayout()
+        self._pet_main_desc = QLabel("AI小助手·你的桌面陪伴")
+        tx.addWidget(self._pet_main_desc)
+        for ln in ("轻量陪伴", "贴心助手", "治愈每一天"):
+            tx.addWidget(QLabel(ln))
+        row.addLayout(tx)
+        ll.addLayout(row)
+        body.addWidget(left, 1)
+        right = QVBoxLayout()
+        right.addWidget(QLabel("<h3>动作展示</h3>"))
+        self._pet_main_motions_widget = QWidget()
+        self._pet_main_motions_lay = QVBoxLayout(self._pet_main_motions_widget)
+        self._pet_main_motions_lay.setContentsMargins(0, 0, 0, 0)
+        right.addWidget(self._pet_main_motions_widget)
+        right.addStretch()
+        body.addLayout(right, 1)
+        lay.addLayout(body)
+        lay.addWidget(QLabel("<h3>宠物状态</h3>"))
+        stats = QHBoxLayout()
+        for icon, title, key, col in (("😊", "心情", "mood", "#3b82f6"), ("⚡", "能量", "energy", "#fb923c"), ("❤️", "好感度", "affection", "#ec4899")):
+            stats.addWidget(self._stat_card(icon, title, self.stats[key], col))
+        lay.addLayout(stats)
+        lay.addStretch()
+        return w
+
+    def _refresh_pet_main(self) -> None:
+        pet = self._get_pet(self._pet_main_id)
+        if not pet or not hasattr(self, "_pet_main_pic"):
+            return
+        idle_path = self._pet_idle_path(pet)
+        self._pet_main_name.setText(f"<h2>{pet['name']}</h2>")
+        self._pet_main_desc.setText(pet.get("personality", ""))
+        self._pet_main_pic.setPixmap(_load_pixmap(idle_path, QSize(120, 120)))
+        while self._pet_main_motions_lay.count():
+            item = self._pet_main_motions_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        motions = [m for m in pet.get("motions", []) if self._motion_playable(m) or not pet.get("is_flat")]
+        if not motions:
+            b = QPushButton("暂无动作")
+            b.setEnabled(False)
+            b.setStyleSheet(BTN_GLASS)
+            self._pet_main_motions_lay.addWidget(b)
+        else:
+            for m in motions:
+                b = QPushButton(m["label"])
+                b.setStyleSheet(BTN_GLASS)
+                if self._motion_playable(m):
+                    b.clicked.connect(
+                        lambda _=False, motion=m, p=pet: self._play_motion(
+                            motion, self._pet_main_pic, self._pet_idle_path(p), QSize(120, 120)
+                        )
+                    )
+                elif self.on_play_motion:
+                    b.clicked.connect(lambda _=False, mid=m["id"]: self.on_play_motion(mid))
+                self._pet_main_motions_lay.addWidget(b)
+
+    def _page_ai(self) -> QWidget:
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(24, 16, 24, 24)
+        left = QFrame()
+        left.setFixedWidth(190)
+        left.setStyleSheet(_glass_style(14))
+        ll = QVBoxLayout(left)
+        ll.addWidget(QLabel("<b>对话角色</b>"))
+        self._contact_btns = []
+        self._contact_list = QListWidget()
+        self._contact_list.itemClicked.connect(self._pick_chat_by_name)
+        ll.addWidget(self._contact_list, 1)
+        lay.addWidget(left)
+        right = QVBoxLayout()
+        search_row = QHBoxLayout()
+        self._chat_search = QLineEdit()
+        self._chat_search.setPlaceholderText("搜索聊天内容…")
+        self._chat_search.textChanged.connect(self._filter_chat_view)
+        search_row.addStretch()
+        search_row.addWidget(self._chat_search, 1)
+        right.addLayout(search_row)
+        self._chat_view = QTextEdit()
+        self._chat_view.setReadOnly(True)
+        self._chat_empty = QLabel("暂无聊天记录")
+        self._chat_empty.setStyleSheet("color:#94a3b8;")
+        self._chat_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        right.addWidget(self._chat_empty, 1)
+        right.addWidget(self._chat_view, 1)
+        self._chat_view.hide()
+        bottom = QHBoxLayout()
+        self._ai_in = QLineEdit()
+        self._ai_in.setPlaceholderText("输入消息…")
+        send = QPushButton("发送")
+        send.setStyleSheet(BTN_PRIMARY)
+        send.clicked.connect(self._send_chat)
+        bottom.addWidget(self._ai_in, 1)
+        bottom.addWidget(send)
+        right.addLayout(bottom)
+        lay.addLayout(right, 1)
+        self._refresh_contact_list()
+        return w
+
+    def _refresh_contact_list(self) -> None:
+        if not hasattr(self, "_contact_list"):
+            return
+        self._contact_list.clear()
+        for i, c in enumerate(self._chats):
+            self._contact_list.addItem(c["name"])
+
+    def _pick_chat_by_name(self, item: QListWidgetItem) -> None:
+        name = item.text()
+        for i, c in enumerate(self._chats):
+            if c["name"] == name:
+                self._pick_chat(i)
+                return
+
+    def _pick_chat(self, idx: int) -> None:
+        self._ai_i = idx
+        self._chat_empty.hide()
+        self._chat_view.show()
+        self._render_chat_view()
+
+    def _render_chat_view(self) -> None:
+        if self._ai_i < 0 or self._ai_i >= len(self._chats):
+            return
+        query = (self._chat_search.text() if hasattr(self, "_chat_search") else "").strip().lower()
+        self._chat_view.clear()
+        for role, txt in self._chats[self._ai_i]["msgs"]:
+            if query and query not in txt.lower():
+                continue
+            align = "right" if role == "user" else "left"
+            color = "#3b82f6" if role == "user" else "#64748b"
+            self._chat_view.append(f'<p style="text-align:{align};color:{color};">{txt}</p>')
+
+    def _filter_chat_view(self) -> None:
+        if self._ai_i >= 0:
+            self._render_chat_view()
+
+    def append_chat_message(self, character_name: str, role: str, text: str) -> None:
+        idx = next((i for i, c in enumerate(self._chats) if c["name"] == character_name), -1)
+        if idx < 0:
+            self._chats.append({"name": character_name, "color": "#ec4899", "msgs": []})
+            idx = len(self._chats) - 1
+        self._chats[idx]["msgs"].append((role, text))
+        self._chat_store.save(character_name, self._chats[idx]["msgs"])
+        if hasattr(self, "_contact_list"):
+            self._refresh_contact_list()
+        if self._ai_i == idx and hasattr(self, "_chat_view"):
+            self._render_chat_view()
+
+    def _send_chat(self) -> None:
+        t = self._ai_in.text().strip()
+        if not t or self._ai_i < 0:
+            return
+        name = self._chats[self._ai_i]["name"]
+        self.append_chat_message(name, "user", t)
+        self.append_chat_message(name, "ai", f"收到：{t}")
+        self._ai_in.clear()
+
+    def _page_placeholder(self, title: str) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addWidget(QLabel(f"<h2>{title}</h2>"))
+        ph = QLabel("功能开发中...")
+        ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ph.setStyleSheet("color:#94a3b8;font-size:18px;")
+        lay.addWidget(ph, 1)
+        return w
+
+    def run(self) -> None:
+        from PySide6.QtCore import QEventLoop
+
+        self.show()
+        loop = QEventLoop()
+        self.destroyed.connect(loop.quit)
+        loop.exec()
