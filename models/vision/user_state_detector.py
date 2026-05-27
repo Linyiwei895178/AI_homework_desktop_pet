@@ -152,6 +152,10 @@ class UserStateDetector:
         self._haar_profile: Any = None
         self._vl_client: Any = None
 
+        # DeepFace 表情识别增强模块。不可用时自动降级，不影响基础检测。
+        self._emotion_recognizer: Any = None
+        self._emotion_enabled: bool = True
+
         now = time.time()
         self._last_face_seen_at: Optional[float] = None
         self._face_present_since: Optional[float] = None
@@ -355,6 +359,9 @@ class UserStateDetector:
 
         if self._vlm_enabled:
             self._init_vlm_client()
+
+        # 表情识别是增强项：可用则加载，不可用不影响基础检测。
+        self._init_emotion_recognizer()
 
         self._cap = self._cv2.VideoCapture(self.camera_index)
         if not self._cap or not self._cap.isOpened():
@@ -746,9 +753,43 @@ class UserStateDetector:
             print(f"[UserStateDetector] Qwen-VL 客户端初始化失败：{exc}")
             self._vl_client = None
 
+
+    def _init_emotion_recognizer(self):
+        """
+        初始化 DeepFace 表情识别模块。
+        这里只创建 EmotionRecognizer；如果 deepface/tf-keras/权重不可用，会自动降级，不影响基础状态检测。
+        """
+        if not self._emotion_enabled:
+            return
+        if self._emotion_recognizer is not None:
+            return
+        try:
+            from models.vision.emotion_recognizer import EmotionRecognizer
+            self._emotion_recognizer = EmotionRecognizer(
+                enabled=True,
+                min_confidence=0.70,
+                min_margin=0.18,
+                analyze_interval=2.0,
+                smoothing_window=3,
+            )
+            print("[UserStateDetector] DeepFace 表情识别模块已加载（保守模式）。")
+        except Exception as exc:
+            print(f"[UserStateDetector] DeepFace 表情识别不可用：{exc}")
+            self._emotion_recognizer = None
+
     def _maybe_apply_vlm(self, frame: Any, base_state: dict) -> dict:
+        """
+        Qwen-VL + DeepFace 表情识别融合。
+
+        只改内部链路，不改 get_state() 对外接口：
+        - DeepFace 先给出表情初判；
+        - 表情结果会作为补充信息传入 Qwen-VL prompt；
+        - Qwen-VL 输出最终状态；
+        - 再把表情标签、描述、建议融合进最终 state。
+        """
         if not self._vlm_enabled:
             return base_state
+
         self._init_vlm_client()
         if self._vl_client is None:
             return base_state
@@ -761,16 +802,56 @@ class UserStateDetector:
             return base_state
 
         self._last_vlm_at = now
+
+        emotion_result = None
         try:
-            vlm_state = self._vl_client.analyze_frame(frame)
+            if self._emotion_enabled:
+                self._init_emotion_recognizer()
+            if self._emotion_recognizer is not None:
+                emotion_result = self._emotion_recognizer.analyze_frame(frame)
+        except Exception as exc:
+            print(f"[UserStateDetector] DeepFace 表情分析失败：{exc}")
+            emotion_result = None
+
+        try:
+            # qwen_vl_api.py 如果已经加入 build_prompt_with_emotion，就使用表情增强提示词；否则自动退回默认提示词。
+            prompt = None
+            try:
+                from models.vision.qwen_vl_api import build_prompt_with_emotion
+                prompt = build_prompt_with_emotion(emotion_result)
+            except Exception:
+                prompt = None
+
+            if prompt:
+                vlm_state = self._vl_client.analyze_frame(frame, prompt=prompt)
+            else:
+                vlm_state = self._vl_client.analyze_frame(frame)
+
             if is_valid_state(vlm_state) and vlm_state.get("state_code") != STATE_UNKNOWN:
                 # normal 默认不主动打扰
                 if vlm_state.get("state_code") == STATE_NORMAL:
                     vlm_state["need_response"] = False
+
+                # 表情识别结果不新增字段，只增强 tags / description / suggestion / source。
+                if emotion_result and self._emotion_recognizer is not None:
+                    try:
+                        vlm_state = self._emotion_recognizer.enhance_state(vlm_state, emotion_result)
+                    except Exception as exc:
+                        print(f"[UserStateDetector] 表情状态融合失败：{exc}")
+
                 self._last_vlm_state = vlm_state
                 return self._fuse_states(base_state, vlm_state)
+
         except Exception as exc:
             print(f"[UserStateDetector] Qwen-VL 分析失败：{exc}")
+
+        # 如果 Qwen-VL 失败，但 DeepFace 有结果，则至少把表情结果融合进本地规则状态。
+        if emotion_result and self._emotion_recognizer is not None:
+            try:
+                return self._emotion_recognizer.enhance_state(base_state, emotion_result)
+            except Exception as exc:
+                print(f"[UserStateDetector] 本地表情状态融合失败：{exc}")
+
         return base_state
 
     def _fuse_states(self, base_state: dict, vlm_state: dict) -> dict:
@@ -922,40 +1003,12 @@ class UserStateDetector:
 
     def _draw_preview(self, frame: Any, state: dict):
         try:
-            state_code = state.get("state_code", "unknown")
-            confidence = float(state.get("confidence", 0.0) or 0.0)
-            duration = float(state.get("duration", 0.0) or 0.0)
-            source = ",".join(state.get("source", []) or [])
-
-            # 注意：OpenCV putText 不支持中文，所以这里全部用英文，避免显示成 ?????。
-            text = f"{state_code} | conf={confidence:.2f} | dur={duration:.1f}s"
-            text2 = f"src={source}"
-
-            self._cv2.putText(
-                frame,
-                text,
-                (20, 40),
-                self._cv2.FONT_HERSHEY_SIMPLEX,
-                0.75,
-                (0, 255, 0),
-                2,
-            )
-
-            self._cv2.putText(
-                frame,
-                text2,
-                (20, 75),
-                self._cv2.FONT_HERSHEY_SIMPLEX,
-                0.65,
-                (0, 255, 0),
-                2,
-            )
-
+            text = f"{state.get('state_code')} | {state.get('state_name')} | {state.get('source')}"
+            self._cv2.putText(frame, text, (20, 40), self._cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 0), 2)
             self._cv2.imshow("UserStateDetector Preview", frame)
             key = self._cv2.waitKey(1) & 0xFF
-            if key == ord("q"):
+            if key == ord('q'):
                 self._is_running = False
-
         except Exception:
             pass
 

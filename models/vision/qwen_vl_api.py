@@ -153,6 +153,52 @@ suggestion 写法要求：
 }
 """.strip()
 
+def build_prompt_with_emotion(emotion_result: dict) -> str:
+    """
+    根据 DeepFace 表情识别结果生成增强版 Qwen-VL 提示词。
+    不改变 QwenVLClient 的原有接口，只增强 prompt 内容。
+    """
+    if not emotion_result or not emotion_result.get("available", False):
+        return DEFAULT_QWEN_PROMPT
+
+    emotion_code = emotion_result.get("emotion_code", "unknown")
+    emotion_name = emotion_result.get("emotion_name", "未知表情")
+    confidence = emotion_result.get("confidence", 0.0)
+    margin = emotion_result.get("margin", 0.0)
+    state_hint = emotion_result.get("state_hint", "unknown")
+    tags = emotion_result.get("tags", [])
+    description = emotion_result.get("description", "")
+    suggestion = emotion_result.get("suggestion", "")
+
+    # 低置信度或模型不确定时，不把表情结果传给 Qwen-VL，避免误导大模型。
+    try:
+        if float(confidence) < 0.70 or float(margin) < 0.18 or emotion_code == "unknown":
+            return DEFAULT_QWEN_PROMPT
+    except Exception:
+        return DEFAULT_QWEN_PROMPT
+
+    emotion_context = f"""
+补充信息：本地 DeepFace 表情识别模型已对当前摄像头画面进行初步分析，结果如下：
+- 表情代码：{emotion_code}
+- 中文表情倾向：{emotion_name}
+- 表情置信度：{confidence}
+- 第一/第二类别差距：{margin}
+- 建议状态倾向：{state_hint}
+- 表情标签：{tags}
+- 表情描述：{description}
+- 表情侧建议：{suggestion}
+
+请注意：
+1. 表情识别结果只是辅助信息，不是绝对结论。
+2. 只能使用“疑似、倾向、可能”等保守措辞，不能写成心理诊断。
+3. 如果表情识别为 angry、sad、fear、disgust，只能理解为用户面部特征可能存在烦躁、低落、紧张或状态波动倾向。
+4. 请结合摄像头画面本身判断最终 state_code。
+5. 最终仍然只能从固定 state_code 中选择：normal, focused, distracted, tired, away, return, study_long, low_light, camera_error, unknown。
+6. suggestion 要写成给桌宠 A/C/D 模块看的行动提示，包括表情、动作、语气和回应方向。
+"""
+
+    return DEFAULT_QWEN_PROMPT + "\n\n" + emotion_context
+
 
 class QwenVLClient:
     def __init__(
