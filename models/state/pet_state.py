@@ -34,14 +34,7 @@ class PetState:
     支持两种更新方式：
     1. update_state(event)       - 根据事件名称更新（旧接口）
     2. update_from_user_state(state_dict) - 根据用户状态字典更新（新接口）
-
-    TO_DO:
-    - 初始化心情/能量/亲密度
-    - 根据事件更新状态
-    - 状态持久化
     """
-
-    # TO_DO: 初始化心情/能量/亲密度
 
     def __init__(self, mood: str = "neutral", energy: int = 100, intimacy: int = 50):
         """
@@ -51,7 +44,6 @@ class PetState:
         :param energy: 初始能量值 (0-100)
         :param intimacy: 初始亲密度 (0-100)
         """
-        # TO_DO: 初始化心情/能量/亲密度
         self.mood = mood
         self.energy = max(0, min(100, energy))
         self.intimacy = max(0, min(100, intimacy))
@@ -61,21 +53,13 @@ class PetState:
         self._last_user_state: Optional[dict] = None
         self._history = []
 
-    # TO_DO: 根据事件更新状态
     def update_state(self, event: str):
         """
         根据事件更新桌宠状态
 
         :param event: 事件名称（如 "click", "feed", "play", "idle"）
-
-        TO_DO:
-        - 根据不同类型事件调整心情/能量/亲密度
-        - 确保各属性在合理范围内 (0-100)
-        - 记录状态变化历史
         """
-        # TO_DO: 根据事件更新状态
         self._last_event = event
-        self._history.append(event)
 
         if event == "click":
             # 被点击：亲密度上升，能量略降
@@ -121,7 +105,6 @@ class PetState:
             "timestamp": time.time(),
         })
 
-    # TO_DO: update_from_user_state() - 根据用户状态字典更新桌宠状态
     def update_from_user_state(self, user_state: dict):
         """
         根据用户状态字典更新桌宠状态
@@ -142,13 +125,6 @@ class PetState:
                 "suggestion": "...",
                 "source": ["mediapipe", "qwen_vl"],
             }
-
-        TO_DO:
-        - 将 user_state["state_code"] 映射为桌宠 mood
-        - 高置信度分心/疲劳 → 适当降低亲密度或能量
-        - need_response = True → 标记待响应
-        - 根据状态持续时间计算影响力度
-        - 记录最近一次用户状态，供其他模块查询
         """
         self._last_user_state = user_state
         state_code = user_state.get("state_code", "unknown")
@@ -189,7 +165,6 @@ class PetState:
             "timestamp": time.time(),
         })
 
-    # TO_DO: get_last_user_state() - 获取最近一次用户状态
     def get_last_user_state(self) -> Optional[dict]:
         """
         获取最近一次接收到的用户状态字典

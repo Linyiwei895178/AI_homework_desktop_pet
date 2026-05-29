@@ -1,17 +1,24 @@
 # AI_Desktop_Pet 依赖
+
 # 运行时依赖
 Pillow>=10.0.0          # 图片处理
 python-dotenv>=1.0.0    # .env 配置读取
-#tkinter                 # Python标准库（无需pip安装）
+# tkinter               # Python标准库（无需pip安装）
 
 # B模块：用户状态感知
 opencv-python>=4.8.0    # 摄像头读取、图像处理
-mediapipe>=0.10.0       # 人脸/关键点检测
 numpy>=1.24.0           # 数值计算
 requests>=2.31.0        # 调用 Qwen-VL API
 
-# API 调用（后续对接时启用）
-# requests>=2.31.0
+# B模块增强：表情识别
+deepface>=0.0.90        # 现成面部表情识别库
+tf-keras>=2.15.0        # DeepFace 在新版本 Keras 环境下常用兼容依赖
+
+# MediaPipe 人脸/关键点检测
+# 注意：如果当前 Python 版本安装失败，可暂时使用 OpenCV Haar + Qwen-VL 降级方案
+mediapipe>=0.10.0
+
+# API 调用
 # websocket-client>=1.6.0
 
 # TTS（后续启用）
