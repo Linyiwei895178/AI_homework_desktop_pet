@@ -65,9 +65,11 @@ from app.ui.widgets import (
 )
 
 try:
+    import win32api
     import win32con
     import win32gui
 except ImportError:
+    win32api = None  # type: ignore
     win32gui = None  # type: ignore
     win32con = None  # type: ignore
 
@@ -125,7 +127,11 @@ SETTINGS_PATH = os.path.join(_SETTINGS_DIR, "pet_ui_settings.json")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ACTION_MAPPING_PATH = os.path.join(PROJECT_ROOT, "assets", "action_mapping.json")
+PET_MEMORY_PATH = os.path.join(PROJECT_ROOT, "assets", "pet_memory.json")
 SYNONYMS_PATH = os.path.join(PROJECT_ROOT, "assets", "synonyms.json")
+BASE_WINDOW_W = 450
+BASE_WINDOW_H = 600
+MIN_ACTION_PLAY_MS = 1500
 ANIMATIONS_DIR = os.path.join(PROJECT_ROOT, "assets", "animations")
 IMAGES_DIR = os.path.join(PROJECT_ROOT, "assets", "images")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "assets", "models")
@@ -315,10 +321,28 @@ class ActionMappingStore:
   def _resolve_anim_path(self, filename: str) -> str:
     return _resolve_asset_path(os.path.join("assets", "animations", filename.strip()))
 
-  def pick_gif(self, pet_id: str, action_code: str) -> str:
+  def save(self, path: str = ACTION_MAPPING_PATH) -> None:
+    try:
+      os.makedirs(os.path.dirname(path), exist_ok=True)
+      with open(path, "w", encoding="utf-8") as f:
+        json.dump(self._data, f, ensure_ascii=False, indent=2)
+    except OSError as exc:
+      print(f"[ActionMapping] 保存失败: {exc}")
+
+  def set_pet_mapping(self, pet_id: str, mapping: dict[str, list[str]]) -> None:
+    self._data[pet_id] = {
+      str(k): [str(x) for x in v]
+      for k, v in mapping.items()
+      if isinstance(v, list)
+    }
+    self.save()
+
+  def pick_gif(self, pet_id: str, action_code: str, *, allow_idle_fallback: bool = True) -> str:
     pet_map = self._data.get(pet_id, {})
     candidates = list(pet_map.get(action_code, []) or [])
-    if not candidates:
+    if not candidates and allow_idle_fallback and action_code != "idle":
+      return ""
+    if not candidates and allow_idle_fallback:
       candidates = list(pet_map.get("idle", []) or [])
     if not candidates:
       return ""
@@ -340,9 +364,10 @@ class ActionMappingStore:
         motions.append(
           {
             "id": f"{action_code}:{os.path.basename(fname)}",
-            "label": action_code,
+            "label": motion_label_from_filename(fname),
             "gif": path,
             "frames": [],
+            "action_code": action_code,
           }
         )
     if motions:
@@ -697,21 +722,21 @@ def enrich_flat_pet(
   mapping: ActionMappingStore,
   resolver: SynonymActionResolver | None = None,
 ) -> dict:
-  """合并扫描数据、同义词动作与 action_mapping 配置。"""
+  """合并扫描数据与角色独立 action_mapping 配置。"""
   pet = dict(pet)
   pet["is_flat"] = True
   pet_id = pet.get("id", "")
-  if resolver:
-    pet["motions"] = resolver.motions_for_flat(pet_id)
+  scanned_motions = pet.get("motions", [])
+  if resolver and not mapping._data.get(pet_id):
+    scanned_motions = resolver.motions_for_flat(pet_id) or scanned_motions
+  pet["motions"] = mapping.motions_for_pet(pet_id, scanned_motions)
+  idle_from_map = mapping.pick_gif(pet_id, "idle", allow_idle_fallback=False)
+  if idle_from_map:
+    pet["idle_gif"] = idle_from_map
+  elif resolver:
     idle_asset = resolver._pick_flat_idle_fallback(pet_id)
     if idle_asset and idle_asset.get("type") == "gif":
       pet["idle_gif"] = idle_asset.get("path", "")
-  else:
-    scanned_motions = pet.get("motions", [])
-    pet["motions"] = mapping.motions_for_pet(pet_id, scanned_motions)
-    idle_from_map = mapping.pick_gif(pet_id, "idle")
-    if idle_from_map:
-      pet["idle_gif"] = idle_from_map
   thumb = _resolve_asset_path(pet.get("thumb") or "")
   if not thumb:
     thumb = _resolve_asset_path(os.path.join("assets", "images", f"{pet_id}_image.png"))
@@ -788,84 +813,6 @@ class PetControlConsole(ControlConsole):
   def _setup_console_nav(self) -> None:
     self.resize(800, 600)
     self.setMinimumSize(720, 540)
-    if hasattr(self, "_stack"):
-      old = self._stack.widget(4)
-      if old is not None:
-        self._stack.removeWidget(old)
-        old.deleteLater()
-      self._stack.insertWidget(4, self._page_synonym_settings())
-
-  def _install_synonym_settings_page(self) -> None:
-    pass
-
-  def _page_synonym_settings(self) -> QWidget:
-    w = QWidget()
-    lay = QVBoxLayout(w)
-    lay.setContentsMargins(24, 16, 24, 24)
-    lay.addWidget(QLabel("<h2>同义词管理</h2>"))
-    lay.addWidget(QLabel("<p>为动作添加关键词后，智能匹配文件名并立即生效（无需重启）。</p>"))
-    row = QHBoxLayout()
-    self._syn_action_combo = QComboBox()
-    for code in self._desk.synonym_store.all_actions():
-      self._syn_action_combo.addItem(SYNONYM_ACTION_LABELS.get(code, code), code)
-    row.addWidget(QLabel("动作"))
-    row.addWidget(self._syn_action_combo, 1)
-    lay.addLayout(row)
-    add_row = QHBoxLayout()
-    self._syn_word_input = QLineEdit()
-    self._syn_word_input.setPlaceholderText("输入新同义词…")
-    add_btn = QPushButton("添加")
-    add_btn.setStyleSheet(BTN_PRIMARY)
-    add_btn.clicked.connect(self._on_synonym_add)
-    add_row.addWidget(self._syn_word_input, 1)
-    add_row.addWidget(add_btn)
-    lay.addLayout(add_row)
-    lay.addWidget(QLabel("当前同义词列表"))
-    self._syn_list = QListWidget()
-    lay.addWidget(self._syn_list, 1)
-    del_row = QHBoxLayout()
-    del_btn = QPushButton("删除选中")
-    del_btn.setStyleSheet(BTN_GLASS)
-    del_btn.clicked.connect(self._on_synonym_delete)
-    del_row.addStretch()
-    del_row.addWidget(del_btn)
-    lay.addLayout(del_row)
-    self._syn_action_combo.currentIndexChanged.connect(self._refresh_synonym_list)
-    self._refresh_synonym_list()
-    return w
-
-  def _current_syn_action(self) -> str:
-    return self._syn_action_combo.currentData() or "idle"
-
-  def _refresh_synonym_list(self) -> None:
-    if not hasattr(self, "_syn_list"):
-      return
-    self._syn_list.clear()
-    for word in self._desk.synonym_store.words_for(self._current_syn_action()):
-      self._syn_list.addItem(word)
-
-  def _on_synonym_add(self) -> None:
-    action = self._current_syn_action()
-    word = self._syn_word_input.text().strip()
-    if not word:
-      return
-    self._desk.synonym_store.add_word(action, word)
-    self._desk.synonym_store.save()
-    self._syn_word_input.clear()
-    self._refresh_synonym_list()
-    self._desk.refresh_pet_motions_after_synonym_change()
-    self._show_toast(f"已添加同义词: {word}")
-
-  def _on_synonym_delete(self) -> None:
-    action = self._current_syn_action()
-    item = self._syn_list.currentItem()
-    if item is None:
-      return
-    self._desk.synonym_store.remove_word(action, item.text())
-    self._desk.synonym_store.save()
-    self._refresh_synonym_list()
-    self._desk.refresh_pet_motions_after_synonym_change()
-    self._show_toast("已删除同义词")
 
   def _reload_flat_tab(self) -> None:
     self._flat = self._desk.list_flat_pets_enriched()
@@ -1090,6 +1037,10 @@ class PlanePetPlayer(QWidget):
     self._gif_frame_index = 0
     self._pil_gif = None
     self._loop_gif = False
+    self._action_min_play = False
+    self._action_played_ms = 0
+    self._gif_cycle_duration_ms = 0
+    self._png_play_start = 0.0
     self._frame_timer = QTimer(self)
     self._frame_timer.timeout.connect(self._on_frame_tick)
     self._frames: list[str] = []
@@ -1139,12 +1090,13 @@ class PlanePetPlayer(QWidget):
     self._playing_motion = True
     self._stop_playback()
     if gif and os.path.isfile(gif):
-      self._start_gif(gif, loop=False, on_finish=self.show_idle)
+      self._start_gif(gif, loop=False, on_finish=self.show_idle, min_play_ms=MIN_ACTION_PLAY_MS)
       return True
     frame_list = [f for f in (frames or []) if os.path.isfile(f)]
     if frame_list:
       self._frames = frame_list
       self._frame_index = 0
+      self._png_play_start = time.time()
       self._on_frame_tick()
       self._frame_timer.start(self.FRAME_MS)
       return True
@@ -1166,7 +1118,7 @@ class PlanePetPlayer(QWidget):
     self._playing_motion = True
     self._stop_playback()
     if gif and os.path.isfile(gif):
-      self._start_gif(gif, loop=False, on_finish=self.show_idle)
+      self._start_gif(gif, loop=False, on_finish=self.show_idle, min_play_ms=MIN_ACTION_PLAY_MS)
       return True
     if frames:
       self._frames = [f for f in frames if os.path.isfile(f)]
@@ -1174,6 +1126,7 @@ class PlanePetPlayer(QWidget):
         self._playing_motion = False
         return False
       self._frame_index = 0
+      self._png_play_start = time.time()
       self._on_frame_tick()
       self._frame_timer.start(self.FRAME_MS)
       return True
@@ -1183,7 +1136,17 @@ class PlanePetPlayer(QWidget):
   def hit_test(self, pos: tuple[int, int]) -> bool:
     if self._pixmap_rect.isEmpty():
       return False
-    return self._pixmap_rect.contains(QPoint(pos[0], pos[1]))
+    pt = QPoint(pos[0], pos[1])
+    if not self._pixmap_rect.contains(pt):
+      return False
+    pm = self._display.pixmap()
+    if pm is None or pm.isNull():
+      return True
+    lx = pos[0] - self._pixmap_rect.x()
+    ly = pos[1] - self._pixmap_rect.y()
+    if lx < 0 or ly < 0 or lx >= pm.width() or ly >= pm.height():
+      return True
+    return QColor(pm.toImage().pixel(lx, ly)).alpha() > 16
 
   def tick(self) -> None:
     pass
@@ -1195,6 +1158,9 @@ class PlanePetPlayer(QWidget):
     self._gif_durations_ms = []
     self._gif_frame_index = 0
     self._loop_gif = False
+    self._action_min_play = False
+    self._action_played_ms = 0
+    self._gif_cycle_duration_ms = 0
     if self._pil_gif is not None:
       try:
         self._pil_gif.close()
@@ -1211,6 +1177,7 @@ class PlanePetPlayer(QWidget):
     *,
     loop: bool,
     on_finish: Callable[[], None] | None = None,
+    min_play_ms: int = 0,
   ) -> None:
     path = _resolve_asset_path(path)
     if not path or not os.path.isfile(path):
@@ -1259,11 +1226,17 @@ class PlanePetPlayer(QWidget):
       return
     self._loop_gif = loop
     self._gif_on_finish = on_finish
+    self._action_min_play = not loop and min_play_ms > 0
+    self._action_played_ms = 0
+    self._gif_cycle_duration_ms = sum(self._gif_durations_ms) or 100
     self._gif_frame_index = 0
     self._show_gif_frame(0)
     self._display.show()
     if len(self._gif_frames) == 1 and not loop:
-      QTimer.singleShot(self._gif_durations_ms[0], self._finish_gif_playback)
+      delay = self._gif_durations_ms[0]
+      if self._action_min_play:
+        delay = max(delay, min_play_ms)
+      QTimer.singleShot(delay, self._on_gif_cycle_complete)
     else:
       self._gif_timer.start(self._gif_durations_ms[0])
 
@@ -1290,11 +1263,25 @@ class PlanePetPlayer(QWidget):
         next_index = 0
       else:
         self._gif_timer.stop()
-        self._finish_gif_playback()
+        self._on_gif_cycle_complete()
         return
     self._gif_frame_index = next_index
     self._show_gif_frame(self._gif_frame_index)
     self._gif_timer.start(self._gif_durations_ms[self._gif_frame_index])
+
+  def _on_gif_cycle_complete(self) -> None:
+    if self._action_min_play:
+      self._action_played_ms += self._gif_cycle_duration_ms
+      if self._action_played_ms < MIN_ACTION_PLAY_MS:
+        self._gif_frame_index = 0
+        self._show_gif_frame(0)
+        if len(self._gif_frames) == 1:
+          remain = MIN_ACTION_PLAY_MS - self._action_played_ms
+          QTimer.singleShot(max(self._gif_durations_ms[0], remain), self._on_gif_cycle_complete)
+        else:
+          self._gif_timer.start(self._gif_durations_ms[0])
+        return
+    self._finish_gif_playback()
 
   def _finish_gif_playback(self) -> None:
     done = self._gif_on_finish
@@ -1310,6 +1297,10 @@ class PlanePetPlayer(QWidget):
     self._show_still(self._frames[self._frame_index])
     self._frame_index = self._frame_index + 1
     if self._frame_index >= len(self._frames):
+      elapsed_ms = int((time.time() - self._png_play_start) * 1000)
+      if self._playing_motion and elapsed_ms < MIN_ACTION_PLAY_MS:
+        self._frame_index = 0
+        return
       self._frame_timer.stop()
       self._playing_motion = False
       self.show_idle()
@@ -1870,6 +1861,7 @@ class Live2DWidget(QOpenGLWidget):
 
   def mousePressEvent(self, event: QMouseEvent) -> None:
     pos = (int(event.position().x()), int(event.position().y()))
+    self._pet._prepare_mouse_at(pos)
     if event.button() == Qt.MouseButton.RightButton:
       self._pet._open_context_menu(pos)
     elif event.button() == Qt.MouseButton.LeftButton:
@@ -1935,6 +1927,7 @@ class PetWindow(QWidget):
 
   def mousePressEvent(self, event: QMouseEvent) -> None:
     pos = (int(event.position().x()), int(event.position().y()))
+    self._pet._prepare_mouse_at(pos)
     if self._pet._is_flat_mode():
       if event.button() == Qt.MouseButton.RightButton:
         self._pet._open_context_menu(pos)
@@ -2006,6 +1999,8 @@ class DesktopPet:
     self._status_bar_enabled = False
     self._hovering_window = False
     self._window_alpha = 255
+    self._click_through_active = False
+    self._rbutton_was_down = False
 
     self._dragging = False
     self._drag_start_screen: tuple[int, int] = (0, 0)
@@ -2037,6 +2032,7 @@ class DesktopPet:
     self.chat_bubble: Optional[ChatBubble] = None
     self.input_box: Optional[InputBox] = None
     self._chat_open = False
+    self._last_pet_id: str = ""
     self._active_pet: dict | None = None
     self._console: PetControlConsole | None = None
     self._chat_stream: ChatStreamBridge | None = None
@@ -2100,7 +2096,13 @@ class DesktopPet:
       )
     return [enrich_flat_pet(p, self.action_mapping, self.synonym_resolver) for p in pets]
 
+  def reload_action_mapping(self) -> None:
+    self.action_mapping = ActionMappingStore.load()
+
   def refresh_pet_motions_after_synonym_change(self) -> None:
+    self.refresh_pet_motions_after_mapping_change()
+
+  def refresh_pet_motions_after_mapping_change(self) -> None:
     if self._active_pet and self._active_pet.get("is_flat"):
       rebuilt = self.build_pet_record(self._active_pet.get("id", ""))
       if rebuilt:
@@ -2156,13 +2158,50 @@ class DesktopPet:
     action = self.team_d.api_decide_action()
     if self._is_flat_mode() and self._active_pet:
       pet_id = self._active_pet.get("id", "")
-      self.synonym_resolver.play_flat_decided(pet_id, action, self._plane_player())
+      player = self._plane_player()
+      if not player:
+        return
+      gif = self.action_mapping.pick_gif(pet_id, action, allow_idle_fallback=False)
+      if not gif:
+        gif = self.action_mapping.pick_gif(pet_id, "idle", allow_idle_fallback=False)
+      if gif:
+        player.play_asset(gif=gif)
+      else:
+        player.show_idle()
     elif self._model is not None:
       pet_id = (self._active_pet or {}).get("id", "mao")
       model_path = (self._active_pet or {}).get("model_path") or self.model_path
-      self.synonym_resolver.play_live2d_decided(
-        pet_id, action, self.play_motion, model_path=model_path
-      )
+      if not self._play_live2d_from_mapping(pet_id, action, model_path):
+        idle_stem = self._mapping_motion_stem(pet_id, "idle", model_path)
+        if idle_stem:
+          self.play_motion(idle_stem)
+        else:
+          self._start_idle_motion()
+
+  def _mapping_motion_stem(
+    self, pet_id: str, action: str, model_path: str | None = None
+  ) -> str:
+    pet_map = self.action_mapping._data.get(pet_id, {})
+    candidates = list(pet_map.get(action, []) or [])
+    if not candidates:
+      return ""
+    stem = random.choice(candidates)
+    if self._resolve_motion(stem)[0] is not None:
+      return stem
+    matched = self.synonym_resolver._match_live2d_motions(pet_id, action, model_path)
+    for path in matched:
+      s = self.synonym_resolver._motion_stem_from_file(path)
+      if s == stem or stem in path:
+        return s
+    return stem
+
+  def _play_live2d_from_mapping(
+    self, pet_id: str, action: str, model_path: str | None = None
+  ) -> bool:
+    stem = self._mapping_motion_stem(pet_id, action, model_path)
+    if stem and self.play_motion(stem):
+      return True
+    return False
 
   def send_to_ai(self, msg: str) -> str:
     return f"收到：{msg}"
@@ -2182,6 +2221,8 @@ class DesktopPet:
     elif pet.get("is_flat"):
       pet = enrich_flat_pet(_normalize_flat_pet(pet), self.action_mapping, self.synonym_resolver)
     self._active_pet = pet
+    self._last_pet_id = pet.get("id", "")
+    self._save_pet_memory()
     name = pet.get("name") or pet.get("id", "")
     if pet.get("is_flat"):
       self._window._gl.hide()
@@ -2218,9 +2259,8 @@ class DesktopPet:
   def _raise_ui_overlays(self) -> None:
     if self._window is None:
       return
+    self._lower_character_layer()
     for widget in (
-      self._window._plane_player,
-      self._window._gl,
       self.info_bubble,
       self.chat_bubble,
       self.input_box,
@@ -2231,7 +2271,7 @@ class DesktopPet:
       self.status_submenu,
       self.chat_submenu,
     ):
-      if widget is not None:
+      if self._widget_alive(widget):
         widget.raise_()
 
   def _current_arc_motion_items(self) -> list[dict[str, str]]:
@@ -2366,7 +2406,7 @@ class DesktopPet:
     self._app.setStyleSheet(APP_GLOBAL_QSS)
     self._init_ui_widgets()
 
-    size = self.window_size or (450, 600)
+    size = self.window_size or (BASE_WINDOW_W, BASE_WINDOW_H)
     self._win_w, self._win_h = size
     self._aspect_ratio = self._win_w / max(1, self._win_h)
     self._resize_start_size = (self._win_w, self._win_h)
@@ -2377,16 +2417,23 @@ class DesktopPet:
 
     self._set_pin_top(self._pin_top)
     self._apply_window_opacity(255)
+    self._apply_ui_scale()
     if self._status_bar_enabled and self.info_bubble:
+      self.info_bubble.show(0, 0)
       self._layout_bubbles()
+    if self._chat_open:
+      self._set_chat_open(True)
     self._running = True
 
     self._timer = QTimer()
     self._timer.timeout.connect(self._tick)
     self._timer.start(16)
 
+    QTimer.singleShot(0, self._restore_last_pet)
+
     self._app.exec()
-    self.close()
+    if self._running:
+      self.close()
 
   def _init_ui_widgets(self) -> None:
     """在 QApplication 创建后初始化 Qt 控件。"""
@@ -2509,6 +2556,8 @@ class DesktopPet:
         new_y = max(margin, head_y - rect.height() - gap)
         widget.move(rect.x(), new_y)
 
+    self._raise_ui_overlays()
+
   def _save_chat_message(self, role: str, text: str) -> None:
     name = self._active_character_name()
     msgs = self._chat_history.load(name)
@@ -2554,8 +2603,29 @@ class DesktopPet:
         self._model.Resize(w, h)
     if self._resize_visible and self._window and hasattr(self._window, "_resize_overlay"):
       self._window._resize_overlay.setGeometry(0, 0, w, h)
+    self._apply_ui_scale()
     if self._status_bar_enabled or self._chat_open:
       self._layout_bubbles()
+    self._save_pet_memory()
+
+  def _ui_scale_factor(self) -> float:
+    return max(0.35, min(1.25, self._win_w / BASE_WINDOW_W))
+
+  def _apply_ui_scale(self) -> None:
+    scale = self._ui_scale_factor()
+    for widget in (
+      self.context_menu,
+      self.pin_submenu,
+      self.hover_submenu,
+      self.status_submenu,
+      self.chat_submenu,
+      self.info_bubble,
+      self.chat_bubble,
+      self.input_box,
+      self.arc_menu,
+    ):
+      if widget is not None and hasattr(widget, "apply_ui_scale"):
+        widget.apply_ui_scale(scale)
 
   def _scale_window(self, factor: float) -> None:
     if factor <= 0:
@@ -2583,6 +2653,8 @@ class DesktopPet:
   def _set_window_click_through(self, enabled: bool) -> None:
     if not win32gui or not self._hwnd:
       return
+    if enabled == self._click_through_active:
+      return
     try:
       style = win32gui.GetWindowLong(self._hwnd, win32con.GWL_EXSTYLE)
       if enabled:
@@ -2590,6 +2662,7 @@ class DesktopPet:
       else:
         style &= ~win32con.WS_EX_TRANSPARENT
       win32gui.SetWindowLong(self._hwnd, win32con.GWL_EXSTYLE, style)
+      self._click_through_active = enabled
     except Exception:
       pass
 
@@ -2628,6 +2701,7 @@ class DesktopPet:
         self._window._gl.update()
     if self.arc_menu:
       self.arc_menu.tick(1.0 / 60.0)
+    self._poll_right_button_menu()
 
   def _update_gaze(self, mx: int, my: int) -> None:
     """窗口全域视线：x -> angleX [-30,30]，y -> angleY [-20,20]，每帧 Drag。"""
@@ -2722,6 +2796,7 @@ class DesktopPet:
         win32con.GWL_EXSTYLE,
         ex_style,
       )
+      self._click_through_active = False
       win32gui.SetLayeredWindowAttributes(
         self._hwnd,
         WIN32_TRANSPARENT_COLORKEY,
@@ -2764,11 +2839,52 @@ class DesktopPet:
       self._apply_window_opacity(HOVER_FADE_ALPHA if over else 255)
     self._update_mouse_passthrough(mouse_pos)
 
+  def _cursor_in_window(self, mouse_pos: tuple[int, int]) -> bool:
+    x, y = mouse_pos
+    return 0 <= x < self._win_w and 0 <= y < self._win_h
+
+  def _prepare_mouse_at(self, pos: tuple[int, int]) -> None:
+    """点击前先按位置取消穿透，避免 WS_EX_TRANSPARENT 吞掉 Qt 鼠标事件。"""
+    if not self._hover_fade_enabled:
+      return
+    if self._is_mouse_on_body(pos) or self._point_on_ui(pos):
+      self._set_window_click_through(False)
+      self._set_gl_mouse_passthrough(not self._is_mouse_on_body(pos))
+    self._update_mouse_passthrough(pos)
+
+  def _poll_right_button_menu(self) -> None:
+    """穿透开启时 Qt 收不到右键；在 tick 里用 Win32 检测角色身上的右键。"""
+    if not self._hover_fade_enabled or not win32api or not win32con:
+      self._rbutton_was_down = False
+      return
+    try:
+      down = bool(win32api.GetAsyncKeyState(win32con.VK_RBUTTON) & 0x8000)
+    except Exception:
+      return
+    if down and not self._rbutton_was_down:
+      pos = self._local_mouse_pos()
+      if (
+        self._cursor_in_window(pos)
+        and self._is_mouse_on_body(pos)
+        and self._click_through_active
+      ):
+        self._set_window_click_through(False)
+        self._set_gl_mouse_passthrough(False)
+        self._open_context_menu(pos)
+    self._rbutton_was_down = down
+
   def _update_mouse_passthrough(self, mouse_pos: tuple[int, int]) -> None:
-    """悬停淡出开启时：透明区域穿透；关闭时：完全不穿透。"""
-    if self._any_menu_open() or self._chat_open or self._resize_visible:
+    """悬停淡出开启时：仅窗口内透明背景穿透；关闭时：完全不穿透。"""
+    if self._any_menu_open() or self._resize_visible:
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(True)
+      return
+    if self._chat_open:
+      self._set_window_click_through(False)
+      if self._is_flat_mode():
+        self._set_gl_mouse_passthrough(True)
+      else:
+        self._set_gl_mouse_passthrough(False)
       return
     if self._dragging or self._resizing_corner:
       self._set_window_click_through(False)
@@ -2777,6 +2893,10 @@ class DesktopPet:
     if not self._hover_fade_enabled:
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(False)
+      return
+    if not self._cursor_in_window(mouse_pos):
+      self._set_window_click_through(False)
+      self._set_gl_mouse_passthrough(True)
       return
     on_body = self._is_mouse_on_body(mouse_pos)
     on_ui = self._point_on_ui(mouse_pos)
@@ -2795,30 +2915,56 @@ class DesktopPet:
       player = self._plane_player()
       if player:
         return player.hit_test(mouse_pos)
-      return True
+      return False
     if self._model is None:
       return False
     x, y = mouse_pos
-    return bool(self._model.HitTest("HitAreaBody", x, y))
+    for area_id in HIT_AREAS:
+      if self._model.HitTest(area_id, x, y):
+        return True
+    try:
+      parts = self._model.HitPart(float(x), float(y), True)
+      if parts:
+        return True
+    except Exception:
+      pass
+    return False
 
   def _load_settings(self) -> None:
-    defaults = {"pin_top": True, "hover_fade": True, "status_bar": False}
+    defaults = {
+      "pin_top": True,
+      "hover_fade": True,
+      "status_bar": False,
+      "chat_open": False,
+    }
+    data: dict[str, Any] = dict(defaults)
     try:
       with open(SETTINGS_PATH, encoding="utf-8") as f:
-        data = json.load(f)
-      self._pin_top = bool(data.get("pin_top", defaults["pin_top"]))
-      self._hover_fade_enabled = bool(data.get("hover_fade", defaults["hover_fade"]))
-      self._status_bar_enabled = bool(data.get("status_bar", defaults["status_bar"]))
+        data.update(json.load(f))
     except (OSError, json.JSONDecodeError, TypeError):
-      self._pin_top = defaults["pin_top"]
-      self._hover_fade_enabled = defaults["hover_fade"]
-      self._status_bar_enabled = defaults["status_bar"]
+      pass
+    mem = self._load_pet_memory()
+    if mem:
+      data.update({k: mem[k] for k in defaults if k in mem})
+      if mem.get("last_pet_id"):
+        self._last_pet_id = str(mem["last_pet_id"])
+      pos = mem.get("position")
+      if isinstance(pos, (list, tuple)) and len(pos) == 2:
+        self.position = [int(pos[0]), int(pos[1])]
+      size = mem.get("window_size")
+      if isinstance(size, (list, tuple)) and len(size) == 2:
+        self.window_size = (int(size[0]), int(size[1]))
+    self._pin_top = bool(data.get("pin_top", defaults["pin_top"]))
+    self._hover_fade_enabled = bool(data.get("hover_fade", defaults["hover_fade"]))
+    self._status_bar_enabled = bool(data.get("status_bar", defaults["status_bar"]))
+    self._chat_open = bool(data.get("chat_open", defaults["chat_open"]))
 
   def _save_settings(self) -> None:
     data = {
       "pin_top": self._pin_top,
       "hover_fade": self._hover_fade_enabled,
       "status_bar": self._status_bar_enabled,
+      "chat_open": self._chat_open,
     }
     try:
       os.makedirs(_SETTINGS_DIR, exist_ok=True)
@@ -2826,6 +2972,51 @@ class DesktopPet:
         json.dump(data, f, ensure_ascii=False, indent=2)
     except OSError as exc:
       print(f"[DesktopPet] 保存设置失败: {exc}")
+    self._save_pet_memory()
+
+  def _load_pet_memory(self) -> dict[str, Any]:
+    if not os.path.isfile(PET_MEMORY_PATH):
+      return {}
+    try:
+      with open(PET_MEMORY_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+      return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError, TypeError):
+      return {}
+
+  def _save_pet_memory(self) -> None:
+    data: dict[str, Any] = {
+      "last_pet_id": self._last_pet_id or (self._active_pet or {}).get("id", ""),
+      "pin_top": self._pin_top,
+      "hover_fade": self._hover_fade_enabled,
+      "status_bar": self._status_bar_enabled,
+      "chat_open": self._chat_open,
+    }
+    if self._window is not None:
+      data["position"] = [self._window.x(), self._window.y()]
+      data["window_size"] = [self._win_w, self._win_h]
+    else:
+      data["position"] = list(self.position)
+      data["window_size"] = [self._win_w, self._win_h]
+    try:
+      os.makedirs(os.path.dirname(PET_MEMORY_PATH), exist_ok=True)
+      with open(PET_MEMORY_PATH, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    except OSError as exc:
+      print(f"[DesktopPet] 保存记忆失败: {exc}")
+
+  def _restore_last_pet(self) -> None:
+    pet_id = self._last_pet_id
+    if not pet_id:
+      return
+    record = self.build_pet_record(pet_id)
+    if record:
+      self.switch_to_pet(record)
+      return
+    for pet in self.list_flat_pets_enriched():
+      if pet.get("id") == pet_id:
+        self.switch_to_pet(pet)
+        return
 
   def _set_pin_top(self, enabled: bool) -> None:
     self._pin_top = enabled
@@ -2870,9 +3061,11 @@ class DesktopPet:
     self._status_bar_enabled = enabled
     if self.status_submenu:
       self.status_submenu.set_active(enabled)
-    if not enabled and self.info_bubble:
+    if enabled and self.info_bubble:
+      self.info_bubble.show(0, 0)
+      self._layout_bubbles()
+    elif self.info_bubble:
       self.info_bubble.hide()
-    self._layout_bubbles()
     self._save_settings()
 
   def _set_chat_open(self, enabled: bool) -> None:
@@ -2904,6 +3097,9 @@ class DesktopPet:
     dx = screen_x - self._drag_start_screen[0]
     dy = screen_y - self._drag_start_screen[1]
     self._window.move(self._drag_start_win[0] + dx, self._drag_start_win[1] + dy)
+    if self._status_bar_enabled or self._chat_open:
+      self._layout_bubbles()
+    self._save_pet_memory()
 
   def _on_mouse_move(self, pos: tuple[float, float]) -> None:
     ipos = (int(pos[0]), int(pos[1]))
@@ -2939,6 +3135,12 @@ class DesktopPet:
         sx, sy = self._screen_pos()
         self._move_window(sx, sy)
         return
+    self._update_hover_alpha(ipos)
+
+  def _input_box_contains(self, pos: tuple[int, int]) -> bool:
+    if not self._chat_open or not self._widget_alive(self.input_box):
+      return False
+    return self.input_box.isVisible() and self.input_box.geometry().contains(QPoint(*pos))
 
   def _point_on_ui(self, pos: tuple[int, int]) -> bool:
     if self.context_menu and self.context_menu.visible and self.context_menu.rect.contains(QPoint(*pos)):
@@ -2951,13 +3153,8 @@ class DesktopPet:
       return True
     if self.chat_submenu and self.chat_submenu.visible and self.chat_submenu.rect.contains(QPoint(*pos)):
       return True
-    if self.info_bubble.visible and self.info_bubble.rect.contains(QPoint(*pos)):
+    if self._input_box_contains(pos):
       return True
-    if self._chat_open:
-      if self.chat_bubble.visible and self.chat_bubble.rect.contains(QPoint(*pos)):
-        return True
-      if self.input_box.visible and self.input_box.rect.contains(QPoint(*pos)):
-        return True
     if self.arc_menu and self.arc_menu.visible:
       gpos = self._to_global(pos)
       lp = self.arc_menu.mapFromGlobal(QPoint(*gpos))
@@ -2971,6 +3168,8 @@ class DesktopPet:
       if self._point_on_ui(pos):
         return
     if self._point_on_ui(pos):
+      if self._input_box_contains(pos) and self.input_box:
+        self.input_box._field.setFocus()
       return
     if self._edge_zone(pos):
       self._edge_hold_timer.start(450)
@@ -3001,8 +3200,12 @@ class DesktopPet:
       self.on_click(pos[0], pos[1])
 
   def _ui_consumes_click(self, pos: tuple[int, int]) -> bool:
-    if self.info_bubble.visible and not self.info_bubble.rect.contains(QPoint(*pos)):
-      self.info_bubble.hide()
+    if self._input_box_contains(pos) and self.input_box:
+      local = self.input_box.mapFromParent(QPoint(*pos))
+      if self.input_box._btn.geometry().contains(local):
+        self._submit_chat()
+        return True
+      self.input_box._field.setFocus()
       return True
 
     if self.pin_submenu and self.pin_submenu.visible:
@@ -3095,20 +3298,38 @@ class DesktopPet:
       self._window._gl.setFocus()
     self._update_mouse_passthrough(self._local_mouse_pos())
 
+  def _widget_alive(self, widget: QWidget | None) -> bool:
+    if widget is None:
+      return False
+    try:
+      from shiboken6 import isValid
+      return bool(isValid(widget))
+    except ImportError:
+      return True
+
   def _dismiss_menus(self) -> None:
-    if self.context_menu:
-      self.context_menu.hide()
-    if self.pin_submenu:
-      self.pin_submenu.hide()
-    if self.hover_submenu:
-      self.hover_submenu.hide()
-    if self.status_submenu:
-      self.status_submenu.hide()
-    if self.chat_submenu:
-      self.chat_submenu.hide()
-    if self.arc_menu:
-      self.arc_menu.hide()
+    for widget in (
+      self.context_menu,
+      self.pin_submenu,
+      self.hover_submenu,
+      self.status_submenu,
+      self.chat_submenu,
+      self.arc_menu,
+    ):
+      if self._widget_alive(widget):
+        widget.hide()
     self._restore_window_focus()
+
+  def _clear_overlay_refs(self) -> None:
+    self.context_menu = None
+    self.pin_submenu = None
+    self.hover_submenu = None
+    self.status_submenu = None
+    self.chat_submenu = None
+    self.arc_menu = None
+    self.info_bubble = None
+    self.chat_bubble = None
+    self.input_box = None
 
   def _close_arc_menu(self) -> None:
     if self.arc_menu:
@@ -3258,15 +3479,34 @@ class DesktopPet:
       else:
         self.play_model_motion("Idle")
     elif item == "退出":
-      self._running = False
-      if self._app:
-        self._app.quit()
+      self._close_pet_window()
     elif item == "关闭":
       pass
 
+  def _close_pet_window(self) -> None:
+    """仅关闭桌宠悬浮窗；设置面板保持独立运行。"""
+    self._save_pet_memory()
+    self._running = False
+    if self._timer:
+      self._timer.stop()
+      self._timer = None
+    self._dismiss_menus()
+    if self._window is not None:
+      self._window.hide()
+      self._window.close()
+      self._window = None
+    self._clear_overlay_refs()
+    if self._console is not None:
+      try:
+        if self._console.isVisible():
+          return
+      except RuntimeError:
+        pass
+    if self._app:
+      self._app.quit()
+
   def _open_settings_panel(self) -> None:
     self.arc_menu.hide()
-    self.info_bubble.hide()
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     console = PetControlConsole(
       desktop_pet=self,

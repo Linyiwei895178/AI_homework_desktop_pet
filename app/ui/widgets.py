@@ -135,6 +135,19 @@ QPushButton#switchPetBtn:pressed {
 """
 
 
+def _scaled_int(value: float, scale: float, minimum: int = 1) -> int:
+    return max(minimum, int(round(value * scale)))
+
+
+class ScalableOverlay:
+    """桌宠窗口缩小时，overlay 控件按比例缩放。"""
+
+    _ui_scale: float = 1.0
+
+    def apply_ui_scale(self, scale: float) -> None:
+        self._ui_scale = max(0.35, min(1.25, scale))
+
+
 def _app_font(size: int, bold: bool = False) -> QFont:
     if sys.platform == "win32":
         for name in ("Microsoft YaHei UI", "Microsoft YaHei", "SimHei", "Arial"):
@@ -162,7 +175,7 @@ def _load_pixmap(path: str, size: QSize | None = None) -> QPixmap:
 # ---------------------------------------------------------------------------
 
 
-class RightClickMenu(QFrame):
+class RightClickMenu(QFrame, ScalableOverlay):
     ITEMS = (
         "状态栏",
         "AI对话",
@@ -174,6 +187,9 @@ class RightClickMenu(QFrame):
         "退出",
         "关闭",
     )
+    _BASE_WIDTH = 200
+    _BASE_ITEM_HEIGHT = 40
+    _BASE_PADDING = 8
     WIDTH = 200
     ITEM_HEIGHT = 40
     PADDING = 8
@@ -190,6 +206,15 @@ class RightClickMenu(QFrame):
         self._font = _app_font(16)
         self.setMouseTracking(True)
         self.hide()
+
+    def apply_ui_scale(self, scale: float) -> None:
+        super().apply_ui_scale(scale)
+        self.WIDTH = _scaled_int(self._BASE_WIDTH, self._ui_scale, 120)
+        self.ITEM_HEIGHT = _scaled_int(self._BASE_ITEM_HEIGHT, self._ui_scale, 28)
+        self.PADDING = _scaled_int(self._BASE_PADDING, self._ui_scale, 4)
+        self._font = _app_font(_scaled_int(16, self._ui_scale, 11))
+        radius = _scaled_int(16, self._ui_scale, 10)
+        self.setStyleSheet(_glass_style(radius))
 
     @property
     def rect(self) -> QRect:
@@ -284,7 +309,10 @@ class RightClickMenu(QFrame):
         p.end()
 
 
-class SubMenu(QFrame):
+class SubMenu(QFrame, ScalableOverlay):
+    _BASE_WIDTH = 160
+    _BASE_ITEM_HEIGHT = 36
+    _BASE_PADDING = 6
     WIDTH = 160
     ITEM_HEIGHT = 36
     PADDING = 6
@@ -307,6 +335,14 @@ class SubMenu(QFrame):
         self._font = _app_font(15)
         self.setMouseTracking(True)
         self.hide()
+
+    def apply_ui_scale(self, scale: float) -> None:
+        super().apply_ui_scale(scale)
+        self.WIDTH = _scaled_int(self._BASE_WIDTH, self._ui_scale, 100)
+        self.ITEM_HEIGHT = _scaled_int(self._BASE_ITEM_HEIGHT, self._ui_scale, 26)
+        self.PADDING = _scaled_int(self._BASE_PADDING, self._ui_scale, 4)
+        self._font = _app_font(_scaled_int(15, self._ui_scale, 10))
+        self.setStyleSheet(_glass_style(_scaled_int(12, self._ui_scale, 8)))
 
     @property
     def rect(self) -> QRect:
@@ -416,7 +452,9 @@ def _ease_out_back(t: float) -> float:
     return 1.0 + c3 * (t - 1.0) ** 3 + c1 * (t - 1.0) ** 2
 
 
-class ArcMotionMenu(QWidget):
+class ArcMotionMenu(QWidget, ScalableOverlay):
+    _BASE_RADIUS = 120
+    _BASE_BUTTON_SIZE = 48
     RADIUS = 120
     BUTTON_SIZE = 48
     HOVER_SCALE = 1.1
@@ -437,6 +475,12 @@ class ArcMotionMenu(QWidget):
         self._elapsed = 0.0
         self._font = _app_font(12)
         self.hide()
+
+    def apply_ui_scale(self, scale: float) -> None:
+        super().apply_ui_scale(scale)
+        self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 60)
+        self.BUTTON_SIZE = _scaled_int(self._BASE_BUTTON_SIZE, self._ui_scale, 28)
+        self._font = _app_font(_scaled_int(12, self._ui_scale, 9))
 
     def show_menu(self, center_x: int, center_y: int, items: list[dict[str, Any]]) -> None:
         self.center_x, self.center_y = center_x, center_y
@@ -560,20 +604,28 @@ RadialMenu = ArcMotionMenu
 # ---------------------------------------------------------------------------
 
 
-class InfoBubble(QFrame):
+class InfoBubble(QFrame, ScalableOverlay):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("glass")
         self.setAutoFillBackground(True)
         self.setStyleSheet(_glass_style(14))
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.visible = False
         self.mood, self.affection, self.energy = 85, 72, 90
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(12, 12, 12, 12)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(12, 12, 12, 12)
         self._lbl = QLabel()
         self._lbl.setFont(_app_font(15))
-        lay.addWidget(self._lbl)
+        self._lay.addWidget(self._lbl)
         self.hide()
+
+    def apply_ui_scale(self, scale: float) -> None:
+        super().apply_ui_scale(scale)
+        m = _scaled_int(12, self._ui_scale, 6)
+        self._lay.setContentsMargins(m, m, m, m)
+        self._lbl.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
+        self.setStyleSheet(_glass_style(_scaled_int(14, self._ui_scale, 8)))
 
     @property
     def rect(self) -> QRect:
@@ -587,13 +639,16 @@ class InfoBubble(QFrame):
         self.move(x, y)
         self.visible = True
         super().show()
+        self.raise_()
 
     def hide(self) -> None:
         self.visible = False
         super().hide()
 
 
-class ChatBubble(QFrame):
+class ChatBubble(QFrame, ScalableOverlay):
+    _BASE_WIDTH = 280
+    _BASE_RADIUS = 20
     WIDTH = 280
     RADIUS = 20
 
@@ -602,15 +657,26 @@ class ChatBubble(QFrame):
         self.setObjectName("glass")
         self.setStyleSheet(_glass_style(self.RADIUS))
         self.setFixedWidth(self.WIDTH)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.visible = False
         self.text = ""
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(14, 14, 14, 14)
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(14, 14, 14, 14)
         self._lbl = QLabel()
         self._lbl.setFont(_app_font(15))
         self._lbl.setWordWrap(True)
-        lay.addWidget(self._lbl)
+        self._lay.addWidget(self._lbl)
         self.hide()
+
+    def apply_ui_scale(self, scale: float) -> None:
+        super().apply_ui_scale(scale)
+        self.WIDTH = _scaled_int(self._BASE_WIDTH, self._ui_scale, 160)
+        self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 12)
+        self.setFixedWidth(self.WIDTH)
+        m = _scaled_int(14, self._ui_scale, 8)
+        self._lay.setContentsMargins(m, m, m, m)
+        self._lbl.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
+        self.setStyleSheet(_glass_style(self.RADIUS))
 
     @property
     def rect(self) -> QRect:
@@ -626,13 +692,17 @@ class ChatBubble(QFrame):
         self.move(x, y)
         self.visible = True
         super().show()
+        self.raise_()
 
     def hide(self) -> None:
         self.visible = False
         super().hide()
 
 
-class InputBox(QFrame):
+class InputBox(QFrame, ScalableOverlay):
+    _BASE_WIDTH = 260
+    _BASE_HEIGHT = 40
+    _BASE_RADIUS = 24
     WIDTH = 260
     HEIGHT = 40
     RADIUS = 24
@@ -647,8 +717,8 @@ class InputBox(QFrame):
         self.visible = False
         self.focused = False
         self.text = ""
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 4, 8, 4)
+        self._lay = QHBoxLayout(self)
+        self._lay.setContentsMargins(8, 4, 8, 4)
         self._field = QLineEdit()
         self._field.setPlaceholderText("输入消息…")
         self._field.setFrame(False)
@@ -657,9 +727,24 @@ class InputBox(QFrame):
         self._btn = QPushButton("发送")
         self._btn.setStyleSheet(BTN_PRIMARY)
         self._btn.clicked.connect(self._submit)
-        lay.addWidget(self._field, 1)
-        lay.addWidget(self._btn)
+        self._lay.addWidget(self._field, 1)
+        self._lay.addWidget(self._btn)
         self.hide()
+
+    def apply_ui_scale(self, scale: float) -> None:
+        super().apply_ui_scale(scale)
+        self.WIDTH = _scaled_int(self._BASE_WIDTH, self._ui_scale, 150)
+        self.HEIGHT = _scaled_int(self._BASE_HEIGHT, self._ui_scale, 28)
+        self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 14)
+        self.setFixedSize(self.WIDTH, self.HEIGHT)
+        self._lay.setContentsMargins(
+            _scaled_int(8, self._ui_scale, 4),
+            _scaled_int(4, self._ui_scale, 2),
+            _scaled_int(8, self._ui_scale, 4),
+            _scaled_int(4, self._ui_scale, 2),
+        )
+        self._field.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
+        self.setStyleSheet(_glass_style(self.RADIUS))
 
     @property
     def rect(self) -> QRect:
@@ -670,6 +755,7 @@ class InputBox(QFrame):
         self.visible = True
         self.focused = True
         super().show()
+        self.raise_()
         self._field.setFocus()
 
     def hide(self) -> None:
@@ -742,10 +828,11 @@ class _PetCellButton(QFrame):
     def _on_context_menu(self, pos: QPoint) -> None:
         menu = QMenu(self)
         for label, action in (
-            ("删除角色", "delete"),
-            ("重命名角色", "rename"),
-            ("编辑性格简介", "personality"),
+            ("设置动作映射", "action_map"),
             ("管理动作", "actions"),
+            ("编辑性格简介", "personality"),
+            ("重命名角色", "rename"),
+            ("删除角色", "delete"),
         ):
             menu.addAction(label, lambda _=False, a=action: self.pet_context_action.emit(a, self._pet))
         menu.exec(self.mapToGlobal(pos))
@@ -1079,41 +1166,72 @@ def scan_flat_pets(project_root: str) -> list[dict]:
     return pets
 
 
-def synonyms_path(project_root: str) -> str:
-    return os.path.join(project_root, "assets", "synonyms.json")
+def action_mapping_path(project_root: str) -> str:
+    return os.path.join(project_root, "assets", "action_mapping.json")
 
 
-def remove_pet_from_synonyms(project_root: str, pet_name: str) -> None:
-    path = synonyms_path(project_root)
+def load_action_mapping_json(project_root: str) -> dict:
+    path = action_mapping_path(project_root)
     if not os.path.isfile(path):
-        return
+        return {}
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        pets = data.get("_pets", {})
-        if pet_name in pets:
-            del pets[pet_name]
-            data["_pets"] = pets
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def load_pet_action_mapping(project_root: str, pet_id: str) -> dict[str, list[str]]:
+    data = load_action_mapping_json(project_root)
+    pet_map = data.get(pet_id, {})
+    if not isinstance(pet_map, dict):
+        return {}
+    return {
+        str(k): [str(x) for x in v]
+        for k, v in pet_map.items()
+        if isinstance(v, list)
+    }
+
+
+def save_pet_action_mapping(
+    project_root: str, pet_id: str, mapping: dict[str, list[str]]
+) -> None:
+    path = action_mapping_path(project_root)
+    data = load_action_mapping_json(project_root)
+    data[pet_id] = {k: list(v) for k, v in mapping.items()}
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def remove_pet_from_action_mapping(project_root: str, pet_id: str) -> None:
+    path = action_mapping_path(project_root)
+    if not os.path.isfile(path):
+        return
+    try:
+        data = load_action_mapping_json(project_root)
+        if pet_id in data:
+            del data[pet_id]
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-    except (OSError, json.JSONDecodeError):
+    except OSError:
         pass
 
 
-def rename_pet_in_synonyms(project_root: str, old_name: str, new_name: str) -> None:
-    path = synonyms_path(project_root)
+def rename_pet_in_action_mapping(project_root: str, old_id: str, new_id: str) -> None:
+    if not old_id or old_id == new_id:
+        return
+    path = action_mapping_path(project_root)
     if not os.path.isfile(path):
         return
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        pets = data.get("_pets", {})
-        if old_name in pets:
-            pets[new_name] = pets.pop(old_name)
-            data["_pets"] = pets
+        data = load_action_mapping_json(project_root)
+        if old_id in data:
+            data[new_id] = data.pop(old_id)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-    except (OSError, json.JSONDecodeError):
+    except OSError:
         pass
 
 
@@ -1184,9 +1302,14 @@ class ManageActionsDialog(QDialog):
 
     def _remap_actions(self) -> None:
         files = [self._list.item(i).text() for i in range(self._list.count())]
-        dlg = ActionMappingDialog(self._pet.get("name", ""), files, self)
+        dlg = ActionMappingDialog(
+            self._pet.get("name", ""),
+            files,
+            self,
+            initial=load_pet_action_mapping(self._root, self._pet.get("id", "")),
+        )
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            save_pet_action_mapping(self._root, self._pet.get("name", ""), dlg.mapping())
+            save_pet_action_mapping(self._root, self._pet.get("id", ""), dlg.mapping())
 
 
 class PetCharacterOps:
@@ -1221,7 +1344,7 @@ class PetCharacterOps:
             if os.path.isdir(model_dir):
                 shutil.rmtree(model_dir, ignore_errors=True)
             console._live2d = [p for p in console._live2d if p.get("id") != pet_id]
-        remove_pet_from_synonyms(root, name)
+        remove_pet_from_action_mapping(root, pet_id)
         console._rescan_flat_pets()
         console._custom_ids = load_custom_pet_ids(root)
         console._reload_character_tabs()
@@ -1252,7 +1375,7 @@ class PetCharacterOps:
             if pet_id in ids:
                 ids = [new_id if i == pet_id else i for i in ids]
                 save_custom_pet_ids(root, ids)
-        rename_pet_in_synonyms(root, old_name, new_name)
+        rename_pet_in_action_mapping(root, pet_id, new_id)
         pet["id"] = new_id
         pet["name"] = new_name
         console._rescan_flat_pets()
@@ -1275,6 +1398,52 @@ class PetCharacterOps:
         dlg.exec()
         console._rescan_flat_pets()
         console._reload_character_tabs()
+
+    @staticmethod
+    def setup_action_mapping(console: "ControlConsole", pet: dict) -> None:
+        pet_id = pet.get("id", "")
+        files = PetCharacterOps._list_motion_files(console._project_root, pet)
+        dlg = ActionMappingDialog(
+            pet.get("name", pet_id),
+            files,
+            console,
+            initial=load_pet_action_mapping(console._project_root, pet_id),
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        save_pet_action_mapping(console._project_root, pet_id, dlg.mapping())
+        console._rescan_flat_pets()
+        console._reload_character_tabs()
+        desk = getattr(console, "_desk", None)
+        if desk is not None:
+            desk.reload_action_mapping()
+            desk.refresh_pet_motions_after_mapping_change()
+        console._show_toast("动作映射已保存")
+
+    @staticmethod
+    def _list_motion_files(project_root: str, pet: dict) -> list[str]:
+        pet_id = pet.get("id", "")
+        names: list[str] = []
+        anim_dir = os.path.join(project_root, "assets", "animations", pet_id)
+        if os.path.isdir(anim_dir):
+            for fname in sorted(os.listdir(anim_dir)):
+                if fname.lower().endswith((".gif", ".png")):
+                    names.append(fname)
+        flat_dir = os.path.join(project_root, "assets", "animations")
+        prefix = f"{pet_id}_"
+        if os.path.isdir(flat_dir):
+            for fname in sorted(os.listdir(flat_dir)):
+                if fname.startswith(prefix) and fname.lower().endswith((".gif", ".png")):
+                    names.append(fname)
+        model_path = pet.get("model_path") or ""
+        if model_path and os.path.isfile(model_path):
+            runtime = os.path.dirname(os.path.abspath(model_path))
+            motions_dir = os.path.join(runtime, "motions")
+            if os.path.isdir(motions_dir):
+                for fname in sorted(os.listdir(motions_dir)):
+                    if fname.lower().endswith(".motion3.json"):
+                        names.append(fname[: -len(".motion3.json")])
+        return list(dict.fromkeys(names))
 
 
 def resolve_live2d_thumb(model_path: str) -> str:
@@ -1340,27 +1509,6 @@ def validate_live2d_model(model_path: str) -> tuple[bool, str]:
     return True, "验证通过"
 
 
-def load_synonyms_json(project_root: str) -> dict:
-    path = os.path.join(project_root, "assets", "synonyms.json")
-    if not os.path.isfile(path):
-        return {}
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def save_pet_action_mapping(project_root: str, pet_name: str, mapping: dict[str, list[str]]) -> None:
-    path = os.path.join(project_root, "assets", "synonyms.json")
-    data = load_synonyms_json(project_root)
-    pets = data.setdefault("_pets", {})
-    pets[pet_name] = {k: list(v) for k, v in mapping.items()}
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
 class ActionMappingDialog(QDialog):
     """为 D 动作类型选择对应素材文件（支持多选）。"""
 
@@ -1369,29 +1517,45 @@ class ActionMappingDialog(QDialog):
         pet_name: str,
         motion_files: list[str],
         parent: QWidget | None = None,
+        *,
+        initial: dict[str, list[str]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"动作映射 - {pet_name}")
-        self.resize(520, 420)
+        self.resize(560, 480)
         self._mapping: dict[str, list[str]] = {}
-        lay = QVBoxLayout(self)
-        lay.addWidget(QLabel(f"<h3>为「{pet_name}」配置动作映射</h3>"))
-        lay.addWidget(QLabel("为每个状态选择对应的动作文件（可多选）："))
+        initial = initial or {}
+        outer = QVBoxLayout(self)
+        outer.addWidget(QLabel(f"<h3>为「{pet_name}」配置动作映射</h3>"))
+        outer.addWidget(QLabel("为 happy / sad / hungry / angry / idle 选择动作文件；未映射将播放待机。"))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        lay = QVBoxLayout(inner)
         self._lists: dict[str, QListWidget] = {}
         for code in D_ACTION_CODES:
             row = QVBoxLayout()
             row.addWidget(QLabel(f"<b>{D_ACTION_LABELS.get(code, code)}</b> ({code})"))
             lw = QListWidget()
+            lw.setMinimumHeight(72)
             lw.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
             for fname in motion_files:
                 lw.addItem(fname)
+            selected = set(initial.get(code, []))
+            for i in range(lw.count()):
+                item = lw.item(i)
+                if item and item.text() in selected:
+                    item.setSelected(True)
             self._lists[code] = lw
             row.addWidget(lw)
             lay.addLayout(row)
+        lay.addStretch()
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
-        lay.addWidget(btns)
+        outer.addWidget(btns)
 
     def mapping(self) -> dict[str, list[str]]:
         out: dict[str, list[str]] = {}
@@ -1467,7 +1631,7 @@ class Live2dUploadDialog(QDialog):
         map_dlg = ActionMappingDialog(name, stems, self)
         if map_dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        save_pet_action_mapping(self._root, name, map_dlg.mapping())
+        save_pet_action_mapping(self._root, pet_id, map_dlg.mapping())
         thumb = resolve_live2d_thumb(dest_model)
         self._result_pet = {
             "id": pet_id,
@@ -1550,10 +1714,11 @@ class FlatUploadDialog(QDialog):
         if not self._uploaded_files:
             QMessageBox.warning(self, "提示", "请至少上传一个动作")
             return
+        pet_id = re.sub(r"\s+", "_", name)
         map_dlg = ActionMappingDialog(name, self._uploaded_files, self)
         if map_dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        save_pet_action_mapping(self._root, name, map_dlg.mapping())
+        save_pet_action_mapping(self._root, pet_id, map_dlg.mapping())
         images_dir = os.path.join(self._root, "assets", "images")
         os.makedirs(images_dir, exist_ok=True)
         thumb = os.path.join(images_dir, f"{name}_image.png")
@@ -1741,7 +1906,6 @@ class ControlConsole(QMainWindow):
             ("characters", "👤", "角色选择"),
             ("ai_settings", "💬", "AI对话"),
             ("permissions", "🔒", "权限设置"),
-            ("synonyms", "📖", "同义词管理"),
             ("theme", "🎨", "主题"),
             ("exit", "🚪", "退出"),
         ):
@@ -1768,7 +1932,6 @@ class ControlConsole(QMainWindow):
         self._stack.addWidget(self._page_characters())
         self._stack.addWidget(self._page_ai())
         self._stack.addWidget(self._page_placeholder("权限设置"))
-        self._stack.addWidget(self._page_synonyms_placeholder())
         self._stack.addWidget(self._page_placeholder("主题"))
         self._stack.addWidget(self._page_pet_main())
         right.addWidget(self._stack, 1)
@@ -1788,9 +1951,8 @@ class ControlConsole(QMainWindow):
             "characters": 1,
             "ai_settings": 2,
             "permissions": 3,
-            "synonyms": 4,
-            "theme": 5,
-            "pet_main": 6,
+            "theme": 4,
+            "pet_main": 5,
         }.get(page, 0)
         self._stack.setCurrentIndex(idx)
         for pid, btn in self._menu_btns.items():
@@ -2088,6 +2250,8 @@ class ControlConsole(QMainWindow):
             PetCharacterOps.edit_personality(self, pet)
         elif action == "actions":
             PetCharacterOps.manage_actions(self, pet)
+        elif action == "action_map":
+            PetCharacterOps.setup_action_mapping(self, pet)
 
     def _reload_character_tabs(self) -> None:
         if not hasattr(self, "_tabs"):
