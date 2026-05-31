@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import threading
+import types
 import wave
 import zipfile
 from pathlib import Path
@@ -204,6 +205,38 @@ def test_tts_manager_long_read_skips_short_voice_pack_clips():
         )
 
         assert manager.speak("这一段应该走文本合成，而不是短音效。", action="read") is None
+
+
+def test_tts_edge_adds_playback_guard_before_synthesis(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeCommunicate:
+        def __init__(self, text, **_kwargs):
+            captured["text"] = text
+
+        async def save(self, output_path):
+            Path(output_path).write_bytes(b"fake-mp3")
+
+    monkeypatch.setitem(sys.modules, "edge_tts", types.SimpleNamespace(Communicate=FakeCommunicate))
+    manager = TTSManager(provider="edge", enabled=True, voice_pack_enabled=False)
+    manager.sounds_dir = tmp_path
+    manager._play_media = lambda _path: None
+
+    output = manager._speak_edge(
+        "Hello world.",
+        pet_id="cat",
+        state="neutral",
+        action="read",
+        settings={
+            "edge_voice": "en-US-JennyNeural",
+            "edge_rate": "+0%",
+            "edge_volume": "+0%",
+            "edge_pitch": "+0Hz",
+        },
+    )
+
+    assert captured["text"] == ", Hello world."
+    assert Path(output).exists()
 
 
 def test_tts_manager_reads_voice_profile_without_audio_files():
@@ -643,6 +676,39 @@ def test_team_c_can_update_tts_runtime_settings():
     assert tts.tts_settings[-1]["emotion_style"] == "serious"
 
 
+def test_team_c_system_voice_uses_current_voice_context():
+    tts = RecordingTTS()
+    assistant = AIChatVoiceAssistant(
+        llm_client=FakeLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+        pet_id="cat",
+    )
+    interface = EchoTeamCInterface(assistant)
+
+    interface.api_set_pet_id("mao_pro_zh")
+    thread = interface.api_play_system_voice(
+        "click feedback",
+        current_state={
+            "mood": "happy",
+            "voice_action": "click",
+            "tts_settings": {
+                "provider": "edge",
+                "edge_voice": "zh-HK-HiuGaaiNeural",
+                "emotion_style": "cheerful",
+            },
+        },
+    )
+    thread.join(timeout=3)
+
+    assert tts.tts_settings[-1]["edge_voice"] == "zh-HK-HiuGaaiNeural"
+    assert tts.calls[-1]["pet_id"] == "mao_pro_zh"
+    assert tts.calls[-1]["state"] == "happy"
+    assert tts.calls[-1]["action"] == "click"
+
+
 def test_team_c_adds_response_language_from_english_voice():
     class CapturingLLM:
         def __init__(self):
@@ -720,8 +786,68 @@ def test_team_c_translates_non_chinese_reply_even_when_voice_language_is_chinese
 
     display = assistant.chat_with_context("hello", current_state={"response_language": "zh-CN"})
 
-    assert display == "Hello there.\n你好呀。"
-    assert llm.source_languages == [""]
+    assert display == "你好呀。"
+    assert llm.source_languages == ["en-US"]
+
+
+def test_team_c_speaks_translated_reply_when_chinese_voice_gets_japanese_text():
+    class TranslatingLLM:
+        def generate(self, text_prompt, user_state=None, history=None):
+            return "こんにちは、そばにいるよ。"
+
+        def translate_to_chinese(self, text, source_language=""):
+            assert source_language == "ja-JP"
+            return "你好呀，我在你身边。"
+
+    tts = RecordingTTS()
+    chunks = []
+    assistant = AIChatVoiceAssistant(
+        llm_client=TranslatingLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+    )
+    assistant.set_tts_settings({"provider": "edge", "edge_voice": "zh-CN-XiaomoNeural"})
+
+    display = assistant.chat_with_context("你好", current_state={"state_code": "normal"}, callback_ui=chunks.append)
+
+    assert display == "你好呀，我在你身边。"
+    assert "".join(chunks) == display
+    assert tts.calls[-1]["text"] == "你好呀，我在你身边。"
+    assert assistant.get_memory_messages()[-1]["content"] == "你好呀，我在你身边。"
+
+
+def test_team_c_filters_mismatched_history_for_selected_voice_language():
+    class CapturingLLM:
+        def __init__(self):
+            self.history = None
+
+        def generate(self, text_prompt, user_state=None, history=None):
+            self.history = list(history or [])
+            return "你好呀。"
+
+    memory = ChatMemory(max_rounds=4)
+    memory.append_user("你好")
+    memory.append_assistant("こんにちは！今日も一緒にいようね。")
+    memory.append_user("我想睡觉")
+    memory.append_assistant("早点休息呀。")
+    llm = CapturingLLM()
+    assistant = AIChatVoiceAssistant(
+        llm_client=llm,
+        tts_manager=TTSManager(enabled=False),
+        memory=memory,
+        auto_tts=False,
+        stream_delay=0,
+    )
+    assistant.set_tts_settings({"provider": "edge", "edge_voice": "zh-CN-XiaomoNeural"})
+
+    assistant.chat_with_context("你好", current_state={"state_code": "normal"})
+
+    assert llm.history == [
+        {"role": "user", "content": "我想睡觉"},
+        {"role": "assistant", "content": "早点休息呀。"},
+    ]
 
 
 def test_deepseek_uses_official_chat_url_and_current_default_model():

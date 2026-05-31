@@ -83,9 +83,27 @@ class EchoTeamCInterface:
         thread.start()
         return thread
 
-    def api_play_system_voice(self, text: str, state: str = "neutral", action: str = "speak") -> threading.Thread:
+    def api_play_system_voice(
+        self,
+        text: str,
+        state: str | None = None,
+        action: str | None = None,
+        current_state: Dict[str, Any] | None = None,
+    ) -> threading.Thread:
+        voice_state = (state or "neutral").strip() or "neutral"
+        voice_action = (action or "speak").strip() or "speak"
+        if isinstance(current_state, dict):
+            settings = current_state.get("tts_settings")
+            if isinstance(settings, dict):
+                self.api_set_tts_settings(settings)
+            ctx_state, ctx_action = self.assistant._voice_context(current_state)
+            if state is None:
+                voice_state = ctx_state
+            if action is None:
+                voice_action = ctx_action
+
         def run() -> None:
-            self.assistant._play_voice(text, state=state, action=action)
+            self.assistant._play_voice(text, state=voice_state, action=voice_action)
 
         thread = threading.Thread(target=run, daemon=True)
         thread.start()

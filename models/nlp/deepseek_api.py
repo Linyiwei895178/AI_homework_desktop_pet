@@ -79,6 +79,14 @@ def _contains_cjk(text: str) -> bool:
     return any("\u4e00" <= char <= "\u9fff" for char in text or "")
 
 
+def _contains_japanese_kana(text: str) -> bool:
+    return any("\u3040" <= char <= "\u30ff" for char in text or "")
+
+
+def _looks_chinese_text(text: str) -> bool:
+    return _contains_cjk(text) and not _contains_japanese_kana(text)
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -153,10 +161,10 @@ class DeepSeekClient:
         value = (text or "").strip()
         if not value:
             return ""
-        if _contains_cjk(value):
-            return value
 
         language = normalize_response_language(source_language)
+        if language in {"zh-CN", "zh-HK", "zh-TW"} or (not language and _looks_chinese_text(value)):
+            return value
         if self.force_mock or not self.api_key:
             return self._mock_translate_to_chinese(value, source_language=language)
 
@@ -458,6 +466,8 @@ class DeepSeekClient:
             "Parliamone. Dimmi qual e la parte piu importante per te.": "我们聊聊这个吧。告诉我对你最重要的部分。",
             "Estou aqui. O que voce quer que eu acompanhe hoje?": "我在这里。今天你想让我陪你做什么？",
             "Vamos falar sobre isso. Me diga qual parte mais importa para voce.": "我们聊聊这个吧。告诉我你最在意的部分。",
+            "こんにちは、そばにいるよ。": "你好呀，我在你身边。",
+            "ここにいるよ。今日は何を一緒にしようか。": "我在这里。今天你想让我陪你做点什么？",
         }
         if normalized in translations:
             return translations[normalized]

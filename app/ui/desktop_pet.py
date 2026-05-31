@@ -4,6 +4,7 @@ Live2D 桌宠动画播放器（PySide6 + live2d-py）
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import random
 import re
@@ -252,7 +253,13 @@ class MockTeamC:
 
     threading.Thread(target=_run, daemon=True).start()
 
-  def api_play_system_voice(self, text: str, state: str = "neutral", action: str = "speak") -> None:
+  def api_play_system_voice(
+    self,
+    text: str,
+    state: str = "neutral",
+    action: str = "speak",
+    current_state: dict[str, Any] | None = None,
+  ) -> None:
     print(f"[MockTeamC] api_play_system_voice: {text} (state={state}, action={action})")
 
   def api_read_long_text(
@@ -818,6 +825,7 @@ class ChatStreamBridge(QObject):
 
   chunk_received = Signal(str)
   comment_finished = Signal()
+  chat_reply_finished = Signal(str, str)
 
 
 class StatusHistoryViewer(QWidget):
@@ -2104,6 +2112,7 @@ class DesktopPet:
     self._edge_hold_timer.setSingleShot(True)
     self._edge_hold_timer.timeout.connect(self._show_resize_overlay)
     self._chat_history = ChatHistoryStore(PROJECT_ROOT)
+    self._pending_chat_history: list[dict[str, str]] = []
 
     self._app: Optional[QApplication] = None
     self._window: Optional[PetWindow] = None
@@ -2162,6 +2171,15 @@ class DesktopPet:
     self.team_d = _create_team_d()
 
     def on_chat_event(event: dict[str, Any]) -> None:
+      event_type = str(event.get("event_type") or event.get("event") or "")
+      if event_type == "user_chat":
+        reply = str(event.get("ai_reply") or "").strip()
+        if reply:
+          character_name = self._take_pending_chat_character(str(event.get("user_input") or ""))
+          if self._chat_stream is not None:
+            self._chat_stream.chat_reply_finished.emit(character_name, reply)
+          else:
+            self._save_chat_message("ai", reply, character_name=character_name)
       wc = int(event.get("word_count", 0) or 0)
       if hasattr(self.team_d, "api_on_chat_finished"):
         self.team_d.api_on_chat_finished(wc)
@@ -2399,6 +2417,32 @@ class DesktopPet:
     except Exception as exc:
       print(f"[DesktopPet] 文本朗读失败: {exc}")
 
+  def _play_system_voice(self, text: str, *, state: str | None = None, action: str = "speak") -> None:
+    if not hasattr(self.team_c, "api_play_system_voice"):
+      return
+    self._sync_team_c_voice_context()
+    context = self._current_voice_state_context()
+    voice_state = (state or str(context.get("mood") or context.get("state_code") or "neutral")).strip()
+    if voice_state == "normal":
+      voice_state = "neutral"
+    voice_action = (action or "speak").strip() or "speak"
+    context["voice_action"] = voice_action
+    context["tts_action"] = voice_action
+    play_voice = self.team_c.api_play_system_voice
+    try:
+      accepts_context = "current_state" in inspect.signature(play_voice).parameters
+    except (TypeError, ValueError):
+      accepts_context = False
+    if accepts_context:
+      play_voice(
+        text,
+        state=voice_state or "neutral",
+        action=voice_action,
+        current_state=context,
+      )
+    else:
+      play_voice(text, state=voice_state or "neutral", action=voice_action)
+
   def stop_text_reading(self) -> None:
     if hasattr(self.team_c, "api_stop_long_text"):
       try:
@@ -2597,7 +2641,7 @@ class DesktopPet:
         result["hit_areas"] = ["HitAreaBody"]
         result["clicked"] = True
         try:
-          self.team_c.api_play_system_voice(SYSTEM_VOICE_ON_CLICK)
+          self._play_system_voice(SYSTEM_VOICE_ON_CLICK, action="click")
         except Exception as exc:
           print(f"[DesktopPet] api_play_system_voice 失败: {exc}")
       if self.on_click_callback:
@@ -2615,7 +2659,7 @@ class DesktopPet:
       result["clicked"] = True
     if result["clicked"]:
       try:
-        self.team_c.api_play_system_voice(SYSTEM_VOICE_ON_CLICK)
+        self._play_system_voice(SYSTEM_VOICE_ON_CLICK, action="click")
       except Exception as exc:
         print(f"[DesktopPet] api_play_system_voice 失败: {exc}")
     if self.on_click_callback:
@@ -2687,6 +2731,7 @@ class DesktopPet:
     self._chat_stream = ChatStreamBridge()
     self._chat_stream.chunk_received.connect(self._append_chat_chunk)
     self._chat_stream.comment_finished.connect(self._handle_companion_comment_finished)
+    self._chat_stream.chat_reply_finished.connect(self._save_ai_reply_from_event)
     _apply_desktop_overlays(self)
 
   def _append_chat_chunk(self, ch: str) -> None:
@@ -2801,8 +2846,32 @@ class DesktopPet:
       cursor_y += widget.height() + gap
     self._raise_ui_overlays()
 
-  def _save_chat_message(self, role: str, text: str) -> None:
-    name = self._active_character_name()
+  def _remember_pending_chat_reply(self, character_name: str, user_text: str) -> None:
+    self._pending_chat_history.append(
+      {"name": str(character_name or "").strip(), "user": str(user_text or "").strip()}
+    )
+    if len(self._pending_chat_history) > 50:
+      self._pending_chat_history = self._pending_chat_history[-50:]
+
+  def _take_pending_chat_character(self, user_text: str) -> str:
+    value = str(user_text or "").strip()
+    for idx, item in enumerate(self._pending_chat_history):
+      if not value or item.get("user") == value:
+        found = self._pending_chat_history.pop(idx)
+        return found.get("name") or self._active_character_name()
+    if self._pending_chat_history:
+      found = self._pending_chat_history.pop(0)
+      return found.get("name") or self._active_character_name()
+    return self._active_character_name()
+
+  def _save_ai_reply_from_event(self, character_name: str, reply: str) -> None:
+    self._save_chat_message("ai", reply, character_name=character_name)
+
+  def _save_chat_message(self, role: str, text: str, character_name: str | None = None) -> None:
+    name = character_name or self._active_character_name()
+    text = str(text or "").strip()
+    if not text:
+      return
     msgs = self._chat_history.load(name)
     msgs.append((role, text))
     self._chat_history.save(name, msgs)
@@ -3984,17 +4053,19 @@ class DesktopPet:
     msg = text if text is not None else self.input_box.get_text()
     if not msg or not str(msg).strip():
       return
+    user_text = str(msg).strip()
+    character_name = self._active_character_name()
     if not self._chat_open:
       self._set_chat_open(True)
-    self._save_chat_message("user", str(msg).strip())
+    self._save_chat_message("user", user_text, character_name=character_name)
+    self._remember_pending_chat_reply(character_name, user_text)
     self._layout_bubbles(chat_text="")
     self.input_box.set_text("")
     self.team_c.api_user_speak(
-      str(msg).strip(),
+      user_text,
       self._current_voice_state_context(),
       self._stream_ui_callback,
     )
-    QTimer.singleShot(2500, self._save_ai_reply_from_bubble)
 
   def _current_voice_state_context(self) -> dict[str, Any]:
     state: dict[str, Any] = {"state_code": "normal"}
@@ -4013,10 +4084,6 @@ class DesktopPet:
     if str(tts_settings.get("edge_voice") or "").strip():
       state["edge_voice"] = str(tts_settings.get("edge_voice") or "").strip()
     return state
-
-  def _save_ai_reply_from_bubble(self) -> None:
-    if self.chat_bubble and self.chat_bubble.text.strip():
-      self._save_chat_message("ai", self.chat_bubble.text.strip())
 
   def _start_idle_motion(self, *_args: Any) -> None:
     if self._model is None:

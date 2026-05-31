@@ -9,9 +9,9 @@
     "enabled": true,
     "provider": "edge",
     "quality": "neural",
-    "edge_voice": "zh-CN-XiaoxiaoNeural",
-    "voice_profile": "default",
-    "emotion_style": "auto",
+    "edge_voice": "fr-FR-DeniseNeural",
+    "voice_profile": "cute",
+    "emotion_style": "cheerful",
     "cute_style": true,
     "voice_pack_mode": "prefer",
     "edge_rate": "+0%",
@@ -21,8 +21,8 @@
     "tts_volume": "0.95"
   },
   "position": [
-    1179,
-    448
+    820,
+    342
   ],
   "window_size": [
     411,

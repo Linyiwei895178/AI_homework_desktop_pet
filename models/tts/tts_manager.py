@@ -341,7 +341,7 @@ class TTSManager:
 
         async def save_audio() -> None:
             communicate = edge_tts.Communicate(
-                text,
+                _edge_playback_guard_text(text),
                 voice=str(settings.get("edge_voice") or config.EDGE_TTS_VOICE),
                 rate=str(settings.get("edge_rate") or "+0%"),
                 volume=str(settings.get("edge_volume") or "+0%"),
@@ -515,6 +515,15 @@ def _safe_name(value: str) -> str:
 
 def _contains_cjk(value: str) -> bool:
     return any("\u4e00" <= char <= "\u9fff" for char in value or "")
+
+
+def _edge_playback_guard_text(text: str) -> str:
+    value = str(text or "")
+    if not value.strip():
+        return value
+    if value.lstrip().startswith((",", ".", ";", ":", "!", "?")):
+        return value
+    return f", {value}"
 
 
 def _int_setting(value: Any, env_key: str, default: int) -> int:

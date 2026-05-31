@@ -945,6 +945,9 @@ def _recognize_with_speech_recognition(timeout_sec: float, phrase_time_limit: fl
     try:
         import speech_recognition as sr  # type: ignore
     except ImportError as exc:
+        missing = getattr(exc, "name", "") or str(exc)
+        if missing and missing != "speech_recognition":
+            raise RuntimeError(f"SpeechRecognition 依赖缺失：{missing}。请重新安装语音输入依赖。") from exc
         raise RuntimeError("未安装 SpeechRecognition，无法启用语音输入。") from exc
 
     recognizer = sr.Recognizer()

@@ -19,6 +19,7 @@ from models.nlp.prompt_builder import (
     normalize_response_language,
     response_language_from_edge_voice,
 )
+from models.tts.language_match import detect_text_language, language_family, languages_match
 from models.tts.tts_manager import TTSManager
 
 
@@ -84,26 +85,26 @@ class AIChatVoiceAssistant:
         if not text:
             return ""
 
-        with self._lock:
-            history = self.memory.get_messages()
-
         voice_state, voice_action = self._voice_context(current_state)
         llm_state = self._state_with_response_language(current_state, voice_state, voice_action)
         response_language = self._response_language_from_state(llm_state)
+        with self._lock:
+            history = self._history_for_response_language(self.memory.get_messages(), response_language)
         reply = self.llm.generate(text, user_state=llm_state, history=history).strip()
         if not reply:
             reply = "我刚刚有点走神了，可以再说一次吗？"
         display_reply = self._display_reply(reply, response_language=response_language)
+        spoken_reply = self._spoken_reply(reply, display_reply, response_language=response_language)
 
         self._stream_to_ui(display_reply, callback_ui)
 
         with self._lock:
             self.memory.append_user(text)
-            self.memory.append_assistant(reply)
+            self.memory.append_assistant(spoken_reply)
             self._last_reply = display_reply
 
         if self.auto_tts:
-            self._play_voice(reply, state=voice_state, action=voice_action)
+            self._play_voice(spoken_reply, state=voice_state, action=voice_action)
 
         return display_reply
 
@@ -223,6 +224,9 @@ class AIChatVoiceAssistant:
         if not value or not _needs_chinese_translation(value, response_language):
             return reply
 
+        if _is_chinese_language(response_language):
+            return self._translate_reply_to_chinese(value, response_language=response_language) or reply
+
         lines = value.splitlines() or [value]
         display_lines: list[str] = []
         for line in lines:
@@ -236,10 +240,33 @@ class AIChatVoiceAssistant:
                 display_lines.append(translation.strip())
         return "\n".join(display_lines)
 
+    def _spoken_reply(self, reply: str, display_reply: str, response_language: str = "") -> str:
+        if _is_chinese_language(response_language) and _needs_chinese_translation(reply, response_language):
+            return (display_reply or reply).strip()
+        return reply
+
+    def _translate_reply_to_chinese(self, text: str, response_language: str = "") -> str:
+        lines = text.splitlines() or [text]
+        translated_lines: list[str] = []
+        for line in lines:
+            source_line = line.rstrip()
+            if not source_line.strip():
+                translated_lines.append(source_line)
+                continue
+            translation = self._translate_line_to_chinese(source_line, response_language=response_language)
+            translated_lines.append(translation.strip() if translation.strip() else source_line)
+        return "\n".join(translated_lines).strip()
+
     def _translate_line_to_chinese(self, text: str, response_language: str = "") -> str:
         translator = getattr(self.llm, "translate_to_chinese", None)
         language = normalize_response_language(response_language)
-        source_language = "" if language in {"zh-CN", "zh-HK", "zh-TW"} and not _contains_cjk(text) else language
+        detected_language = detect_text_language(text)
+        if detected_language and (not language or not languages_match(language, detected_language)):
+            source_language = detected_language
+        elif language in {"zh-CN", "zh-HK", "zh-TW"}:
+            source_language = ""
+        else:
+            source_language = language
         if callable(translator):
             try:
                 return str(translator(text, source_language=source_language) or "").strip()
@@ -254,6 +281,25 @@ class AIChatVoiceAssistant:
         }
         normalized = " ".join((text or "").strip().split())
         return fallback.get(normalized, f"这句话的中文意思：{normalized}")
+
+    @staticmethod
+    def _history_for_response_language(history: List[Dict[str, str]], response_language: str = "") -> List[Dict[str, str]]:
+        language = normalize_response_language(response_language)
+        if not language:
+            return [dict(item) for item in history]
+
+        filtered: list[dict[str, str]] = []
+        for item in history:
+            role = str(item.get("role") or "")
+            content = str(item.get("content") or "").strip()
+            if role not in {"user", "assistant"} or not content:
+                continue
+            if role == "assistant" and _language_mismatch(content, language):
+                if filtered and filtered[-1].get("role") == "user":
+                    filtered.pop()
+                continue
+            filtered.append({"role": role, "content": content})
+        return filtered
 
     def _stream_to_ui(self, reply: str, callback_ui: Optional[UICallback]) -> None:
         if callback_ui is None:
@@ -287,11 +333,26 @@ def _needs_chinese_translation(text: str, response_language: str = "") -> bool:
     value = (text or "").strip()
     if not value:
         return False
+    detected_language = detect_text_language(value)
     if language in {"zh-CN", "zh-HK", "zh-TW"}:
+        if detected_language:
+            return not languages_match(language, detected_language)
         return not _contains_cjk(value) and any(char.isalpha() for char in value)
     if language:
         return True
+    if detected_language:
+        return not languages_match("zh-CN", detected_language)
     return not _contains_cjk(value) and any(char.isalpha() for char in value)
+
+
+def _language_mismatch(text: str, expected_language: str = "") -> bool:
+    expected = normalize_response_language(expected_language)
+    detected = detect_text_language(text)
+    return bool(expected and detected and not languages_match(expected, detected))
+
+
+def _is_chinese_language(language: str = "") -> bool:
+    return language_family(normalize_response_language(language)) == "zh"
 
 
 def _contains_cjk(value: str) -> bool:
