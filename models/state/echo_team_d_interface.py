@@ -111,6 +111,8 @@ class EchoTeamDInterface:
                 "event_type": "user_state_alert",
                 "state_code": user_state.get("state_code", "unknown"),
                 "suggestion": user_state.get("suggestion", ""),
+                "action": self.api_decide_action(),
+                "pet_id": self.pet_state.pet_id,
                 "mood": self.pet_state.mood,
                 "energy": self.pet_state.energy,
                 "intimacy": self.pet_state.intimacy,
@@ -171,6 +173,8 @@ class EchoTeamDInterface:
             event_data = {
                 "event_type": "chat_finished",
                 "word_count": word_count,
+                "action": self.api_decide_action(),
+                "pet_id": self.pet_state.pet_id,
                 "mood": self.pet_state.mood,
                 "energy": self.pet_state.energy,
                 "intimacy": self.pet_state.intimacy,
@@ -216,6 +220,13 @@ class EchoTeamDInterface:
         """
         return self.rules.get_pet_id()
 
+    def api_set_pet_id(self, pet_id: str) -> None:
+        """
+        【队员A/队员C专用】同步当前桌宠 ID，供动作决策和音色选择使用。
+        """
+        if hasattr(self.pet_state, "set_pet_id"):
+            self.pet_state.set_pet_id(pet_id)
+
     # =========================================================================
     # 接口 10：提供给 【队员C (NLP/TTS)】 —— 注册状态变化监听
     # =========================================================================
@@ -228,7 +239,6 @@ class EchoTeamDInterface:
 
         :param callback: 签名为 callback(event_dict) 的回调函数
         """
-        self.rules.api_register_logic_callback(callback)
         self._status_change_listener = callback
         print("[EchoTeamDInterface] 队员C的状态监听器已成功绑定。")
 

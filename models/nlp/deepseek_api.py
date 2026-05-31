@@ -1,174 +1,219 @@
 """
-DeepSeek 文本API 封装
-
-生成桌宠对话回复，支持传入用户状态字典（来自 UserStateDetector / Qwen-VL），
-根据用户当前状态生成上下文感知的回复。
+DeepSeek chat API wrapper with an input-aware local fallback.
 """
 
+from __future__ import annotations
+
 import os
-from typing import Optional
+from typing import Any, Optional
+
+from models.nlp.prompt_builder import build_system_prompt
+from utils.config import config
 
 
-# TO_DO: DeepSeekClient 类 - 封装 DeepSeek API 调用
+def _contains_any(text: str, words: tuple[str, ...]) -> bool:
+    return any(word in text for word in words)
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _normalize_chat_url(api_url: str | None, base_url: str | None = None) -> str:
+    raw = (api_url or "").strip() or (base_url or "").strip() or "https://api.deepseek.com"
+    raw = raw.rstrip("/")
+    if raw.endswith("/chat/completions"):
+        return raw
+    if raw.endswith("/v1"):
+        return raw[:-3] + "/chat/completions"
+    if raw.endswith("/v1/chat/completions"):
+        return raw.replace("/v1/chat/completions", "/chat/completions")
+    return raw + "/chat/completions"
 
 
 class DeepSeekClient:
     """
-    DeepSeek API 客户端
+    Small DeepSeek-compatible chat client.
 
-    封装与 DeepSeek 文本生成模型的 HTTP 请求，
-    支持传入用户状态字典，生成上下文感知的桌宠对话。
-
-    TO_DO:
-    - 从 .env 读取 DEEPSEEK_API_KEY 和 API URL
-    - 构建 system prompt + user prompt
-    - 将用户状态信息嵌入 prompt
-    - 发送 HTTP 请求
-    - 解析返回结果
-    - 异常处理与重试机制
+    When no API key is configured, or `force_mock=True`, it uses a deterministic
+    local fallback that still reflects the user's actual message.
     """
 
-    def __init__(self, api_key: Optional[str] = None, api_url: Optional[str] = None):
-        """
-        :param api_key: DeepSeek API Key，默认从环境变量读取
-        :param api_url: API URL，默认使用 DeepSeek 官方地址
-        """
-        # TO_DO: 初始化 API 客户端
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY", "")
-        self.api_url = api_url or os.getenv(
-            "DEEPSEEK_API_URL",
-            "https://api.deepseek.com/v1/chat/completions",
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        api_url: Optional[str] = None,
+        model: Optional[str] = None,
+        force_mock: Optional[bool] = None,
+        fallback_to_mock: Optional[bool] = None,
+        timeout: float = 20.0,
+    ):
+        self.api_key = api_key if api_key is not None else config.DEEPSEEK_API_KEY
+        self.api_url = _normalize_chat_url(
+            api_url if api_url is not None else config.DEEPSEEK_API_URL,
+            config.DEEPSEEK_BASE_URL,
         )
+        self.model = model or config.DEEPSEEK_MODEL or os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+        self.force_mock = _as_bool(config.DEEPSEEK_FORCE_MOCK, False) if force_mock is None else bool(force_mock)
+        self.fallback_to_mock = (
+            _as_bool(config.DEEPSEEK_FALLBACK_TO_MOCK, True)
+            if fallback_to_mock is None
+            else bool(fallback_to_mock)
+        )
+        self.timeout = float(timeout)
 
-    # TO_DO: generate() - 根据文本提示词和用户状态生成回复
-    def generate(self, text_prompt: str, user_state: Optional[dict] = None) -> str:
-        """
-        生成桌宠对话回复
+    def generate(
+        self,
+        text_prompt: str,
+        user_state: Optional[dict] = None,
+        history: Optional[list[dict[str, str]]] = None,
+    ) -> str:
+        text = (text_prompt or "").strip()
+        if not text:
+            return ""
 
-        :param text_prompt: 用户输入的文本提示（或桌宠内心想法）
-        :param user_state: 用户状态字典（来自 UserStateDetector / Qwen-VL），
-                           可选参数，传入后可生成上下文感知的回复
-        :return: 桌宠回复文本
+        if self.force_mock or not self.api_key:
+            return self._mock_generate(text, user_state=user_state, history=history)
 
-        TO_DO:
-        - 构建 System Prompt（设定桌宠角色）
-        - 如果提供了 user_state，将状态信息嵌入 prompt
-        - 构造 messages 列表拼装上下文
-        - 调用 DeepSeek Chat API
-        - 解析 JSON 响应，提取 assistant 回复
-        - 异常时返回 fallback 回复
-        """
-        print(f"[DeepSeek] 收到提示词: {text_prompt}")
+        try:
+            return self._generate_remote(text, user_state=user_state, history=history)
+        except Exception as exc:
+            print(f"[DeepSeek] API 调用失败，使用本地回复: {exc}")
+            if self.fallback_to_mock:
+                return self._mock_generate(text, user_state=user_state, history=history)
+            raise
 
-        # TO_DO: 实际 API 调用
-        # if user_state:
-        #     state_context = self._build_state_context(user_state)
-        #     messages = [
-        #         {"role": "system", "content": self._build_system_prompt(state_context)},
-        #         {"role": "user", "content": text_prompt},
-        #     ]
-        # else:
-        #     messages = [
-        #         {"role": "system", "content": self._build_system_prompt()},
-        #         {"role": "user", "content": text_prompt},
-        #     ]
-        # response = requests.post(self.api_url, headers=headers, json={"messages": messages})
-        # return response.json()["choices"][0]["message"]["content"]
+    def _generate_remote(
+        self,
+        text_prompt: str,
+        user_state: Optional[dict] = None,
+        history: Optional[list[dict[str, str]]] = None,
+    ) -> str:
+        import requests
 
-        # demo阶段返回基于上下文的模拟回复
-        mock_reply = self._mock_generate(text_prompt, user_state)
-        print(f"[DeepSeek] 生成回复: {mock_reply}")
-        return mock_reply
+        messages: list[dict[str, str]] = [{"role": "system", "content": build_system_prompt(user_state)}]
+        for item in history or []:
+            role = item.get("role", "")
+            content = item.get("content", "")
+            if role in {"user", "assistant"} and content:
+                messages.append({"role": role, "content": content})
+        messages.append({"role": "user", "content": text_prompt})
 
-    # TO_DO: _build_system_prompt() - 构建系统提示词
-    def _build_system_prompt(self, state_context: str = "") -> str:
-        """
-        构建系统提示词，定义桌宠角色和当前状态上下文
+        response = requests.post(
+            self.api_url,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.8,
+                "stream": False,
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        data = response.json()
+        reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return str(reply).strip()
 
-        :param state_context: 用户状态描述文本
-        :return: 系统提示词字符串
-        """
-        base_prompt = "你是一个可爱的桌面宠物猫，性格活泼、友善、有点调皮。"
-        base_prompt += "请用简短、亲切的语气回复用户，适当使用颜文字和表情符号。"
-        base_prompt += "回复长度控制在 50 字以内。"
+    def _mock_generate(
+        self,
+        text_prompt: str,
+        user_state: Optional[dict] = None,
+        history: Optional[list[dict[str, str]]] = None,
+    ) -> str:
+        state_code = ""
+        if isinstance(user_state, dict):
+            state_code = str(user_state.get("state_code", "") or "").strip()
 
-        if state_context:
-            base_prompt += f"\n\n当前用户状态：{state_context}\n请根据用户状态做出合适的回应。"
+        text = text_prompt.strip()
+        low = text.lower()
 
-        return base_prompt
+        if _contains_any(text, ("电脑状态是 游戏中", "正在玩游戏", "陪朋友打游戏", "陪玩", "游戏中")):
+            base = self._mock_game_companion_reply(text, user_state=user_state)
+        elif _contains_any(text, ("电脑状态是 看剧", "正在看剧", "正在看视频", "一起追剧", "看剧/视频中")):
+            base = self._mock_watching_companion_reply(text, user_state=user_state)
+        elif _contains_any(text, ("你好", "嗨", "在吗", "早上好", "晚上好")):
+            base = f"在呢在呢，我听到你说“{text}”啦。今天想让我陪你做点什么？"
+        elif _contains_any(text, ("喜欢你", "喜欢我", "爱你", "爱我", "想你", "抱抱", "亲亲")):
+            base = self._mock_affection_reply(text)
+        elif _contains_any(text, ("困", "睡觉", "睡了", "晚安", "休息")):
+            base = f"困了就别硬撑啦。你刚说“{text}”，我会把声音放轻一点，陪你安心休息。"
+        elif _contains_any(text, ("电影", "动漫", "游戏", "音乐", "故事")):
+            base = f"当然可以聊“{text}”呀。你想先聊剧情、角色，还是你的感受呢？"
+        elif _contains_any(text, ("难过", "累", "烦", "压力", "焦虑", "不开心", "委屈", "害怕")):
+            base = f"我听见啦，“{text}”听起来有点压着心口。先陪你慢慢缓一口气，好吗？"
+        elif _contains_any(text, ("学习", "作业", "工作", "代码", "项目")):
+            base = f"收到，“{text}”。我们可以把它拆成一小步一小步来，我在旁边陪着你。"
+        elif "?" in low or "？" in text or _contains_any(text, ("怎么", "为什么", "什么", "可以", "能不能")):
+            base = f"关于“{text}”，我先给你一个短短的想法：可以从最容易确认的一点开始。"
+        else:
+            base = self._mock_contextual_reply(text, history=history)
 
-    # TO_DO: _build_state_context() - 将用户状态字典转为 prompt 文本
-    def _build_state_context(self, user_state: dict) -> str:
-        """
-        将用户状态字典转换为自然语言描述，供 LLM 理解上下文
+        state_prefix = {
+            "focused": "我小声说：",
+            "distracted": "轻轻提醒一下，",
+            "tired": "先抱抱你，",
+            "away": "我先乖乖等你回来，",
+            "return": "欢迎回来呀，",
+            "study_long": "学了这么久辛苦啦，",
+            "low_light": "灯光有点暗的话，",
+            "camera_error": "我这边看不清状态，",
+        }.get(state_code, "")
 
-        :param user_state: 统一格式的用户状态字典
-        :return: 状态描述文本
-        """
-        state_code = user_state.get("state_code", "unknown")
-        description = user_state.get("description", "")
-        suggestion = user_state.get("suggestion", "")
-        tags = user_state.get("tags", [])
+        reply = state_prefix + base
+        return reply[:120]
 
-        parts = [f"用户当前状态：{state_code}"]
-        if description:
-            parts.append(f"具体描述：{description}")
-        if suggestion:
-            parts.append(f"建议回应方向：{suggestion}")
-        if tags:
-            parts.append(f"相关标签：{'、'.join(tags)}")
+    def _mock_game_companion_reply(self, text: str, user_state: Optional[dict] = None) -> str:
+        title = self._mock_activity_title(user_state)
+        if title:
+            return f"《{title}》这局有点上头呀，先稳住，我在旁边看你打漂亮一点。"
+        return "这局节奏有点上头呀，先稳住，我在旁边看你打漂亮一点。"
 
-        return " | ".join(parts)
+    def _mock_watching_companion_reply(self, text: str, user_state: Optional[dict] = None) -> str:
+        title = self._mock_activity_title(user_state)
+        if title:
+            return f"《{title}》这个氛围挺会钓人的，先别急，我们看看后面怎么转。"
+        return "这个氛围挺会钓人的，先别急，我们看看后面怎么转。"
 
-    # TO_DO: _mock_generate() - 模拟生成回复（demo 阶段使用）
-    def _mock_generate(self, text_prompt: str, user_state: Optional[dict] = None) -> str:
-        """
-        模拟生成回复（demo 阶段使用）
+    @staticmethod
+    def _mock_activity_title(user_state: Optional[dict]) -> str:
+        if not isinstance(user_state, dict):
+            return ""
+        title = str(user_state.get("window_title", "") or "").strip()
+        if not title:
+            return ""
+        title = title.replace(" - Google Chrome", "").replace(" - Microsoft Edge", "")
+        return title[:28]
 
-        :param text_prompt: 文本提示
-        :param user_state: 用户状态（可选）
-        :return: 模拟回复文本
-        """
-        # 根据用户状态返回不同的模拟回复
-        if user_state:
-            state_code = user_state.get("state_code", "")
-            mock_responses = {
-                "normal": "主人今天看起来心情不错呢！(^-^)",
-                "focused": "主人好专注呀，我不打扰你～（轻轻趴下）",
-                "distracted": "喵？主人是不是在偷懒呀？快回来学习啦！(>_<)",
-                "tired": "主人看起来很累了，要不要休息一下？我给你倒杯水！",
-                "away": "主人不在家，我看会儿门... Zzz...",
-                "return": "欢迎回来！主人～我好想你！ヽ(●´∀`●)ﾉ",
-                "study_long": "主人已经学了这么久啦！起来活动一下吧！(｀・ω・´)",
-                "low_light": "喵...好暗啊，主人开个灯吧，对眼睛不好哦！",
-                "camera_error": "咦？摄像头好像看不到了，主人检查一下？",
-            }
-            return mock_responses.get(state_code, "喵～主人有什么需要帮忙的吗？(・ω・)")
+    def _mock_affection_reply(self, text: str) -> str:
+        if _contains_any(text, ("喜欢我", "爱我")) and _contains_any(text, ("吗", "嘛", "？", "?")):
+            return "当然喜欢呀。不是敷衍地应一声，是想认真陪着你、听你说话的喜欢。"
+        if _contains_any(text, ("喜欢你", "爱你")):
+            return "哎呀，被你这么直球地说喜欢，我会很开心的。那我也认真回你：我喜欢和你待在一起。"
+        if "想你" in text:
+            return "我在呀。你一说想我，我就想靠近一点，陪你多待一会儿。"
+        if _contains_any(text, ("抱抱", "亲亲")):
+            return "抱抱你，靠近一点点。你现在想让我安静陪着，还是听你慢慢说？"
+        return f"你这样说我很开心。“{text}”我会认真接住，也会认真回应你。"
 
-        return "Hello! I'm your pet. 喵～(ฅ´ω`ฅ)"
+    def _mock_contextual_reply(self, text: str, history: Optional[list[dict[str, str]]] = None) -> str:
+        if "我" in text:
+            return f"听起来这句话和你自己有关：“{text}”。我会先站在你这边，陪你把它慢慢说清楚。"
+        if "你" in text:
+            return f"你是在对我说“{text}”呀，我听到了，也会认真回应你，不只是放进记忆里。"
+        if history:
+            return f"我们接着刚才的话聊“{text}”吧。你最在意的那个点，我会顺着它陪你说下去。"
+        return f"我们就聊“{text}”吧。你先说最在意的一点，我会顺着那个点陪你聊下去。"
 
-
-# ========== 保留向后兼容的独立函数接口 ==========
+    def clear_memory(self) -> None:
+        return None
 
 
 def generate_pet_reply(text_prompt: str, user_state: Optional[dict] = None) -> str:
-    """
-    [统一接口] 生成桌宠对话回复
-
-    根据用户状态字典生成上下文感知的回复。
-    如果未提供 user_state，则生成默认回复。
-
-    :param text_prompt: 用户输入的文本提示
-    :param user_state: 用户状态字典（可选），来自 UserStateDetector / Qwen-VL
-    :return: 桌宠回复文本
-
-    用法示例:
-        >>> generate_pet_reply("你好")
-        "Hello! I'm your pet. 喵～(ฅ´ω`ฅ)"
-
-        >>> user_state = detector.get_state()
-        >>> generate_pet_reply("你在干嘛？", user_state=user_state)
-        "喵？主人是不是在偷懒呀？快回来学习啦！(>_<)"
-    """
     client = DeepSeekClient()
     return client.generate(text_prompt, user_state=user_state)

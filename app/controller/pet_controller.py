@@ -48,16 +48,25 @@ class PetController:
         else:
             self._action_idle(pet)
 
+    def _apply_pet_visual(self, pet, action: str):
+        pet.current_state = action
+        if hasattr(pet, "set_expression"):
+            pet.set_expression(action)
+        if hasattr(pet, "play_motion"):
+            pet.play_motion("Idle" if action == "idle" else action)
+        elif hasattr(pet, "set_image") and hasattr(pet, "image_path"):
+            pet.set_image(pet.image_path)
+
     def _action_happy(self, pet):
         """
         开心动作：切换表情，生成对话，语音播报
         """
         # TO_DO: 开心动作逻辑
         print("[PetController] 桌宠很开心！😊")
-        pet.current_state = "happy"
+        self._apply_pet_visual(pet, "happy")
         reply = generate_pet_reply("I'm so happy!")
         print(f"[PetController] 对话回复: {reply}")
-        speak(reply)
+        speak(reply, state="happy", action="speak")
 
     def _action_sad(self, pet):
         """
@@ -65,10 +74,10 @@ class PetController:
         """
         # TO_DO: 难过动作逻辑
         print("[PetController] 桌宠有点难过...😢")
-        pet.current_state = "sad"
+        self._apply_pet_visual(pet, "sad")
         reply = generate_pet_reply("I'm feeling sad...")
         print(f"[PetController] 对话回复: {reply}")
-        speak(reply)
+        speak(reply, state="sad", action="speak")
 
     def _action_hungry(self, pet):
         """
@@ -76,9 +85,10 @@ class PetController:
         """
         # TO_DO: 饥饿动作逻辑
         print("[PetController] 桌宠饿了...🍽️")
-        pet.current_state = "hungry"
+        self._apply_pet_visual(pet, "hungry")
         reply = generate_pet_reply("I'm hungry!")
         print(f"[PetController] 对话回复: {reply}")
+        speak(reply, state="hungry", action="speak")
 
     def _action_idle(self, pet):
         """
@@ -86,5 +96,4 @@ class PetController:
         """
         # TO_DO: 空闲动作逻辑
         print("[PetController] 桌宠空闲中...")
-        pet.current_state = "smile"
-        pet.set_image(pet.image_path)
+        self._apply_pet_visual(pet, "idle")

@@ -12,7 +12,8 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
 
 import live2d.v3 as live2d
 from live2d.v3 import MotionPriority
@@ -49,6 +50,7 @@ from app.ui.widgets import (
     ChatBubble,
     ChatHistoryStore,
     ControlConsole,
+    DEFAULT_TTS_UI_SETTINGS,
     InfoBubble,
     InputBox,
     MAO_PRO_ZH_DISPLAY,
@@ -61,8 +63,15 @@ from app.ui.widgets import (
     is_mao_pro_zh_model,
     load_custom_pet_ids,
     motion_label_from_filename,
+    normalize_tts_settings,
     scan_flat_pets,
 )
+from models.vision.computer_activity_detector import (
+    ComputerActivityDetector,
+    build_companion_event,
+    build_local_companion_comment,
+)
+from utils.config import config
 
 try:
     import win32api
@@ -73,9 +82,14 @@ except ImportError:
     win32gui = None  # type: ignore
     win32con = None  # type: ignore
 
-MODEL_PATH = (
-    r"C:\Users\lenovo\AI_homework_desktop_pet\assets\models\mao_pro_zh"
-    r"\mao_pro_zh\runtime\mao_pro.model3.json"
+MODEL_PATH = os.path.join(
+    PROJECT_ROOT,
+    "assets",
+    "models",
+    "mao_pro_zh",
+    "mao_pro_zh",
+    "runtime",
+    "mao_pro.model3.json",
 )
 
 EMOTION_TO_EXPRESSION: dict[str, str] = {
@@ -120,12 +134,11 @@ ANGLE_Y_MIN, ANGLE_Y_MAX = -20.0, 20.0
 WIN32_TRANSPARENT_COLORKEY = 0x0000FF00
 
 _SETTINGS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    PROJECT_ROOT,
     "data",
 )
 SETTINGS_PATH = os.path.join(_SETTINGS_DIR, "pet_ui_settings.json")
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ACTION_MAPPING_PATH = os.path.join(PROJECT_ROOT, "assets", "action_mapping.json")
 PET_MEMORY_PATH = os.path.join(PROJECT_ROOT, "assets", "pet_memory.json")
 SYNONYMS_PATH = os.path.join(PROJECT_ROOT, "assets", "synonyms.json")
@@ -176,6 +189,25 @@ MOOD_STAT_VALUES: dict[str, int] = {
 SYSTEM_VOICE_ON_CLICK = "喵～你好呀，我是你的桌面小伙伴！"
 
 
+def _config_bool(key: str, default: bool = False) -> bool:
+  value = config.get(key, str(default).lower())
+  return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _config_float(key: str, default: float) -> float:
+  try:
+    return float(config.get(key, default))
+  except (TypeError, ValueError):
+    return float(default)
+
+
+def _config_int(key: str, default: int) -> int:
+  try:
+    return int(float(config.get(key, default)))
+  except (TypeError, ValueError):
+    return int(default)
+
+
 # ---------------------------------------------------------------------------
 # 队员 C / D 接口（Mock + 真实实现自动切换）
 # ---------------------------------------------------------------------------
@@ -186,6 +218,9 @@ class MockTeamC:
 
   def __init__(self) -> None:
     self._logic_callback: Callable[[dict[str, Any]], None] | None = None
+    self.pet_id = ""
+    self.voice_pack_id = ""
+    self.tts_settings: dict[str, Any] = {}
 
   def api_user_speak(
     self,
@@ -223,6 +258,20 @@ class MockTeamC:
   def api_register_logic_callback(self, callback: Callable[[dict[str, Any]], None]) -> None:
     self._logic_callback = callback
     print("[MockTeamC] 队员D逻辑回调已绑定（Mock）")
+
+  def api_set_pet_id(self, pet_id: str) -> None:
+    self.pet_id = (pet_id or "").strip()
+    if not self.voice_pack_id:
+      self.voice_pack_id = self.pet_id
+    print(f"[MockTeamC] pet_id={self.pet_id}, voice_pack_id={self.voice_pack_id}")
+
+  def api_set_voice_pack_id(self, pack_id: str) -> None:
+    self.voice_pack_id = (pack_id or "").strip() or self.pet_id
+    print(f"[MockTeamC] voice_pack_id={self.voice_pack_id}")
+
+  def api_set_tts_settings(self, settings: dict[str, Any] | None) -> None:
+    self.tts_settings = dict(settings or {})
+    print(f"[MockTeamC] tts_settings={self.tts_settings}")
 
 
 class MockTeamD:
@@ -751,6 +800,7 @@ class ChatStreamBridge(QObject):
   """将队员 C 后台线程的流式文字块安全投递到主线程 UI。"""
 
   chunk_received = Signal(str)
+  comment_finished = Signal()
 
 
 class StatusHistoryViewer(QWidget):
@@ -803,6 +853,10 @@ class PetControlConsole(ControlConsole):
       motion_name_map=motion_name_map,
       on_play_motion=desktop_pet.play_motion,
       on_pet_changed=desktop_pet.switch_to_pet,
+      on_voice_pack_changed=desktop_pet.switch_voice_pack,
+      current_voice_pack_id=desktop_pet.current_voice_pack_id(),
+      on_tts_settings_changed=desktop_pet.update_tts_settings,
+      current_tts_settings=desktop_pet.current_tts_settings(),
     )
     self._flat = desktop_pet.list_flat_pets_enriched()
     self._history_viewer: StatusHistoryViewer | None = None
@@ -1362,9 +1416,9 @@ _THEME_PINK_BG_START = "#FCE4EC"
 _THEME_PINK_BG_END = "#FFF5F8"
 _THEME_TEXT = "#333333"
 _THEME_TEXT_MUTED = "#757575"
-_THEME_BORDER = "rgba(255, 141, 161, 0.18)"
-_THEME_CARD = "rgba(255, 255, 255, 0.88)"
-_THEME_GLASS = "rgba(255, 255, 255, 0.78)"
+_THEME_BORDER = "rgba(255, 141, 161, 46)"
+_THEME_CARD = "rgba(255, 255, 255, 224)"
+_THEME_GLASS = "rgba(255, 255, 255, 199)"
 _FONT_STACK = '"Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif'
 
 _PRIMARY_BTN_TEXTS = frozenset({
@@ -1409,10 +1463,20 @@ def _glass_qss(radius: int = 20) -> str:
   """
 
 
+def _bubble_qss(radius: int = 20) -> str:
+  return f"""
+    QFrame#glass {{
+      background-color: {_THEME_GLASS};
+      border: none;
+      border-radius: {radius}px;
+    }}
+  """
+
+
 def _btn_glass_qss(radius: int = 24) -> str:
   return f"""
     QPushButton {{
-      background-color: rgba(255, 255, 255, 0.92);
+      background-color: rgba(255, 255, 255, 235);
       border: 1px solid {_THEME_BORDER};
       border-radius: {radius}px;
       padding: 10px 18px;
@@ -1422,7 +1486,7 @@ def _btn_glass_qss(radius: int = 24) -> str:
     }}
     QPushButton:hover {{
       background-color: {_THEME_PINK_LIGHT};
-      border-color: rgba(255, 141, 161, 0.35);
+      border-color: rgba(255, 141, 161, 89);
     }}
     QPushButton:pressed {{
       background-color: #FFD0DC;
@@ -1430,7 +1494,7 @@ def _btn_glass_qss(radius: int = 24) -> str:
     QPushButton:checked {{
       background-color: {_THEME_PINK_LIGHT};
       color: {_THEME_PINK};
-      border-color: rgba(255, 141, 161, 0.45);
+      border-color: rgba(255, 141, 161, 115);
       font-weight: 600;
     }}
   """
@@ -1463,7 +1527,7 @@ QLabel {{
   font-size: 14px;
 }}
 QLineEdit, QTextEdit {{
-  background-color: rgba(255, 255, 255, 0.92);
+  background-color: rgba(255, 255, 255, 235);
   border: 1px solid {_THEME_BORDER};
   border-radius: 20px;
   padding: 10px 16px;
@@ -1472,14 +1536,14 @@ QLineEdit, QTextEdit {{
   selection-background-color: {_THEME_PINK_LIGHT};
 }}
 QLineEdit:focus, QTextEdit:focus {{
-  border: 1px solid rgba(255, 141, 161, 0.55);
+  border: 1px solid rgba(255, 141, 161, 140);
 }}
 QTabWidget::pane {{
   border: none;
   background: transparent;
 }}
 QTabBar::tab {{
-  background: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 153);
   border: 1px solid {_THEME_BORDER};
   border-radius: 16px;
   padding: 8px 18px;
@@ -1508,12 +1572,12 @@ QScrollBar:vertical {{
   margin: 4px 2px;
 }}
 QScrollBar::handle:vertical {{
-  background: rgba(255, 141, 161, 0.35);
+  background: rgba(255, 141, 161, 89);
   border-radius: 4px;
   min-height: 24px;
 }}
 QScrollBar::handle:vertical:hover {{
-  background: rgba(255, 141, 161, 0.55);
+  background: rgba(255, 141, 161, 140);
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
   height: 0;
@@ -1523,7 +1587,7 @@ QScrollBar:horizontal {{
   height: 8px;
 }}
 QScrollBar::handle:horizontal {{
-  background: rgba(255, 141, 161, 0.35);
+  background: rgba(255, 141, 161, 89);
   border-radius: 4px;
 }}
 QScrollArea {{
@@ -1615,11 +1679,17 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
   for w in glass_widgets:
     if w is None:
       continue
+    is_floating_bubble = w is pet.info_bubble or w is pet.chat_bubble
     w.setObjectName("glass")
-    w.setAutoFillBackground(True)
-    w.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-    w.setStyleSheet(_glass_qss(radii.get(w, 20)).replace("248", "252"))
-    _soft_shadow(w, blur=16, offset_y=3, alpha=45)
+    w.setAutoFillBackground(not is_floating_bubble)
+    w.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, is_floating_bubble)
+    w.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, is_floating_bubble)
+    style = _bubble_qss(radii.get(w, 20)) if is_floating_bubble else _glass_qss(radii.get(w, 20))
+    w.setStyleSheet(style)
+    if is_floating_bubble:
+      w.setGraphicsEffect(None)
+    else:
+      _soft_shadow(w, blur=16, offset_y=3, alpha=45)
   if pet.context_menu:
     _patch_menu_paint(pet.context_menu)
   for sm in (pet.pin_submenu, pet.hover_submenu, pet.status_submenu, pet.chat_submenu):
@@ -1895,15 +1965,13 @@ class PetWindow(QWidget):
     self._plane_player = PlanePetPlayer(self)
     self._plane_player.hide()
 
-    pet.info_bubble.setParent(self)
-    pet.chat_bubble.setParent(self)
-    pet.input_box.setParent(self)
     pet.arc_menu.setParent(self)
     pet.context_menu.setParent(self)
     pet.pin_submenu.setParent(self)
     pet.hover_submenu.setParent(self)
     pet.status_submenu.setParent(self)
     pet.chat_submenu.setParent(self)
+    pet._sync_floating_overlay_flags()
 
     self._resize_overlay = _ResizeOverlay(pet, self)
     self._resize_overlay.hide()
@@ -2033,9 +2101,26 @@ class DesktopPet:
     self.input_box: Optional[InputBox] = None
     self._chat_open = False
     self._last_pet_id: str = ""
+    self._voice_pack_id: str = ""
+    self._tts_settings: dict[str, Any] = normalize_tts_settings(DEFAULT_TTS_UI_SETTINGS)
     self._active_pet: dict | None = None
     self._console: PetControlConsole | None = None
     self._chat_stream: ChatStreamBridge | None = None
+    self._companion_bubble_active = False
+    self._companion_bubble_token = 0
+
+    self._computer_companion_enabled = _config_bool("COMPUTER_ACTIVITY_ENABLED", True)
+    self._computer_activity_detector: ComputerActivityDetector | None = None
+    if self._computer_companion_enabled:
+      self._computer_activity_detector = ComputerActivityDetector(
+        min_comment_duration=_config_float("COMPUTER_ACTIVITY_MIN_DURATION", 45.0)
+      )
+    self._computer_comment_timer: Optional[QTimer] = None
+    self._computer_comment_busy = False
+    self._last_computer_comment_at = 0.0
+    self._last_computer_comment_signature = ""
+    self._computer_poll_ms = max(2000, _config_int("COMPUTER_ACTIVITY_POLL_MS", 5000))
+    self._computer_comment_cooldown = max(30.0, _config_float("COMPUTER_ACTIVITY_COMMENT_COOLDOWN", 150.0))
 
     self._bind_team_interfaces()
     self._load_settings()
@@ -2222,6 +2307,7 @@ class DesktopPet:
       pet = enrich_flat_pet(_normalize_flat_pet(pet), self.action_mapping, self.synonym_resolver)
     self._active_pet = pet
     self._last_pet_id = pet.get("id", "")
+    self._sync_team_c_voice_context()
     self._save_pet_memory()
     name = pet.get("name") or pet.get("id", "")
     if pet.get("is_flat"):
@@ -2242,6 +2328,45 @@ class DesktopPet:
     self._show_switch_notice(name)
     print(f"[DesktopPet] 已切换到: {name}")
     QTimer.singleShot(0, self._after_pet_switch)
+
+  def current_voice_pack_id(self) -> str:
+    return self._voice_pack_id
+
+  def current_tts_settings(self) -> dict[str, Any]:
+    return dict(self._tts_settings)
+
+  def switch_voice_pack(self, pack: dict) -> None:
+    pack_id = str(pack.get("id", "") if isinstance(pack, dict) else "").strip()
+    self._voice_pack_id = pack_id
+    self._sync_team_c_voice_context()
+    self._save_settings()
+    name = str(pack.get("name") or pack.get("display_name") or "默认") if isinstance(pack, dict) else "默认"
+    print(f"[DesktopPet] 已切换语音包: {name} ({pack_id or 'auto'})")
+
+  def update_tts_settings(self, settings: dict[str, Any]) -> None:
+    self._tts_settings = normalize_tts_settings(settings)
+    self._sync_team_c_voice_context()
+    self._save_settings()
+    print(f"[DesktopPet] TTS settings updated: {self._tts_settings}")
+
+  def _sync_team_c_voice_context(self) -> None:
+    pet_id = self._last_pet_id or str((self._active_pet or {}).get("id", ""))
+    if pet_id and hasattr(self.team_c, "api_set_pet_id"):
+      try:
+        self.team_c.api_set_pet_id(pet_id)
+      except Exception as exc:
+        print(f"[DesktopPet] 同步桌宠ID到队员C失败: {exc}")
+    if hasattr(self.team_c, "api_set_voice_pack_id"):
+      try:
+        self.team_c.api_set_voice_pack_id(self._voice_pack_id)
+      except Exception as exc:
+        print(f"[DesktopPet] 同步语音包到队员C失败: {exc}")
+
+    if hasattr(self.team_c, "api_set_tts_settings"):
+      try:
+        self.team_c.api_set_tts_settings(self._tts_settings)
+      except Exception as exc:
+        print(f"[DesktopPet] Sync TTS settings to Team C failed: {exc}")
 
   def _after_pet_switch(self) -> None:
     self.play_action_from_decision()
@@ -2273,6 +2398,48 @@ class DesktopPet:
     ):
       if self._widget_alive(widget):
         widget.raise_()
+
+  def _sync_floating_overlay_flags(self) -> None:
+    flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+    if self._pin_top:
+      flags |= Qt.WindowType.WindowStaysOnTopHint
+    passive_flags = flags | Qt.WindowType.WindowDoesNotAcceptFocus
+    for widget in (self.info_bubble, self.chat_bubble):
+      if widget is None:
+        continue
+      was_visible = widget.isVisible()
+      widget.setParent(None)
+      widget.setWindowFlags(passive_flags)
+      widget.setAutoFillBackground(False)
+      widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+      widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+      widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+      if was_visible:
+        QWidget.show(widget)
+    if self.input_box is not None:
+      was_visible = self.input_box.isVisible()
+      self.input_box.setParent(None)
+      self.input_box.setWindowFlags(flags)
+      if was_visible:
+        QWidget.show(self.input_box)
+
+  def _floating_overlay_pos(self, width: int, height: int, preferred_y: int) -> tuple[int, int]:
+    if self._window is None:
+      return 0, 0
+    gap = 12
+    screen_margin = 8
+    base = self._window.frameGeometry()
+    screen = QApplication.screenAt(base.center()) or QApplication.primaryScreen()
+    area = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+    left_room = base.left() - area.left()
+    right_room = area.right() - base.right()
+    if right_room >= width + gap or right_room >= left_room:
+      x = min(base.right() + gap, area.right() - width - screen_margin)
+    else:
+      x = max(area.left() + screen_margin, base.left() - width - gap)
+    y = base.top() + preferred_y
+    y = max(area.top() + screen_margin, min(y, area.bottom() - height - screen_margin))
+    return x, y
 
   def _current_arc_motion_items(self) -> list[dict[str, str]]:
     if self._is_flat_mode() and self._active_pet:
@@ -2429,6 +2596,7 @@ class DesktopPet:
     self._timer.timeout.connect(self._tick)
     self._timer.start(16)
 
+    self._start_computer_companion()
     QTimer.singleShot(0, self._restore_last_pet)
 
     self._app.exec()
@@ -2460,12 +2628,23 @@ class DesktopPet:
     self.arc_menu.installEventFilter(self._arc_hide_filter)
     self._chat_stream = ChatStreamBridge()
     self._chat_stream.chunk_received.connect(self._append_chat_chunk)
+    self._chat_stream.comment_finished.connect(self._handle_companion_comment_finished)
     _apply_desktop_overlays(self)
 
   def _append_chat_chunk(self, ch: str) -> None:
-    if self.chat_bubble is None or not self._chat_open:
+    if self.chat_bubble is None or not (self._chat_open or self._companion_bubble_active):
       return
-    self._layout_bubbles(chat_text=self.chat_bubble.text + ch)
+    next_text = self.chat_bubble.text + ch
+    if not self.chat_bubble.visible or not self.chat_bubble.isVisible():
+      self._layout_bubbles(chat_text=next_text)
+      return
+    old_height = self.chat_bubble.height()
+    self.chat_bubble.set_text(next_text)
+    self.chat_bubble.adjustSize()
+    if abs(self.chat_bubble.height() - old_height) > 8:
+      self._reflow_visible_bubbles()
+    else:
+      self.chat_bubble.update()
 
   def _stream_ui_callback(self, ch: str) -> None:
     if self._chat_stream is not None:
@@ -2502,60 +2681,66 @@ class DesktopPet:
     return cx, head_y, body_bottom
 
   def _layout_bubbles(self, chat_text: str | None = None) -> None:
-    """AI 对话气泡在头顶正上方；输入框在角色正下方；状态栏在头顶左上方。"""
+    """Place chat/status/input overlays beside the pet window."""
     if self._window is None:
       return
-    cx, head_y, body_bottom = self._character_layout()
+    _cx, head_y, _body_bottom = self._character_layout()
     margin = 8
     gap = 10
 
     status_on = bool(self._status_bar_enabled and self.info_bubble)
-    chat_on = bool(self._chat_open and self.chat_bubble)
+    chat_on = bool((self._chat_open or self._companion_bubble_active) and self.chat_bubble)
+    input_on = bool(self._chat_open and self.input_box)
 
-    if self._chat_open and self.input_box:
-      ix = max(margin, min(cx - self.input_box.WIDTH // 2, self._win_w - self.input_box.WIDTH - margin))
-      iy = min(self._win_h - self.input_box.HEIGHT - margin, body_bottom + gap)
-      self.input_box.show(ix, iy)
-
-    status_rect: QRect | None = None
-    if status_on:
+    items: list[tuple[QWidget, int, int]] = []
+    if status_on and self.info_bubble:
       self.info_bubble.show(0, 0)
-      sw, sh = self.info_bubble.width(), self.info_bubble.height()
-      sx = max(margin, cx - sw - 28)
-      sy = max(margin, head_y - sh - gap)
-      self.info_bubble.move(sx, sy)
-      status_rect = QRect(sx, sy, sw, sh)
-
-    chat_rect: QRect | None = None
-    if chat_on:
+      items.append((self.info_bubble, self.info_bubble.width(), self.info_bubble.height()))
+    if chat_on and self.chat_bubble:
       text = chat_text if chat_text is not None else self.chat_bubble.text
       self.chat_bubble.show(0, 0, text)
-      cw, ch = self.chat_bubble.width(), self.chat_bubble.height()
-      chat_x = max(margin, min(cx - cw // 2, self._win_w - cw - margin))
-      chat_y = max(margin, head_y - ch - gap)
-      self.chat_bubble.move(chat_x, chat_y)
-      chat_rect = QRect(chat_x, chat_y, cw, ch)
+      items.append((self.chat_bubble, self.chat_bubble.width(), self.chat_bubble.height()))
+    if input_on and self.input_box:
+      self.input_box.show(0, 0)
+      items.append((self.input_box, self.input_box.width(), self.input_box.height()))
 
-      if status_rect and status_rect.intersects(chat_rect):
-        chat_y = max(margin, status_rect.top() - ch - gap)
-        self.chat_bubble.move(chat_x, chat_y)
-        chat_rect = QRect(chat_x, chat_y, cw, ch)
-      if status_rect and status_rect.intersects(chat_rect):
-        sx = max(margin, chat_rect.left() - status_rect.width() - gap)
-        self.info_bubble.move(sx, status_rect.y())
-        status_rect = QRect(sx, status_rect.y(), status_rect.width(), status_rect.height())
+    if not items:
+      return
 
-    char_box = QRect(cx - 80, head_y, 160, max(40, body_bottom - head_y + 8))
-    for rect, widget in (
-      (chat_rect, self.chat_bubble if chat_on else None),
-      (status_rect, self.info_bubble if status_on else None),
-    ):
-      if rect is None or widget is None:
-        continue
-      if char_box.intersects(rect):
-        new_y = max(margin, head_y - rect.height() - gap)
-        widget.move(rect.x(), new_y)
+    stack_w = max(width for _widget, width, _height in items)
+    stack_h = sum(height for _widget, _width, height in items) + gap * (len(items) - 1)
+    preferred_y = max(margin, min(head_y - stack_h // 3, self._win_h - stack_h - margin))
+    x, y = self._floating_overlay_pos(stack_w, stack_h, preferred_y)
 
+    cursor_y = y
+    for widget, width, height in items:
+      widget.move(x + (stack_w - width) // 2, cursor_y)
+      widget.raise_()
+      cursor_y += height + gap
+
+    self._raise_ui_overlays()
+
+  def _reflow_visible_bubbles(self) -> None:
+    """Reposition already-visible overlays without hiding/showing them."""
+    visible: list[QWidget] = []
+    for widget in (self.info_bubble, self.chat_bubble, self.input_box):
+      if widget is not None and widget.isVisible():
+        visible.append(widget)
+    if not visible:
+      return
+
+    margin = 8
+    gap = 10
+    stack_w = max(widget.width() for widget in visible)
+    stack_h = sum(widget.height() for widget in visible) + gap * (len(visible) - 1)
+    x = min(widget.x() for widget in visible)
+    y = max(margin, min(visible[0].y(), self._win_h - stack_h - margin))
+
+    cursor_y = y
+    for widget in visible:
+      widget.move(x + (stack_w - widget.width()) // 2, cursor_y)
+      widget.raise_()
+      cursor_y += widget.height() + gap
     self._raise_ui_overlays()
 
   def _save_chat_message(self, role: str, text: str) -> None:
@@ -2670,6 +2855,12 @@ class DesktopPet:
     self._running = False
     if self._timer:
       self._timer.stop()
+    if self._computer_comment_timer:
+      self._computer_comment_timer.stop()
+      self._computer_comment_timer = None
+    for widget in (self.info_bubble, self.chat_bubble, self.input_box):
+      if widget is not None:
+        widget.hide()
     self._model = None
     try:
       live2d.glRelease()
@@ -2702,6 +2893,122 @@ class DesktopPet:
     if self.arc_menu:
       self.arc_menu.tick(1.0 / 60.0)
     self._poll_right_button_menu()
+
+  def _start_computer_companion(self) -> None:
+    if not self._computer_companion_enabled or self._computer_activity_detector is None:
+      return
+    if self._computer_comment_timer is not None:
+      self._computer_comment_timer.stop()
+    self._computer_comment_timer = QTimer()
+    self._computer_comment_timer.timeout.connect(self._poll_computer_companion)
+    self._computer_comment_timer.start(self._computer_poll_ms)
+    QTimer.singleShot(self._computer_poll_ms, self._poll_computer_companion)
+    print("[DesktopPet] 电脑状态陪伴点评已开启。")
+
+  def _poll_computer_companion(self) -> None:
+    if (
+      not self._running
+      or self._computer_activity_detector is None
+      or self._computer_comment_busy
+      or self._chat_open
+      or self._any_menu_open()
+      or self._resizing_corner
+    ):
+      return
+
+    try:
+      state = self._computer_activity_detector.get_state()
+    except Exception as exc:
+      print(f"[DesktopPet] 电脑状态检测失败: {exc}")
+      return
+
+    if not state.get("need_response"):
+      return
+    event = build_companion_event(state)
+    if not event:
+      return
+
+    now = time.time()
+    signature = self._computer_comment_signature(event)
+    if now - self._last_computer_comment_at < self._computer_comment_cooldown:
+      return
+    if signature == self._last_computer_comment_signature and now - self._last_computer_comment_at < self._computer_comment_cooldown * 2:
+      return
+
+    self._last_computer_comment_at = now
+    self._last_computer_comment_signature = signature
+    self._emit_computer_companion_comment(event, state)
+
+  def _emit_computer_companion_comment(self, event: dict[str, Any], state: dict[str, Any]) -> None:
+    self._computer_comment_busy = True
+    self._begin_companion_bubble()
+
+    def _run() -> None:
+      reply = ""
+      try:
+        if hasattr(self.team_c, "api_on_status_event"):
+          reply = self.team_c.api_on_status_event(event, ui_callback=self._stream_ui_callback)
+        if not reply:
+          reply = build_local_companion_comment(state)
+          self._stream_text_to_ui(reply)
+          if hasattr(self.team_c, "api_play_system_voice"):
+            self.team_c.api_play_system_voice(reply, state="happy", action="speak")
+      except Exception as exc:
+        print(f"[DesktopPet] 电脑状态点评失败，使用本地短句: {exc}")
+        reply = build_local_companion_comment(state)
+        self._stream_text_to_ui(reply)
+        try:
+          if hasattr(self.team_c, "api_play_system_voice"):
+            self.team_c.api_play_system_voice(reply, state="happy", action="speak")
+        except Exception as voice_exc:
+          print(f"[DesktopPet] 电脑状态点评语音失败: {voice_exc}")
+      finally:
+        if self._chat_stream is not None:
+          self._chat_stream.comment_finished.emit()
+
+    threading.Thread(target=_run, daemon=True).start()
+
+  def _begin_companion_bubble(self) -> None:
+    self._companion_bubble_active = True
+    self._companion_bubble_token += 1
+    if self.chat_bubble is not None:
+      self.chat_bubble.set_text("")
+      self._layout_bubbles(chat_text="")
+
+  def _handle_companion_comment_finished(self) -> None:
+    self._computer_comment_busy = False
+    token = self._companion_bubble_token
+
+    def _hide_if_current() -> None:
+      if token == self._companion_bubble_token:
+        self._hide_companion_bubble()
+
+    QTimer.singleShot(9000, _hide_if_current)
+
+  def _finish_companion_comment(self) -> None:
+    self._handle_companion_comment_finished()
+
+  def _hide_companion_bubble(self) -> None:
+    if self._chat_open:
+      self._companion_bubble_active = False
+      return
+    self._companion_bubble_active = False
+    if self.chat_bubble is not None:
+      self.chat_bubble.hide()
+    if self._status_bar_enabled and self.info_bubble is not None:
+      self._layout_bubbles()
+    self._update_mouse_passthrough(self._local_mouse_pos())
+
+  def _stream_text_to_ui(self, text: str) -> None:
+    for ch in text:
+      self._stream_ui_callback(ch)
+      time.sleep(0.015)
+
+  @staticmethod
+  def _computer_comment_signature(event: dict[str, Any]) -> str:
+    title = str(event.get("window_title", "") or "")[:48].lower()
+    process = str(event.get("process_name", "") or "").lower()
+    return f"{event.get('activity_code')}|{process}|{title}"
 
   def _update_gaze(self, mx: int, my: int) -> None:
     """窗口全域视线：x -> angleX [-30,30]，y -> angleY [-20,20]，每帧 Drag。"""
@@ -2936,6 +3243,8 @@ class DesktopPet:
       "hover_fade": True,
       "status_bar": False,
       "chat_open": False,
+      "voice_pack_id": "",
+      "tts_settings": DEFAULT_TTS_UI_SETTINGS,
     }
     data: dict[str, Any] = dict(defaults)
     try:
@@ -2958,6 +3267,9 @@ class DesktopPet:
     self._hover_fade_enabled = bool(data.get("hover_fade", defaults["hover_fade"]))
     self._status_bar_enabled = bool(data.get("status_bar", defaults["status_bar"]))
     self._chat_open = bool(data.get("chat_open", defaults["chat_open"]))
+    self._voice_pack_id = str(data.get("voice_pack_id", defaults["voice_pack_id"]) or "").strip()
+    self._tts_settings = normalize_tts_settings(data.get("tts_settings", defaults["tts_settings"]))
+    self._sync_team_c_voice_context()
 
   def _save_settings(self) -> None:
     data = {
@@ -2965,6 +3277,8 @@ class DesktopPet:
       "hover_fade": self._hover_fade_enabled,
       "status_bar": self._status_bar_enabled,
       "chat_open": self._chat_open,
+      "voice_pack_id": self._voice_pack_id,
+      "tts_settings": self._tts_settings,
     }
     try:
       os.makedirs(_SETTINGS_DIR, exist_ok=True)
@@ -2991,6 +3305,8 @@ class DesktopPet:
       "hover_fade": self._hover_fade_enabled,
       "status_bar": self._status_bar_enabled,
       "chat_open": self._chat_open,
+      "voice_pack_id": self._voice_pack_id,
+      "tts_settings": self._tts_settings,
     }
     if self._window is not None:
       data["position"] = [self._window.x(), self._window.y()]
@@ -3040,6 +3356,9 @@ class DesktopPet:
       else:
         self._window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
       self._window.show()
+    self._sync_floating_overlay_flags()
+    if self._status_bar_enabled or self._chat_open:
+      self._layout_bubbles()
     if self.pin_submenu:
       self.pin_submenu.set_active(enabled)
     self._save_settings()
@@ -3202,6 +3521,12 @@ class DesktopPet:
   def _ui_consumes_click(self, pos: tuple[int, int]) -> bool:
     if self._input_box_contains(pos) and self.input_box:
       local = self.input_box.mapFromParent(QPoint(*pos))
+      if (
+        hasattr(self.input_box, "_voice_btn")
+        and self.input_box._voice_btn.geometry().contains(local)
+      ):
+        self.input_box.start_voice_input()
+        return True
       if self.input_box._btn.geometry().contains(local):
         self._submit_chat()
         return True
@@ -3507,10 +3832,9 @@ class DesktopPet:
 
   def _open_settings_panel(self) -> None:
     self.arc_menu.hide()
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     console = PetControlConsole(
       desktop_pet=self,
-      project_root=project_root,
+      project_root=PROJECT_ROOT,
       model_path=self.model_path,
       available_motions=self.available_motions,
       motion_name_map=self.motion_name_map,
@@ -3537,10 +3861,24 @@ class DesktopPet:
     self.input_box.set_text("")
     self.team_c.api_user_speak(
       str(msg).strip(),
-      {"state_code": "normal"},
+      self._current_voice_state_context(),
       self._stream_ui_callback,
     )
     QTimer.singleShot(2500, self._save_ai_reply_from_bubble)
+
+  def _current_voice_state_context(self) -> dict[str, Any]:
+    state: dict[str, Any] = {"state_code": "normal"}
+    try:
+      if hasattr(self.team_d, "api_get_pet_status"):
+        raw = self.team_d.api_get_pet_status()
+        if isinstance(raw, dict):
+          state.update(raw)
+    except Exception as exc:
+      print(f"[DesktopPet] Read voice state context failed: {exc}")
+    emotion_style = str(self._tts_settings.get("emotion_style") or "auto").strip()
+    if emotion_style:
+      state["tts_style"] = emotion_style
+    return state
 
   def _save_ai_reply_from_bubble(self) -> None:
     if self.chat_bubble and self.chat_bubble.text.strip():

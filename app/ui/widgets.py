@@ -10,6 +10,8 @@ import os
 import re
 import shutil
 import sys
+import threading
+import time
 from collections import defaultdict
 from typing import Any, Callable, Optional
 
@@ -64,9 +66,12 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTabWidget,
     QTextEdit,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
+
+from utils.logger import get_logger
 
 # ---------------------------------------------------------------------------
 # 样式常量
@@ -117,6 +122,21 @@ QPushButton {
 QPushButton:hover { background-color: #334155; }
 """
 
+BTN_ICON = """
+QPushButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 12px;
+    padding: 2px;
+}
+QPushButton:hover {
+    background-color: rgba(255, 228, 236, 210);
+}
+QPushButton:pressed {
+    background-color: rgba(255, 208, 220, 230);
+}
+"""
+
 BTN_SWITCH = """
 QPushButton#switchPetBtn {
     background-color: #7c3aed;
@@ -133,6 +153,115 @@ QPushButton#switchPetBtn:pressed {
     background-color: #5b21b6;
 }
 """
+
+DEFAULT_TTS_UI_SETTINGS: dict[str, Any] = {
+    "enabled": True,
+    "provider": "auto",
+    "quality": "basic",
+    "edge_voice": "",
+    "voice_profile": "default",
+    "emotion_style": "auto",
+    "cute_style": True,
+    "voice_pack_mode": "prefer",
+    "edge_rate": "",
+    "edge_pitch": "",
+    "edge_volume": "",
+    "tts_rate": "",
+    "tts_volume": "",
+}
+
+TTS_QUALITY_PRESETS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "basic",
+        "label": "基础语音合成",
+        "provider": "auto",
+        "enabled": True,
+    },
+    {
+        "id": "neural",
+        "label": "高拟真神经语音",
+        "provider": "edge",
+        "enabled": True,
+    },
+    {
+        "id": "offline",
+        "label": "离线语音",
+        "provider": "pyttsx3",
+        "enabled": True,
+    },
+    {
+        "id": "off",
+        "label": "关闭语音",
+        "provider": "off",
+        "enabled": False,
+    },
+)
+
+TTS_VOICE_PRESETS: tuple[tuple[str, str], ...] = (
+    ("跟随语音包 / 默认", ""),
+    ("中文女声 Xiaoyi", "zh-CN-XiaoyiNeural"),
+    ("中文女声 Xiaoxiao", "zh-CN-XiaoxiaoNeural"),
+    ("中文女声 Xiaomo", "zh-CN-XiaomoNeural"),
+    ("中文男声 Yunxi", "zh-CN-YunxiNeural"),
+    ("粤语女声 HiuGaai", "zh-HK-HiuGaaiNeural"),
+    ("英文女声 Jenny", "en-US-JennyNeural"),
+    ("日文女声 Nanami", "ja-JP-NanamiNeural"),
+    ("韩文女声 SunHi", "ko-KR-SunHiNeural"),
+)
+
+TTS_STYLE_PRESETS: tuple[dict[str, Any], ...] = (
+    {"id": "auto", "label": "自动跟随情绪", "voice_profile": "default", "cute_style": True},
+    {"id": "neutral", "label": "自然", "voice_profile": "default", "cute_style": False},
+    {"id": "cheerful", "label": "开心活泼", "voice_profile": "cute", "cute_style": True},
+    {"id": "comfort", "label": "温柔安抚", "voice_profile": "calm", "cute_style": False},
+    {"id": "serious", "label": "严肃专业", "voice_profile": "default", "cute_style": False},
+    {"id": "story", "label": "故事旁白", "voice_profile": "default", "cute_style": False},
+    {"id": "news", "label": "新闻播报", "voice_profile": "default", "cute_style": False},
+)
+
+
+def normalize_tts_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
+    data = dict(DEFAULT_TTS_UI_SETTINGS)
+    if isinstance(settings, dict):
+        for key in data:
+            if key in settings:
+                data[key] = settings[key]
+
+    data["enabled"] = bool(data.get("enabled", True))
+    data["provider"] = str(data.get("provider") or "auto").strip().lower().replace("_", "-")
+    if data["provider"] in {"disabled", "none", "false"}:
+        data["provider"] = "off"
+    data["quality"] = str(data.get("quality") or "").strip().lower()
+    if data["provider"] == "off":
+        data["quality"] = "off"
+        data["enabled"] = False
+    if data["quality"] not in {str(p["id"]) for p in TTS_QUALITY_PRESETS}:
+        if data["provider"] in {"edge", "edge-tts", "neural", "edge-neural", "high-realism"}:
+            data["quality"] = "neural"
+        elif data["provider"] in {"pyttsx3", "offline", "local"}:
+            data["quality"] = "offline"
+        else:
+            data["quality"] = "basic"
+    data["edge_voice"] = str(data.get("edge_voice") or "").strip()
+    data["emotion_style"] = str(data.get("emotion_style") or "").strip().lower()
+    if not data["emotion_style"]:
+        legacy_profile = str(data.get("voice_profile") or "default").strip().lower()
+        data["emotion_style"] = {
+            "cute": "cheerful",
+            "calm": "comfort",
+        }.get(legacy_profile, "auto")
+    valid_styles = {str(p["id"]) for p in TTS_STYLE_PRESETS}
+    if data["emotion_style"] not in valid_styles:
+        data["emotion_style"] = "auto"
+    preset = next((p for p in TTS_STYLE_PRESETS if str(p["id"]) == data["emotion_style"]), TTS_STYLE_PRESETS[0])
+    data["voice_profile"] = str(preset.get("voice_profile") or data.get("voice_profile") or "default").strip() or "default"
+    data["cute_style"] = bool(data.get("cute_style"))
+    if "cute_style" in preset:
+        data["cute_style"] = bool(preset["cute_style"])
+    data["voice_pack_mode"] = str(data.get("voice_pack_mode") or "prefer").strip().lower() or "prefer"
+    for key in ("edge_rate", "edge_pitch", "edge_volume", "tts_rate", "tts_volume"):
+        data[key] = str(data.get(key) or "").strip()
+    return data
 
 
 def _scaled_int(value: float, scale: float, minimum: int = 1) -> int:
@@ -699,6 +828,153 @@ class ChatBubble(QFrame, ScalableOverlay):
         super().hide()
 
 
+def _make_mic_icon(color: str = "#64748b") -> QIcon:
+    pixmap = QPixmap(24, 24)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color), 2)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(QRectF(8, 3, 8, 11), 4, 4)
+    path = QPainterPath()
+    path.moveTo(5, 10)
+    path.cubicTo(5, 16, 19, 16, 19, 10)
+    painter.drawPath(path)
+    painter.drawLine(12, 17, 12, 21)
+    painter.drawLine(8, 21, 16, 21)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _clean_voice_text(text: Any) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+_VOICE_LOGGER = get_logger("VoiceInput")
+
+
+def _voice_error_summary(message: str) -> str:
+    if any(keyword in message for keyword in ("SpeechRecognition", "speech_recognition", "PyAudio", "pyaudio")):
+        return "语音输入缺少依赖，请安装 SpeechRecognition 和 PyAudio 后重启。"
+    if any(keyword in message for keyword in ("麦克风", "Microphone", "Input Device", "输入设备")):
+        return "无法打开麦克风，请检查系统权限和默认输入设备。"
+    if "在线语音识别不可用" in message:
+        return "在线语音识别不可用，请检查网络或稍后再试。"
+    if "没有识别" in message or "没有听清" in message:
+        return "没有识别到语音，请再试一次。"
+    return message or "语音识别失败，请再试一次。"
+
+
+def _recognize_with_speech_recognition(timeout_sec: float, phrase_time_limit: float) -> str:
+    try:
+        import speech_recognition as sr  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("未安装 SpeechRecognition，无法启用语音输入。") from exc
+
+    recognizer = sr.Recognizer()
+    try:
+        with sr.Microphone() as source:
+            recognizer.adjust_for_ambient_noise(source, duration=0.4)
+            audio = recognizer.listen(
+                source,
+                timeout=timeout_sec,
+                phrase_time_limit=phrase_time_limit,
+            )
+    except AttributeError as exc:
+        if "PyAudio" in str(exc):
+            raise RuntimeError("未安装 PyAudio，无法读取麦克风音频。") from exc
+        raise
+    except OSError as exc:
+        raise RuntimeError(f"无法打开麦克风设备：{exc}") from exc
+    try:
+        text = recognizer.recognize_google(audio, language="zh-CN")
+    except sr.UnknownValueError as exc:
+        raise RuntimeError("没有听清，请再试一次。") from exc
+    except sr.RequestError as exc:
+        raise RuntimeError(f"在线语音识别不可用：{exc}") from exc
+    cleaned = _clean_voice_text(text)
+    if not cleaned:
+        raise RuntimeError("没有识别到文字，请再试一次。")
+    return cleaned
+
+
+def _recognize_with_windows_sapi(timeout_sec: float) -> str:
+    if sys.platform != "win32":
+        raise RuntimeError("当前系统没有可用的本地语音识别后端。")
+
+    try:
+        import pythoncom  # type: ignore
+        import win32com.client  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("缺少 pywin32，无法调用 Windows 语音识别。") from exc
+
+    result: dict[str, str] = {"text": ""}
+    done = threading.Event()
+
+    class _SapiEvents:
+        def OnRecognition(self, _stream_number, _stream_position, _recognition_type, recognition_result):
+            try:
+                result["text"] = _clean_voice_text(recognition_result.PhraseInfo.GetText())
+            except Exception:
+                result["text"] = ""
+            if result["text"]:
+                done.set()
+
+    pythoncom.CoInitialize()
+    grammar = None
+    try:
+        recognizer = win32com.client.Dispatch("SAPI.SpInprocRecognizer")
+        recognizer.AudioInput = win32com.client.Dispatch("SAPI.SpMMAudioIn")
+        context = win32com.client.DispatchWithEvents(
+            recognizer.CreateRecoContext(),
+            _SapiEvents,
+        )
+        try:
+            context.EventInterests = 16  # SPEI_RECOGNITION
+        except Exception:
+            pass
+        grammar = context.CreateGrammar()
+        grammar.DictationSetState(1)
+
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline and not done.is_set():
+            pythoncom.PumpWaitingMessages()
+            time.sleep(0.05)
+
+        text = _clean_voice_text(result["text"])
+        if text:
+            return text
+        raise RuntimeError("没有识别到语音，请确认麦克风权限和 Windows 语音识别语言已启用。")
+    finally:
+        if grammar is not None:
+            try:
+                grammar.DictationSetState(0)
+            except Exception:
+                pass
+        pythoncom.CoUninitialize()
+
+
+def _recognize_speech_once(timeout_sec: float = 7.0, phrase_time_limit: float = 8.0) -> str:
+    errors: list[str] = []
+    try:
+        return _recognize_with_speech_recognition(timeout_sec, phrase_time_limit)
+    except ImportError:
+        errors.append("未安装 speech_recognition/pyaudio")
+    except Exception as exc:
+        errors.append(str(exc))
+
+    try:
+        return _recognize_with_windows_sapi(timeout_sec)
+    except Exception as exc:
+        errors.append(str(exc))
+
+    detail = "；".join(error for error in errors if error)
+    raise RuntimeError(detail or "语音识别不可用。")
+
+
 class InputBox(QFrame, ScalableOverlay):
     _BASE_WIDTH = 260
     _BASE_HEIGHT = 40
@@ -708,6 +984,9 @@ class InputBox(QFrame, ScalableOverlay):
     RADIUS = 24
 
     submitted = Signal(str)
+    _voice_text_ready = Signal(str)
+    _voice_error = Signal(str)
+    _voice_done = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -717,8 +996,21 @@ class InputBox(QFrame, ScalableOverlay):
         self.visible = False
         self.focused = False
         self.text = ""
+        self._voice_thread: threading.Thread | None = None
+        self._voice_listening = False
         self._lay = QHBoxLayout(self)
-        self._lay.setContentsMargins(8, 4, 8, 4)
+        self._lay.setContentsMargins(6, 4, 8, 4)
+        self._lay.setSpacing(4)
+        self._voice_btn = QPushButton()
+        self._voice_btn.setFixedSize(28, 28)
+        self._voice_btn.setIcon(_make_mic_icon())
+        self._voice_btn.setIconSize(QSize(20, 20))
+        self._voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._voice_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._voice_btn.setAccessibleName("语音输入")
+        self._voice_btn.setToolTip("语音输入")
+        self._voice_btn.setStyleSheet(BTN_ICON)
+        self._voice_btn.clicked.connect(self.start_voice_input)
         self._field = QLineEdit()
         self._field.setPlaceholderText("输入消息…")
         self._field.setFrame(False)
@@ -727,8 +1019,12 @@ class InputBox(QFrame, ScalableOverlay):
         self._btn = QPushButton("发送")
         self._btn.setStyleSheet(BTN_PRIMARY)
         self._btn.clicked.connect(self._submit)
+        self._lay.addWidget(self._voice_btn)
         self._lay.addWidget(self._field, 1)
         self._lay.addWidget(self._btn)
+        self._voice_text_ready.connect(self._apply_voice_text)
+        self._voice_error.connect(self._show_voice_error)
+        self._voice_done.connect(self._finish_voice_input)
         self.hide()
 
     def apply_ui_scale(self, scale: float) -> None:
@@ -738,11 +1034,16 @@ class InputBox(QFrame, ScalableOverlay):
         self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 14)
         self.setFixedSize(self.WIDTH, self.HEIGHT)
         self._lay.setContentsMargins(
-            _scaled_int(8, self._ui_scale, 4),
+            _scaled_int(6, self._ui_scale, 4),
             _scaled_int(4, self._ui_scale, 2),
             _scaled_int(8, self._ui_scale, 4),
             _scaled_int(4, self._ui_scale, 2),
         )
+        self._lay.setSpacing(_scaled_int(4, self._ui_scale, 2))
+        button_size = _scaled_int(28, self._ui_scale, 22)
+        icon_size = _scaled_int(20, self._ui_scale, 16)
+        self._voice_btn.setFixedSize(button_size, button_size)
+        self._voice_btn.setIconSize(QSize(icon_size, icon_size))
         self._field.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
         self.setStyleSheet(_glass_style(self.RADIUS))
 
@@ -773,6 +1074,76 @@ class InputBox(QFrame, ScalableOverlay):
         t = self.get_text()
         if t:
             self.submitted.emit(t)
+
+    def start_voice_input(self) -> None:
+        if self._voice_listening:
+            return
+        _VOICE_LOGGER.info("开始语音输入")
+        self._voice_listening = True
+        self._voice_btn.setIcon(_make_mic_icon("#ef476f"))
+        self._voice_btn.setToolTip("正在听，请说话…")
+        if not self._field.text().strip():
+            self._field.setPlaceholderText("正在听，请说话…")
+        self._voice_thread = threading.Thread(target=self._run_voice_input, daemon=True)
+        self._voice_thread.start()
+
+    def _run_voice_input(self) -> None:
+        try:
+            text = _recognize_speech_once()
+            _VOICE_LOGGER.info("语音识别成功，文本长度=%s", len(text))
+            self._voice_text_ready.emit(text)
+        except Exception as exc:
+            _VOICE_LOGGER.warning("语音识别失败: %s", exc)
+            self._voice_error.emit(str(exc))
+        finally:
+            self._voice_done.emit()
+
+    def _apply_voice_text(self, text: str) -> None:
+        text = _clean_voice_text(text)
+        if not text:
+            return
+        current = self._field.text()
+        cursor_pos = self._field.cursorPosition()
+        prefix = current[:cursor_pos]
+        suffix = current[cursor_pos:]
+        spacer = ""
+        if prefix and not prefix.endswith((" ", "\n")) and text[:1] not in "，。！？,.!?":
+            spacer = "" if re.search(r"[\u4e00-\u9fff]$", prefix) else " "
+        merged = f"{prefix}{spacer}{text}{suffix}"
+        self.set_text(merged)
+        self._field.setFocus()
+        self._field.setCursorPosition(len(prefix) + len(spacer) + len(text))
+
+    def _show_voice_error(self, message: str) -> None:
+        message = message.strip() or "语音识别失败，请再试一次。"
+        summary = _voice_error_summary(message)
+        self._field.setPlaceholderText(summary)
+        self._voice_btn.setToolTip(message)
+        QToolTip.showText(
+            self._voice_btn.mapToGlobal(QPoint(0, self._voice_btn.height())),
+            message,
+            self._voice_btn,
+            self._voice_btn.rect(),
+            7000,
+        )
+        QTimer.singleShot(7000, self._restore_voice_hint)
+
+    def _finish_voice_input(self) -> None:
+        self._voice_listening = False
+        self._voice_btn.setIcon(_make_mic_icon())
+        if self._voice_btn.toolTip().startswith("正在听"):
+            self._voice_btn.setToolTip("语音输入")
+        if self._field.placeholderText().startswith("正在听"):
+            self._field.setPlaceholderText("输入消息…")
+
+    def _restore_voice_hint(self) -> None:
+        if self._voice_listening:
+            return
+        self._voice_btn.setToolTip("语音输入")
+        self._field.setPlaceholderText("输入消息…")
+
+    def is_voice_click(self, mouse_pos: tuple[int, int]) -> bool:
+        return self._voice_btn.geometry().contains(self.mapFromGlobal(QPoint(*mouse_pos)))
 
     def is_send_click(self, mouse_pos: tuple[int, int]) -> bool:
         return self._btn.geometry().contains(self.mapFromGlobal(QPoint(*mouse_pos)))
@@ -905,6 +1276,49 @@ class ChatHistoryStore:
             if fname.endswith(".json"):
                 names.append(os.path.splitext(fname)[0])
         return sorted(names)
+
+
+def scan_voice_packs(project_root: str) -> list[dict]:
+    """扫描 assets/voice_packs 下的 TTS 音色包清单。"""
+    packs: list[dict] = [
+        {
+            "id": "",
+            "name": "默认",
+            "display_name": "默认",
+            "icon": "🎙️",
+            "description": "跟随当前角色或 .env 默认音色。",
+            "sample_text": "你好呀，今天也一起加油。",
+        }
+    ]
+    base_dir = os.path.join(project_root, "assets", "voice_packs")
+    if not os.path.isdir(base_dir):
+        return packs
+
+    for dirname in sorted(os.listdir(base_dir)):
+        pack_dir = os.path.join(base_dir, dirname)
+        manifest_path = os.path.join(pack_dir, "voice_pack.json")
+        if not os.path.isdir(pack_dir) or not os.path.isfile(manifest_path):
+            continue
+        try:
+            with open(manifest_path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        pack_id = str(data.get("id") or dirname).strip() or dirname
+        name = str(data.get("display_name") or data.get("name") or pack_id).strip() or pack_id
+        packs.append(
+            {
+                "id": pack_id,
+                "name": name,
+                "display_name": name,
+                "icon": str(data.get("icon") or "🎙️"),
+                "description": str(data.get("description") or "TTS 音色参数包。"),
+                "sample_text": str(data.get("sample_text") or "你好呀，今天也一起加油。"),
+            }
+        )
+    return packs
 
 
 def _stem_no_ext(path: str) -> str:
@@ -1754,6 +2168,10 @@ class ControlConsole(QMainWindow):
         motion_name_map: dict[str, str],
         on_play_motion: Callable[[str], bool] | None = None,
         on_pet_changed: Callable[[dict], None] | None = None,
+        on_voice_pack_changed: Callable[[dict], None] | None = None,
+        current_voice_pack_id: str = "",
+        on_tts_settings_changed: Callable[[dict], None] | None = None,
+        current_tts_settings: dict[str, Any] | None = None,
     ) -> None:
         super().__init__()
         self._project_root = project_root
@@ -1762,10 +2180,16 @@ class ControlConsole(QMainWindow):
         self.motion_name_map = motion_name_map
         self.on_play_motion = on_play_motion
         self.on_pet_changed = on_pet_changed
+        self.on_voice_pack_changed = on_voice_pack_changed
+        self.on_tts_settings_changed = on_tts_settings_changed
         self.stats = {"mood": 85, "energy": 72, "affection": 90}
         self._page = "dashboard"
         self._pet_main_id: str | None = None
         self._sel_pet: str | None = None
+        self._voice_pack_id = (current_voice_pack_id or "").strip()
+        self._voice_packs: list[dict] = []
+        self._tts_settings = normalize_tts_settings(current_tts_settings)
+        self._tts_control_syncing = False
         self._char_tab = 0
         self._ai_i = -1
         self._detail_pic: QLabel | None = None
@@ -2428,31 +2852,85 @@ class ControlConsole(QMainWindow):
         w = QWidget()
         lay = QHBoxLayout(w)
         lay.setContentsMargins(24, 16, 24, 24)
-        left = QFrame()
-        left.setFixedWidth(190)
-        left.setStyleSheet(_glass_style(14))
-        ll = QVBoxLayout(left)
-        ll.addWidget(QLabel("<b>对话角色</b>"))
+        lay.setSpacing(16)
+
+        menu_panel = QFrame()
+        menu_panel.setFixedWidth(190)
+        menu_panel.setStyleSheet(_glass_style(14))
+        menu_lay = QVBoxLayout(menu_panel)
+        menu_lay.addWidget(QLabel("<b>AI 对话</b>"))
+        self._ai_tool_btns: dict[str, QPushButton] = {}
+        for key, icon, label in (
+            ("roles", "👤", "角色选择"),
+            ("voice_pack", "🎙️", "语音包选择"),
+            ("history", "💬", "聊天记录"),
+            ("voice_settings", "🔊", "语音设置"),
+        ):
+            btn = QPushButton(f"{icon}  {label}")
+            btn.setCheckable(True)
+            btn.setStyleSheet(BTN_GLASS)
+            btn.clicked.connect(lambda _=False, k=key: self._switch_ai_tool(k))
+            menu_lay.addWidget(btn)
+            self._ai_tool_btns[key] = btn
+        menu_lay.addStretch()
+        lay.addWidget(menu_panel)
+
+        self._ai_tool_stack = QStackedWidget()
+        self._ai_tool_stack.addWidget(self._ai_roles_page())
+        self._ai_tool_stack.addWidget(self._ai_voice_pack_page())
+        self._ai_tool_stack.addWidget(self._ai_history_page())
+        self._ai_tool_stack.addWidget(self._ai_voice_settings_page())
+        lay.addWidget(self._ai_tool_stack, 1)
+
+        self._refresh_contact_list()
+        self._apply_tts_controls_from_settings()
+        self._refresh_voice_pack_list()
+        self._switch_ai_tool("roles")
+        return w
+
+    def _ai_roles_page(self) -> QWidget:
+        page = QFrame()
+        page.setStyleSheet(_glass_style(14))
+        lay = QVBoxLayout(page)
+        lay.addWidget(QLabel("<b>角色选择</b>"))
         self._contact_btns = []
         self._contact_list = QListWidget()
         self._contact_list.itemClicked.connect(self._pick_chat_by_name)
-        ll.addWidget(self._contact_list, 1)
-        lay.addWidget(left)
-        right = QVBoxLayout()
-        search_row = QHBoxLayout()
+        lay.addWidget(self._contact_list, 1)
+        return page
+
+    def _ai_voice_pack_page(self) -> QWidget:
+        page = QFrame()
+        page.setStyleSheet(_glass_style(14))
+        lay = QVBoxLayout(page)
+        lay.addWidget(QLabel("<b>语音包选择</b>"))
+        self._voice_pack_list = QListWidget()
+        self._voice_pack_list.itemClicked.connect(self._pick_voice_pack_by_item)
+        lay.addWidget(self._voice_pack_list, 1)
+        self._voice_pack_detail = QLabel()
+        self._voice_pack_detail.setWordWrap(True)
+        self._voice_pack_detail.setStyleSheet("color:#64748b;font-size:12px;")
+        lay.addWidget(self._voice_pack_detail)
+        return page
+
+    def _ai_history_page(self) -> QWidget:
+        page = QFrame()
+        page.setStyleSheet(_glass_style(14))
+        lay = QVBoxLayout(page)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("<b>聊天记录</b>"))
         self._chat_search = QLineEdit()
         self._chat_search.setPlaceholderText("搜索聊天内容…")
         self._chat_search.textChanged.connect(self._filter_chat_view)
-        search_row.addStretch()
-        search_row.addWidget(self._chat_search, 1)
-        right.addLayout(search_row)
+        top.addWidget(self._chat_search, 1)
+        lay.addLayout(top)
         self._chat_view = QTextEdit()
         self._chat_view.setReadOnly(True)
         self._chat_empty = QLabel("暂无聊天记录")
         self._chat_empty.setStyleSheet("color:#94a3b8;")
         self._chat_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        right.addWidget(self._chat_empty, 1)
-        right.addWidget(self._chat_view, 1)
+        lay.addWidget(self._chat_empty, 1)
+        lay.addWidget(self._chat_view, 1)
         self._chat_view.hide()
         bottom = QHBoxLayout()
         self._ai_in = QLineEdit()
@@ -2462,10 +2940,163 @@ class ControlConsole(QMainWindow):
         send.clicked.connect(self._send_chat)
         bottom.addWidget(self._ai_in, 1)
         bottom.addWidget(send)
-        right.addLayout(bottom)
-        lay.addLayout(right, 1)
-        self._refresh_contact_list()
-        return w
+        lay.addLayout(bottom)
+        return page
+
+    def _ai_voice_settings_page(self) -> QWidget:
+        page = QFrame()
+        page.setStyleSheet(_glass_style(14))
+        lay = QVBoxLayout(page)
+        lay.addWidget(QLabel("<b>语音设置</b>"))
+        self._tts_enabled_check = QCheckBox("启用语音")
+        self._tts_enabled_check.stateChanged.connect(self._on_tts_controls_changed)
+        lay.addWidget(self._tts_enabled_check)
+        lay.addWidget(QLabel("合成模式"))
+        self._tts_quality_combo = QComboBox()
+        for preset in TTS_QUALITY_PRESETS:
+            self._tts_quality_combo.addItem(str(preset["label"]), str(preset["id"]))
+        self._tts_quality_combo.currentIndexChanged.connect(self._on_tts_controls_changed)
+        lay.addWidget(self._tts_quality_combo)
+        lay.addWidget(QLabel("语言 / 音色"))
+        self._tts_voice_combo = QComboBox()
+        for label, voice_id in TTS_VOICE_PRESETS:
+            self._tts_voice_combo.addItem(label, voice_id)
+        self._tts_voice_combo.currentIndexChanged.connect(self._on_tts_controls_changed)
+        lay.addWidget(self._tts_voice_combo)
+        lay.addWidget(QLabel("情感 / 风格"))
+        self._tts_style_combo = QComboBox()
+        for preset in TTS_STYLE_PRESETS:
+            self._tts_style_combo.addItem(str(preset["label"]), str(preset["id"]))
+        self._tts_style_combo.currentIndexChanged.connect(self._on_tts_controls_changed)
+        lay.addWidget(self._tts_style_combo)
+        self._tts_detail = QLabel()
+        self._tts_detail.setWordWrap(True)
+        self._tts_detail.setStyleSheet("color:#64748b;font-size:12px;")
+        lay.addWidget(self._tts_detail)
+        lay.addStretch()
+        return page
+
+    def _switch_ai_tool(self, key: str) -> None:
+        idx = {
+            "roles": 0,
+            "voice_pack": 1,
+            "history": 2,
+            "voice_settings": 3,
+        }.get(key, 0)
+        if hasattr(self, "_ai_tool_stack"):
+            self._ai_tool_stack.setCurrentIndex(idx)
+        for btn_key, btn in getattr(self, "_ai_tool_btns", {}).items():
+            btn.setChecked(btn_key == key)
+
+    @staticmethod
+    def _set_combo_current_data(combo: QComboBox, data: str) -> None:
+        target = str(data or "")
+        for i in range(combo.count()):
+            if str(combo.itemData(i) or "") == target:
+                combo.setCurrentIndex(i)
+                return
+        combo.setCurrentIndex(0)
+
+    def _apply_tts_controls_from_settings(self) -> None:
+        if not hasattr(self, "_tts_quality_combo"):
+            return
+        self._tts_settings = normalize_tts_settings(self._tts_settings)
+        self._tts_control_syncing = True
+        self._tts_enabled_check.setChecked(bool(self._tts_settings.get("enabled", True)))
+        self._set_combo_current_data(self._tts_quality_combo, str(self._tts_settings.get("quality") or "basic"))
+        self._set_combo_current_data(self._tts_voice_combo, str(self._tts_settings.get("edge_voice") or ""))
+        self._set_combo_current_data(self._tts_style_combo, str(self._tts_settings.get("emotion_style") or "auto"))
+        self._tts_control_syncing = False
+        self._render_tts_detail()
+
+    def _on_tts_controls_changed(self, *_args: Any) -> None:
+        if self._tts_control_syncing or not hasattr(self, "_tts_quality_combo"):
+            return
+
+        quality_id = str(self._tts_quality_combo.currentData() or "basic")
+        preset = next((p for p in TTS_QUALITY_PRESETS if str(p.get("id")) == quality_id), TTS_QUALITY_PRESETS[0])
+        style_id = str(self._tts_style_combo.currentData() or "default")
+        style = next((p for p in TTS_STYLE_PRESETS if str(p.get("id")) == style_id), TTS_STYLE_PRESETS[0])
+
+        settings = dict(self._tts_settings)
+        settings.update(
+            {
+                "quality": quality_id,
+                "provider": str(preset.get("provider") or "auto"),
+                "enabled": bool(self._tts_enabled_check.isChecked()) and bool(preset.get("enabled", True)),
+                "edge_voice": str(self._tts_voice_combo.currentData() or ""),
+                "emotion_style": style_id,
+                "voice_profile": str(style.get("voice_profile") or "default"),
+                "cute_style": bool(style.get("cute_style", False)),
+            }
+        )
+        self._tts_settings = normalize_tts_settings(settings)
+        self._render_tts_detail()
+        if self.on_tts_settings_changed:
+            self.on_tts_settings_changed(dict(self._tts_settings))
+
+    def _render_tts_detail(self) -> None:
+        if not hasattr(self, "_tts_detail"):
+            return
+        settings = normalize_tts_settings(self._tts_settings)
+        mode = next(
+            (str(p["label"]) for p in TTS_QUALITY_PRESETS if str(p["id"]) == settings.get("quality")),
+            "基础语音合成",
+        )
+        voice = next(
+            (label for label, value in TTS_VOICE_PRESETS if value == settings.get("edge_voice")),
+            str(settings.get("edge_voice") or "跟随语音包 / 默认"),
+        )
+        style = next(
+            (str(p["label"]) for p in TTS_STYLE_PRESETS if str(p["id"]) == settings.get("emotion_style")),
+            "自动跟随情绪",
+        )
+        enabled = "已启用" if settings.get("enabled") else "已关闭"
+        self._tts_detail.setText(f"{enabled} · {mode}\n{voice} · {style}")
+
+    def _refresh_voice_pack_list(self) -> None:
+        if not hasattr(self, "_voice_pack_list"):
+            return
+        self._voice_packs = scan_voice_packs(self._project_root)
+        self._voice_pack_list.clear()
+        current = (self._voice_pack_id or "").strip()
+        selected_row = 0
+        found_current = not current
+        for i, pack in enumerate(self._voice_packs):
+            item = QListWidgetItem(f"{pack.get('icon', '🎙️')}  {pack.get('name', pack.get('id', ''))}")
+            item.setData(Qt.ItemDataRole.UserRole, pack.get("id", ""))
+            item.setToolTip(str(pack.get("description", "")))
+            self._voice_pack_list.addItem(item)
+            if str(pack.get("id", "")).strip() == current:
+                selected_row = i
+                found_current = True
+        if not found_current:
+            self._voice_pack_id = ""
+            selected_row = 0
+        self._voice_pack_list.setCurrentRow(selected_row)
+        if self._voice_packs:
+            self._render_voice_pack_detail(self._voice_packs[selected_row])
+
+    def _pick_voice_pack_by_item(self, item: QListWidgetItem) -> None:
+        pack_id = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+        pack = next((p for p in self._voice_packs if str(p.get("id", "")).strip() == pack_id), None)
+        if pack is None:
+            return
+        self._voice_pack_id = pack_id
+        self._render_voice_pack_detail(pack)
+        if self.on_voice_pack_changed:
+            self.on_voice_pack_changed(pack)
+        self._show_toast(f"已切换语音包: {pack.get('name', '默认')}")
+
+    def _render_voice_pack_detail(self, pack: dict) -> None:
+        if not hasattr(self, "_voice_pack_detail"):
+            return
+        desc = str(pack.get("description") or "")
+        sample = str(pack.get("sample_text") or "")
+        if sample:
+            self._voice_pack_detail.setText(f"{desc}\n试听: {sample}")
+        else:
+            self._voice_pack_detail.setText(desc)
 
     def _refresh_contact_list(self) -> None:
         if not hasattr(self, "_contact_list"):

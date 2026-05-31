@@ -340,6 +340,8 @@ class BehaviorRules:
         ps = self.pet_state
         status = {
             "event": event,
+            "pet_id": self.get_pet_id(),
+            "action": self.get_action(),
             "mood": ps.mood,
             "energy": ps.energy,
             "intimacy": ps.intimacy,

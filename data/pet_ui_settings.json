@@ -1,6 +1,22 @@
 {
   "pin_top": true,
   "hover_fade": false,
-  "status_bar": false,
-  "chat_open": true
+  "status_bar": true,
+  "chat_open": true,
+  "voice_pack_id": "playful_child",
+  "tts_settings": {
+    "enabled": true,
+    "provider": "edge",
+    "quality": "neural",
+    "edge_voice": "",
+    "voice_profile": "default",
+    "emotion_style": "auto",
+    "cute_style": true,
+    "voice_pack_mode": "prefer",
+    "edge_rate": "",
+    "edge_pitch": "",
+    "edge_volume": "",
+    "tts_rate": "",
+    "tts_volume": ""
+  }
 }

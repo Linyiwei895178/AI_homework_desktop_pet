@@ -36,7 +36,7 @@ class PetState:
     2. update_from_user_state(state_dict) - 根据用户状态字典更新（新接口）
     """
 
-    def __init__(self, mood: str = "neutral", energy: int = 100, intimacy: int = 50):
+    def __init__(self, mood: str = "neutral", energy: int = 100, intimacy: int = 50, pet_id: str = "cat"):
         """
         初始化桌宠状态
 
@@ -47,6 +47,7 @@ class PetState:
         self.mood = mood
         self.energy = max(0, min(100, energy))
         self.intimacy = max(0, min(100, intimacy))
+        self.pet_id = (pet_id or "cat").strip() or "cat"
 
         # 状态变化记录
         self._last_event = None
@@ -173,6 +174,12 @@ class PetState:
         """
         return self._last_user_state
 
+    def set_pet_id(self, pet_id: str):
+        """同步当前桌宠 ID，供状态决策和 TTS 音色选择使用。"""
+        value = (pet_id or "").strip()
+        if value:
+            self.pet_id = value
+
     def save_state(self, filepath: Optional[str] = None):
         """
         将当前状态持久化到 JSON 文件（状态持久化）
@@ -188,6 +195,7 @@ class PetState:
             filepath = os.path.join(logs_dir, "pet_state.json")
 
         state_data = {
+            "pet_id": self.pet_id,
             "mood": self.mood,
             "energy": self.energy,
             "intimacy": self.intimacy,
@@ -220,6 +228,7 @@ class PetState:
         self.mood = state_data.get("mood", self.mood)
         self.energy = max(0, min(100, state_data.get("energy", self.energy)))
         self.intimacy = max(0, min(100, state_data.get("intimacy", self.intimacy)))
+        self.pet_id = str(state_data.get("pet_id", self.pet_id) or self.pet_id)
         print(f"[PetState] 状态已从 {filepath} 恢复: {self}")
         return self
 
@@ -263,6 +272,7 @@ class PetState:
         :return: 包含 mood, energy, intimacy 的字典
         """
         return {
+            "pet_id": self.pet_id,
             "mood": self.mood,
             "energy": self.energy,
             "intimacy": self.intimacy

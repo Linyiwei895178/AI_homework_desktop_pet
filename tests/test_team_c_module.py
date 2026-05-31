@@ -1,0 +1,588 @@
+"""
+Tests for Team C NLP/TTS integration.
+"""
+
+import json
+import os
+import sys
+import tempfile
+import threading
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from models.nlp.chat_memory import ChatMemory
+from models.nlp.deepseek_api import DeepSeekClient
+from models.tts.ai_voice_assistant import AIChatVoiceAssistant
+from models.tts.echo_team_c_interface import EchoTeamCInterface
+from models.tts.tts_manager import TTSManager
+from models.tts.voice_pack import VoicePackManager
+from models.state.echo_team_d_interface import EchoTeamDInterface
+from models.state.pet_state import PetState
+
+
+class FakeLLM:
+    def generate(self, text_prompt, user_state=None, history=None):
+        return f"收到：{text_prompt}"
+
+    def clear_memory(self):
+        return None
+
+
+class RecordingTTS:
+    def __init__(self):
+        self.calls = []
+        self.voice_pack_ids = []
+        self.tts_settings = []
+
+    def speak(self, text, pet_id="cat", state="neutral", action="speak"):
+        self.calls.append(
+            {
+                "text": text,
+                "pet_id": pet_id,
+                "state": state,
+                "action": action,
+            }
+        )
+        return None
+
+    def set_voice_pack_id(self, pack_id):
+        self.voice_pack_ids.append(pack_id)
+
+    def apply_runtime_settings(self, settings):
+        self.tts_settings.append(dict(settings or {}))
+
+
+def build_test_assistant():
+    return AIChatVoiceAssistant(
+        llm_client=FakeLLM(),
+        tts_manager=TTSManager(enabled=False),
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+    )
+
+
+def test_ai_chat_voice_assistant_streams_and_remembers():
+    assistant = build_test_assistant()
+    chunks = []
+
+    reply = assistant.chat_with_context(
+        "你好",
+        current_state={"state_code": "normal"},
+        callback_ui=chunks.append,
+    )
+
+    assert reply == "收到：你好"
+    assert "".join(chunks) == reply
+    messages = assistant.get_memory_messages()
+    assert messages[-2]["role"] == "user"
+    assert messages[-1]["role"] == "assistant"
+
+
+def test_tts_cute_profile_softens_short_spoken_text():
+    manager = TTSManager(enabled=False, voice_profile="cute", cute_style=True, pitch_shift=1.0)
+
+    assert manager._prepare_spoken_text("我在这儿陪你。") == "我在这儿陪你呀。"
+    assert manager._prepare_spoken_text("要喝水吗？") == "要喝水吗？"
+    assert manager._prepare_spoken_text("https://example.com") == "https://example.com"
+
+
+def test_tts_pyttsx3_fallback_prefers_cute_voice():
+    class FakeVoice:
+        def __init__(self, voice_id, name, gender="", languages=None):
+            self.id = voice_id
+            self.name = name
+            self.gender = gender
+            self.languages = languages or []
+
+    class FakeEngine:
+        def getProperty(self, key):
+            if key == "voices":
+                return [
+                    FakeVoice("david", "Microsoft David Desktop", "Male", [b"\x05en-US"]),
+                    FakeVoice("xiaoyi", "Microsoft Xiaoyi Desktop", "Female", [b"\x05zh-CN"]),
+                ]
+            return None
+
+    manager = TTSManager(enabled=False, voice_profile="cute", cute_style=False)
+
+    assert manager._select_voice_id(FakeEngine()) == "xiaoyi"
+
+
+def test_voice_pack_matches_keywords_then_event():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "daji"
+        pack_dir.mkdir(parents=True)
+        for filename in ("hello.wav", "click.wav", "speak.wav"):
+            (pack_dir / filename).write_bytes(b"fake-audio")
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps(
+                {
+                    "clips": {
+                        "neutral.click": ["click.wav"],
+                        "speak": ["speak.wav"],
+                    },
+                    "keywords": {
+                        "你好": ["hello.wav"],
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        manager = VoicePackManager(pack_id="daji", base_dir=base_dir, enabled=True)
+
+        assert manager.pick_clip("你好呀", state="neutral", action="speak").name == "hello.wav"
+        assert manager.pick_clip("摸摸头", state="neutral", action="click").name == "click.wav"
+        assert manager.pick_clip("随便说点", state="sad", action="speak").name == "speak.wav"
+
+
+def test_tts_manager_prefers_voice_pack_before_synthesis():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "angela"
+        pack_dir.mkdir(parents=True)
+        clip = pack_dir / "click.wav"
+        clip.write_bytes(b"fake-audio")
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps({"clips": {"neutral.click": ["click.wav"]}}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        played = []
+        manager = TTSManager(
+            provider="pyttsx3",
+            voice_pack_id="angela",
+            voice_pack_dir=str(base_dir),
+            voice_pack_enabled=True,
+            voice_pack_mode="prefer",
+        )
+        manager._play_media = played.append
+
+        assert manager.speak("点击反馈", state="neutral", action="click") == str(clip)
+        assert played == [clip]
+
+
+def test_tts_manager_reads_voice_profile_without_audio_files():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "cat"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps(
+                {
+                    "voice_profiles": {
+                        "happy.speak": {
+                            "edge_voice": "zh-CN-XiaoxiaoNeural",
+                            "edge_rate": "+15%",
+                            "edge_pitch": "+20Hz",
+                            "cute_style": False,
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        manager = TTSManager(
+            enabled=False,
+            voice_pack_id="cat",
+            voice_pack_dir=str(base_dir),
+            voice_pack_enabled=True,
+        )
+        settings = manager._voice_settings(pet_id="cat", state="happy", action="speak")
+
+        assert settings["edge_voice"] == "zh-CN-XiaoxiaoNeural"
+        assert settings["edge_rate"] == "+15%"
+        assert settings["edge_pitch"] == "+20Hz"
+        assert settings["cute_style"] is False
+
+
+def test_voice_profile_event_settings_inherit_default_profile():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "cat"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps(
+                {
+                    "voice_profiles": {
+                        "default": {
+                            "edge_voice": "zh-CN-XiaomoNeural",
+                            "edge_rate": "-4%",
+                            "edge_pitch": "-8Hz",
+                            "cute_style": False,
+                        },
+                        "happy.speak": {
+                            "edge_rate": "+2%",
+                        },
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        manager = TTSManager(
+            enabled=False,
+            voice_pack_id="cat",
+            voice_pack_dir=str(base_dir),
+            voice_pack_enabled=True,
+        )
+        settings = manager._voice_settings(pet_id="cat", state="happy", action="speak")
+
+        assert settings["edge_voice"] == "zh-CN-XiaomoNeural"
+        assert settings["edge_rate"] == "+2%"
+        assert settings["edge_pitch"] == "-8Hz"
+        assert settings["cute_style"] is False
+
+
+def test_tts_manager_can_override_voice_pack_without_changing_pet_id():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "sweet"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps(
+                {
+                    "voice_profiles": {
+                        "default": {
+                            "edge_voice": "zh-CN-XiaoyiNeural",
+                            "edge_rate": "+14%",
+                            "edge_pitch": "+22Hz",
+                            "cute_style": True,
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        manager = TTSManager(
+            enabled=False,
+            voice_pack_dir=str(base_dir),
+            voice_pack_enabled=True,
+        )
+        manager.set_voice_pack_id("sweet")
+        settings = manager._voice_settings(pet_id="mao_pro_zh", state="neutral", action="speak")
+
+        assert settings["edge_voice"] == "zh-CN-XiaoyiNeural"
+        assert settings["edge_rate"] == "+14%"
+        assert settings["edge_pitch"] == "+22Hz"
+
+
+def test_tts_runtime_settings_override_voice_pack_profile():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "cat"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps(
+                {
+                    "voice_profiles": {
+                        "default": {
+                            "edge_voice": "zh-CN-XiaomoNeural",
+                            "edge_rate": "-4%",
+                            "edge_pitch": "-8Hz",
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        manager = TTSManager(
+            enabled=False,
+            voice_pack_id="cat",
+            voice_pack_dir=str(base_dir),
+            voice_pack_enabled=True,
+        )
+        manager.apply_runtime_settings(
+            {
+                "enabled": True,
+                "provider": "edge",
+                "edge_voice": "en-US-JennyNeural",
+                "voice_profile": "cute",
+                "cute_style": True,
+            }
+        )
+        settings = manager._voice_settings(pet_id="cat", state="neutral", action="speak")
+
+        assert manager.enabled is True
+        assert manager._provider_order()[0] == "edge"
+        assert settings["edge_voice"] == "en-US-JennyNeural"
+        assert settings["edge_rate"] == "-4%"
+        assert manager.voice_profile == "cute"
+
+
+def test_tts_emotion_style_auto_follows_voice_state_without_overriding_pack():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "cat"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps(
+                {
+                    "voice_profiles": {
+                        "happy.speak": {
+                            "edge_rate": "+7%",
+                            "edge_pitch": "+9Hz",
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        manager = TTSManager(
+            enabled=False,
+            voice_pack_id="cat",
+            voice_pack_dir=str(base_dir),
+            voice_pack_enabled=True,
+        )
+        manager.apply_runtime_settings({"emotion_style": "auto"})
+        settings = manager._voice_settings(pet_id="cat", state="happy", action="speak")
+
+        assert settings["edge_rate"] == "+7%"
+        assert settings["edge_pitch"] == "+9Hz"
+
+
+def test_tts_selected_emotion_style_overrides_pack_profile():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "cat"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps(
+                {
+                    "voice_profiles": {
+                        "default": {
+                            "edge_rate": "+1%",
+                            "edge_pitch": "+1Hz",
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        manager = TTSManager(
+            enabled=False,
+            voice_pack_id="cat",
+            voice_pack_dir=str(base_dir),
+            voice_pack_enabled=True,
+        )
+        manager.apply_runtime_settings({"emotion_style": "comfort"})
+        settings = manager._voice_settings(pet_id="cat", state="happy", action="speak")
+
+        assert settings["edge_rate"] == "-10%"
+        assert settings["edge_pitch"] == "-4Hz"
+        assert settings["cute_style"] is False
+
+
+def test_team_c_uses_pet_state_for_voice_feedback():
+    tts = RecordingTTS()
+    assistant = AIChatVoiceAssistant(
+        llm_client=FakeLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+        pet_id="cat",
+    )
+
+    assistant.chat_with_context("陪我一下", current_state={"mood": "sad", "energy": 18})
+
+    assert tts.calls[-1]["pet_id"] == "cat"
+    assert tts.calls[-1]["state"] == "sad"
+    assert tts.calls[-1]["action"] == "speak"
+
+
+def test_team_c_pet_id_can_follow_active_desktop_pet():
+    tts = RecordingTTS()
+    assistant = AIChatVoiceAssistant(
+        llm_client=FakeLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+        pet_id="cat",
+    )
+    interface = EchoTeamCInterface(assistant)
+
+    interface.api_set_pet_id("zhegou")
+    thread = interface.api_user_speak("你好", {"mood": "happy"}, lambda chunk: None)
+    thread.join(timeout=3)
+
+    assert tts.calls[-1]["pet_id"] == "zhegou"
+    assert tts.calls[-1]["state"] == "happy"
+
+
+def test_team_c_can_switch_voice_pack_without_changing_pet_id():
+    tts = RecordingTTS()
+    assistant = AIChatVoiceAssistant(
+        llm_client=FakeLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+        pet_id="cat",
+    )
+    interface = EchoTeamCInterface(assistant)
+
+    interface.api_set_pet_id("mao_pro_zh")
+    interface.api_set_voice_pack_id("sweet_girl")
+    thread = interface.api_user_speak("你好", {"mood": "happy"}, lambda chunk: None)
+    thread.join(timeout=3)
+
+    assert tts.calls[-1]["pet_id"] == "mao_pro_zh"
+    assert tts.voice_pack_ids[-1] == "sweet_girl"
+
+
+def test_team_c_can_update_tts_runtime_settings():
+    tts = RecordingTTS()
+    assistant = AIChatVoiceAssistant(
+        llm_client=FakeLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+        pet_id="cat",
+    )
+    interface = EchoTeamCInterface(assistant)
+
+    interface.api_set_tts_settings(
+        {
+            "enabled": True,
+            "provider": "edge",
+            "edge_voice": "en-US-JennyNeural",
+            "quality": "neural",
+            "emotion_style": "serious",
+        }
+    )
+
+    assert tts.tts_settings[-1]["provider"] == "edge"
+    assert tts.tts_settings[-1]["edge_voice"] == "en-US-JennyNeural"
+    assert tts.tts_settings[-1]["emotion_style"] == "serious"
+
+
+def test_deepseek_uses_official_chat_url_and_current_default_model():
+    client = DeepSeekClient(api_key="sk-test", api_url="https://api.deepseek.com", force_mock=True)
+
+    assert client.api_url == "https://api.deepseek.com/chat/completions"
+    assert client.model == "deepseek-v4-flash"
+
+
+def test_deepseek_mock_does_not_hide_user_text_when_state_is_normal():
+    client = DeepSeekClient(api_key="", force_mock=True)
+
+    reply = client.generate("我想聊电影", user_state={"state_code": "normal"})
+
+    assert "我想聊电影" in reply
+    assert reply != "我在这儿陪你呀，今天的节奏看起来不错。"
+
+
+def test_deepseek_mock_answers_affection_instead_of_only_recording_it():
+    client = DeepSeekClient(api_key="", force_mock=True)
+
+    reply = client.generate("我喜欢你呀", user_state={"state_code": "normal"})
+
+    assert "记下" not in reply
+    assert "喜欢" in reply
+    assert "开心" in reply
+
+
+def test_deepseek_mock_default_reply_is_contextual_not_note_taking():
+    client = DeepSeekClient(api_key="", force_mock=True)
+
+    reply = client.generate("今天窗外下雨了", user_state={"state_code": "normal"})
+
+    assert "记下" not in reply
+    assert "今天窗外下雨了" in reply
+
+
+def test_team_c_interface_sends_event_dict_callback():
+    assistant = build_test_assistant()
+    interface = EchoTeamCInterface(assistant)
+    done = threading.Event()
+    received = {}
+
+    def callback(event_dict):
+        received.update(event_dict)
+        done.set()
+
+    interface.api_register_logic_callback(callback)
+    thread = interface.api_user_speak("继续学习", {"state_code": "focused"}, lambda chunk: None)
+    thread.join(timeout=3)
+
+    assert done.wait(0.2)
+    assert received["event_type"] == "user_chat"
+    assert received["word_count"] == len("收到：继续学习")
+
+
+def test_team_c_interface_compat_word_count_callback():
+    assistant = build_test_assistant()
+    interface = EchoTeamCInterface(assistant)
+    done = threading.Event()
+    received = []
+
+    def api_on_chat_finished(word_count: int):
+        received.append(word_count)
+        done.set()
+
+    interface.api_register_logic_callback(api_on_chat_finished)
+    thread = interface.api_user_speak("休息一下", {"state_code": "tired"}, lambda chunk: None)
+    thread.join(timeout=3)
+
+    assert done.wait(0.2)
+    assert received == [len("收到：休息一下")]
+
+
+def test_team_c_can_bind_real_team_d_chat_finished_api():
+    assistant = build_test_assistant()
+    interface = EchoTeamCInterface(assistant)
+    pet_state = PetState(mood="neutral", energy=100, intimacy=50)
+    team_d = EchoTeamDInterface(pet_state)
+
+    interface.api_register_logic_callback(team_d.api_on_chat_finished)
+    thread = interface.api_user_speak("今天状态不错", {"state_code": "normal"}, lambda chunk: None)
+    thread.join(timeout=3)
+
+    assert pet_state.energy < 100
+    assert pet_state.intimacy > 50
+    assert pet_state.mood == "happy"
+
+
+def test_team_d_status_listener_emits_one_user_state_alert():
+    pet_state = PetState(mood="neutral", energy=80, intimacy=50)
+    team_d = EchoTeamDInterface(pet_state)
+    done = threading.Event()
+    received = []
+
+    def callback(event_dict):
+        received.append(event_dict)
+        done.set()
+
+    team_d.api_register_status_listener(callback)
+    team_d.api_apply_user_state(
+        {
+            "state_code": "tired",
+            "confidence": 0.9,
+            "duration": 12,
+            "need_response": True,
+            "suggestion": "提醒用户休息一下",
+        }
+    )
+
+    assert done.wait(0.5)
+    assert len(received) == 1
+    assert received[0]["event_type"] == "user_state_alert"
+    assert received[0]["mood"] == "sad"
+    assert received[0]["action"] == "sad"

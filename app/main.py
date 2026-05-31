@@ -8,6 +8,9 @@ import os
 # 将项目根目录加入 sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+
 from app.ui.desktop_pet import DesktopPet
 from app.controller.event_handler import EventHandler
 from app.controller.pet_controller import PetController
@@ -44,6 +47,8 @@ def main():
     logger.info("=" * 50)
 
     # ====== 1. 初始化桌宠 UI (队员A) ======
+    app = QApplication.instance() or QApplication(sys.argv)
+
     pet_image_path = os.path.join(
         "assets", "images", "cat_image_smile_001.png"
     )
@@ -160,25 +165,26 @@ def main():
                 # 注意：主动提示不计入对话字数，不更新状态
 
         # 6e. 定时循环（每 3 秒检测一次）
-        pet.root.after(3000, check_user_state)
+        QTimer.singleShot(3000, check_user_state)
 
     # 启动定时检测（延迟 1 秒后首次执行）
-    pet.root.after(1000, check_user_state)
+    QTimer.singleShot(1000, check_user_state)
     logger.info("[主循环] 定时状态检测已启动（每3秒一次）")
 
     # ====== 8. 启动事件循环（Tkinter主事件循环） ======
     logger.info("启动桌面宠物事件循环...")
     try:
-        pet.root.mainloop()
+        pet.run()
     except KeyboardInterrupt:
         logger.info("用户中断，桌宠退出。")
     except Exception as e:
-        logger.error(f"运行时异常: {e}")
+        logger.exception(f"运行时异常: {e}")
     finally:
         # 停止用户状态检测器（如果已启动）
         # if "user_detector" in dir() and user_detector:
         #     user_detector.stop()
-        pet.close()
+        if getattr(pet, "_running", False):
+            pet.close()
         logger.info("AI_Desktop_Pet 已退出。")
 
 

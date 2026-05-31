@@ -1,41 +1,525 @@
 """
-TTS语音输出（API或本地方法）
+TTS manager with optional local voice packs.
 """
+
+from __future__ import annotations
+
+import asyncio
+import ctypes
 import os
+import platform
+import re
+import shutil
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Any
 
-# TO_DO: 调用TTS生成语音
-# 可以保存到 assets/sounds/{pet_id}_sound_{state}_{action}_001.wav
+from models.tts.voice_pack import VoicePackManager
+from utils.config import config
 
 
-def speak(text: str, pet_id: str = "cat", state: str = "neutral", action: str = "idle"):
-    """
-    TTS语音输出：将文本转为语音并播放
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+URL_RE = re.compile(r"^https?://", re.IGNORECASE)
+TTS_RUNTIME_OVERRIDE_KEYS = (
+    "edge_voice",
+    "edge_rate",
+    "edge_pitch",
+    "edge_volume",
+    "tts_rate",
+    "tts_volume",
+)
 
-    :param text: 要朗读的文本
-    :param pet_id: 桌宠ID（用于文件命名）
-    :param state: 当前状态（用于文件命名）
-    :param action: 当前动作（用于文件命名）
+TTS_EMOTION_STYLE_PROFILES: dict[str, dict[str, Any]] = {
+    "neutral": {
+        "edge_rate": "+0%",
+        "edge_pitch": "+0Hz",
+        "edge_volume": "+0%",
+        "cute_style": False,
+    },
+    "cheerful": {
+        "edge_rate": "+18%",
+        "edge_pitch": "+22Hz",
+        "edge_volume": "+8%",
+        "cute_style": True,
+    },
+    "comfort": {
+        "edge_rate": "-10%",
+        "edge_pitch": "-4Hz",
+        "edge_volume": "+2%",
+        "cute_style": False,
+    },
+    "serious": {
+        "edge_rate": "-6%",
+        "edge_pitch": "-10Hz",
+        "edge_volume": "+2%",
+        "cute_style": False,
+    },
+    "story": {
+        "edge_rate": "-8%",
+        "edge_pitch": "+2Hz",
+        "edge_volume": "+4%",
+        "cute_style": False,
+    },
+    "news": {
+        "edge_rate": "+4%",
+        "edge_pitch": "-4Hz",
+        "edge_volume": "+4%",
+        "cute_style": False,
+    },
+    "playful": {
+        "edge_rate": "+14%",
+        "edge_pitch": "+26Hz",
+        "edge_volume": "+8%",
+        "cute_style": True,
+    },
+}
 
-    TO_DO:
-    - 解析环境变量获取 TTS_API_KEY
-    - 调用TTS API生成语音数据
-    - 保存到 assets/sounds/{pet_id}_sound_{state}_{action}_001.wav
-    - 播放语音文件
-    - 异常处理
-    """
-    # TO_DO: 调用TTS生成语音
-    # 可以保存到 assets/sounds/{pet_id}_sound_{state}_{action}_001.wav
-    print(f"[TTS] 正在合成语音: \"{text}\"")
-    print(f"[TTS] 调用TTS API... (stub)")
+TTS_STATE_TO_EMOTION_STYLE = {
+    "happy": "cheerful",
+    "return": "cheerful",
+    "sad": "comfort",
+    "tired": "comfort",
+    "distracted": "comfort",
+    "away": "comfort",
+    "angry": "serious",
+    "camera_error": "serious",
+    "hungry": "playful",
+    "study_long": "comfort",
+    "focused": "serious",
+}
 
-    # 构建输出路径
-    sounds_dir = os.path.join("assets", "sounds")
-    os.makedirs(sounds_dir, exist_ok=True)
-    output_path = os.path.join(
-        sounds_dir,
-        f"{pet_id}_sound_{state}_{action}_001.wav"
-    )
 
-    # demo阶段仅打印信息，不生成实际语音
-    print(f"[TTS] 语音文件将保存到: {output_path}")
-    print(f"[TTS] 播放语音: \"{text}\" (stub)")
+class TTSManager:
+    _speech_lock = threading.Lock()
+
+    def __init__(
+        self,
+        provider: str | None = None,
+        enabled: bool = True,
+        voice_profile: str = "default",
+        cute_style: bool | None = None,
+        pitch_shift: float = 1.0,
+        voice_pack_id: str = "",
+        voice_pack_dir: str | Path = "assets/voice_packs",
+        voice_pack_enabled: bool | None = None,
+        voice_pack_mode: str | None = None,
+        tts_settings: dict[str, Any] | None = None,
+    ):
+        self.provider = provider or config.TTS_PROVIDER or "auto"
+        self.enabled = bool(enabled)
+        self.voice_profile = voice_profile
+        self.cute_style = bool(cute_style) if cute_style is not None else True
+        self.pitch_shift = float(pitch_shift)
+        self.voice_pack_mode = str(voice_pack_mode or config.get("VOICE_PACK_MODE", "prefer") or "prefer").lower()
+        self.emotion_style = "auto"
+        self._runtime_overrides: dict[str, Any] = {}
+        self.sounds_dir = PROJECT_ROOT / "assets" / "sounds"
+        voice_pack_dir = Path(voice_pack_dir)
+        if not voice_pack_dir.is_absolute():
+            voice_pack_dir = PROJECT_ROOT / voice_pack_dir
+        pack_enabled = (
+            str(config.get("VOICE_PACK_ENABLED", "true")).lower() != "false"
+            if voice_pack_enabled is None
+            else bool(voice_pack_enabled)
+        )
+        self.voice_pack = VoicePackManager(
+            pack_id=voice_pack_id or config.VOICE_PACK_ID,
+            base_dir=voice_pack_dir,
+            enabled=pack_enabled,
+        )
+        if tts_settings:
+            self.apply_runtime_settings(tts_settings)
+
+    def set_voice_pack_id(self, pack_id: str) -> None:
+        self.voice_pack.set_pack_id(pack_id)
+
+    def apply_runtime_settings(self, settings: dict[str, Any] | None) -> None:
+        """Apply UI-selected TTS settings without rebuilding the manager."""
+        if not isinstance(settings, dict):
+            return
+
+        if "enabled" in settings:
+            self.enabled = bool(settings.get("enabled"))
+
+        provider = str(settings.get("provider") or "").strip().lower().replace("_", "-")
+        if provider:
+            if provider in {"disabled", "none", "false"}:
+                provider = "off"
+            self.provider = provider
+            if provider in {"off", "disabled", "none", "false"}:
+                self.enabled = False
+
+        profile = str(settings.get("voice_profile") or "").strip()
+        if profile:
+            self.voice_profile = profile
+        if "cute_style" in settings:
+            self.cute_style = bool(settings.get("cute_style"))
+        style = str(
+            settings.get("emotion_style")
+            or settings.get("tts_style")
+            or settings.get("style")
+            or ""
+        ).strip().lower()
+        if style:
+            self.emotion_style = style
+
+        pack_mode = str(settings.get("voice_pack_mode") or "").strip().lower()
+        if pack_mode:
+            self.voice_pack_mode = pack_mode
+
+        overrides: dict[str, Any] = {}
+        for key in TTS_RUNTIME_OVERRIDE_KEYS:
+            if key not in settings:
+                continue
+            value = settings.get(key)
+            if value is None or value == "":
+                continue
+            overrides[key] = value
+        self._runtime_overrides = overrides
+
+    def speak(self, text: str, pet_id: str = "cat", state: str = "neutral", action: str = "speak"):
+        settings = self._voice_settings(pet_id=pet_id, state=state, action=action)
+        spoken = self._prepare_spoken_text(text, cute_style=bool(settings.get("cute_style", self.cute_style)))
+        if not spoken:
+            return None
+
+        if self.voice_pack_mode in {"prefer", "only"}:
+            clip = self.voice_pack.pick_clip(spoken, state=state, action=action)
+            if clip:
+                self._play_media(clip)
+                return str(clip)
+            if self.voice_pack_mode == "only":
+                return None
+
+        if not self.enabled:
+            print(f"[TTS] {spoken}")
+            return None
+
+        print(
+            "[TTS] "
+            f"provider={self.provider}, voice={settings['edge_voice']}, "
+            f"rate={settings['edge_rate']}, pitch={settings['edge_pitch']}: {spoken}"
+        )
+
+        with self._speech_lock:
+            for backend in self._provider_order():
+                try:
+                    if backend == "edge":
+                        return self._speak_edge(spoken, pet_id, state, action, settings)
+                    if backend == "pyttsx3":
+                        return self._speak_pyttsx3(spoken, settings)
+                    if backend == "windows-sapi":
+                        return self._speak_windows_sapi(spoken, settings)
+                except Exception as exc:
+                    print(f"[TTS] {backend} 播放失败: {exc}")
+            if self.voice_pack_mode == "fallback":
+                clip = self.voice_pack.pick_clip(spoken, state=state, action=action)
+                if clip:
+                    self._play_media(clip)
+                    return str(clip)
+        return None
+
+    def _prepare_spoken_text(self, text: str, cute_style: bool | None = None) -> str:
+        value = (text or "").strip()
+        if not value:
+            return ""
+        if URL_RE.match(value):
+            return value
+        use_cute_style = self.cute_style if cute_style is None else bool(cute_style)
+        if not use_cute_style or self.voice_profile not in {"cute", "cheerful", "playful"}:
+            return value
+        if value.endswith(("？", "?", "！", "!", "～", "~")):
+            return value
+        if value.endswith("。"):
+            return value[:-1] + "呀。"
+        if value.endswith("."):
+            return value[:-1] + "呀."
+        return value + "呀"
+
+    def _select_voice_id(self, engine: Any) -> str | None:
+        voices = engine.getProperty("voices") or []
+        if self.voice_profile == "cute":
+            for voice in voices:
+                name = f"{getattr(voice, 'name', '')} {getattr(voice, 'id', '')}".lower()
+                gender = str(getattr(voice, "gender", "")).lower()
+                langs = " ".join(str(x).lower() for x in getattr(voice, "languages", []) or [])
+                if (
+                    ("female" in gender or any(key in name for key in ("xiaoyi", "xiaoxiao", "huihui", "yaoyao")))
+                    and ("zh" in langs or "zh" in name or "xiaoyi" in name)
+                ):
+                    return getattr(voice, "id", None)
+        return getattr(voices[0], "id", None) if voices else None
+
+    def _voice_settings(self, pet_id: str = "cat", state: str = "neutral", action: str = "speak") -> dict:
+        settings = {
+            "edge_voice": config.EDGE_TTS_VOICE,
+            "edge_rate": os.getenv("EDGE_TTS_RATE", "+8%"),
+            "edge_pitch": os.getenv("EDGE_TTS_PITCH", "+12Hz"),
+            "edge_volume": os.getenv("EDGE_TTS_VOLUME", "+8%"),
+            "cute_style": self.cute_style,
+        }
+        selected_style = self._resolve_emotion_style(state=state, action=action)
+        auto_profile = TTS_EMOTION_STYLE_PROFILES.get(selected_style, {})
+        if auto_profile and self._emotion_style_is_auto():
+            settings.update(auto_profile)
+        profile = self.voice_pack.voice_profile(state=state, action=action)
+        if profile:
+            settings.update(profile)
+        if auto_profile and not self._emotion_style_is_auto():
+            settings.update(auto_profile)
+        settings.update(self._runtime_overrides)
+        return settings
+
+    def _emotion_style_is_auto(self) -> bool:
+        return (self.emotion_style or "auto").strip().lower() in {"", "auto", "follow", "follow-state"}
+
+    def _resolve_emotion_style(self, state: str = "neutral", action: str = "speak") -> str:
+        requested = (self.emotion_style or "auto").strip().lower().replace("_", "-")
+        aliases = {
+            "natural": "neutral",
+            "default": "neutral",
+            "calm": "comfort",
+            "gentle": "comfort",
+            "soothing": "comfort",
+            "happy": "cheerful",
+            "professional": "serious",
+            "storytelling": "story",
+            "broadcast": "news",
+        }
+        requested = aliases.get(requested, requested)
+        if requested and requested not in {"auto", "follow", "follow-state"}:
+            return requested
+
+        for value in (state, action):
+            key = str(value or "").strip().lower().replace("_", "-")
+            if key in TTS_STATE_TO_EMOTION_STYLE:
+                return TTS_STATE_TO_EMOTION_STYLE[key]
+            if key in TTS_EMOTION_STYLE_PROFILES:
+                return key
+        return "neutral"
+
+    def _provider_order(self) -> tuple[str, ...]:
+        windows_fallback = ("windows-sapi",) if platform.system() == "Windows" else ()
+        provider = (self.provider or "auto").strip().lower().replace("_", "-")
+        if provider in {"", "auto"}:
+            return ("edge", "pyttsx3") + windows_fallback
+        if provider in {"edge", "edge-tts", "neural", "edge-neural", "high-realism"}:
+            return ("edge", "pyttsx3") + windows_fallback
+        if provider in {"pyttsx3", "offline", "local"}:
+            return ("pyttsx3",) + windows_fallback
+        if provider in {"off", "none", "disabled", "false"}:
+            return ()
+        return ("edge", "pyttsx3") + windows_fallback
+
+    def _speak_edge(self, text: str, pet_id: str, state: str, action: str, settings: dict) -> str:
+        try:
+            import edge_tts
+        except ImportError as exc:
+            raise RuntimeError("edge-tts 未安装") from exc
+
+        output_path = self._next_audio_path(pet_id=pet_id, state=state, action=action, suffix=".mp3")
+
+        async def save_audio() -> None:
+            communicate = edge_tts.Communicate(
+                text,
+                voice=str(settings.get("edge_voice") or config.EDGE_TTS_VOICE),
+                rate=str(settings.get("edge_rate") or "+0%"),
+                volume=str(settings.get("edge_volume") or "+0%"),
+                pitch=str(settings.get("edge_pitch") or "+0Hz"),
+            )
+            await communicate.save(str(output_path))
+
+        self._run_async(save_audio)
+        if not output_path.exists() or output_path.stat().st_size <= 0:
+            raise RuntimeError("edge-tts 没有生成音频文件")
+        self._play_media(output_path)
+        return str(output_path)
+
+    def _speak_pyttsx3(self, text: str, settings: dict) -> None:
+        try:
+            import pyttsx3
+        except ImportError as exc:
+            raise RuntimeError("pyttsx3 未安装") from exc
+
+        engine = pyttsx3.init()
+        try:
+            print("[TTS] 使用 pyttsx3 离线播放")
+            voice_id = self._select_voice_id(engine)
+            if voice_id:
+                engine.setProperty("voice", voice_id)
+            engine.setProperty("rate", _int_setting(settings.get("tts_rate"), "TTS_RATE", 168))
+            engine.setProperty("volume", _float_setting(settings.get("tts_volume"), "TTS_VOLUME", 0.95))
+            engine.say(text)
+            engine.runAndWait()
+        finally:
+            try:
+                engine.stop()
+            except Exception:
+                pass
+        return None
+
+    def _speak_windows_sapi(self, text: str, settings: dict) -> None:
+        if platform.system() != "Windows":
+            raise RuntimeError("Windows SAPI 仅支持 Windows")
+
+        powershell = (
+            shutil.which("powershell.exe")
+            or r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        )
+        if not powershell or not Path(powershell).exists():
+            raise RuntimeError("未找到 Windows PowerShell")
+
+        rate = max(-10, min(10, round((_int_setting(settings.get("tts_rate"), "TTS_RATE", 168) - 168) / 16)))
+        volume = round(_float_setting(settings.get("tts_volume"), "TTS_VOLUME", 0.95) * 100)
+        script = f"""
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+Add-Type -AssemblyName System.Speech
+$text = [Console]::In.ReadToEnd()
+$synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+$synth.Rate = {rate}
+$synth.Volume = {volume}
+try {{
+  $synth.Speak($text)
+}} finally {{
+  $synth.Dispose()
+}}
+"""
+        print("[TTS] 使用 Windows SAPI 兜底播放")
+        subprocess.run(
+            [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            input=text,
+            text=True,
+            encoding="utf-8",
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+        )
+        return None
+
+    def _play_media(self, path: str | Path) -> None:
+        media_path = Path(path)
+        if not media_path.exists():
+            raise FileNotFoundError(media_path)
+        print(f"[TTS] 播放本地音频: {media_path}")
+
+        if platform.system() == "Windows":
+            if media_path.suffix.lower() == ".wav":
+                try:
+                    import winsound
+
+                    winsound.PlaySound(str(media_path), winsound.SND_FILENAME)
+                    return
+                except Exception:
+                    pass
+            self._play_media_windows(media_path)
+            return
+
+        player = self._find_player()
+        if player:
+            subprocess.run(player + [str(media_path)], check=True)
+            return
+        print("[TTS] 未找到可用播放器，已生成音频但未播放。")
+
+    def _next_audio_path(self, pet_id: str, state: str, action: str, suffix: str) -> Path:
+        self.sounds_dir.mkdir(parents=True, exist_ok=True)
+        stamp = f"{int(time.time() * 1000)}_{threading.get_ident()}"
+        filename = f"{_safe_name(pet_id)}_sound_{_safe_name(state)}_{_safe_name(action)}_{stamp}{suffix}"
+        return self.sounds_dir / filename
+
+    @staticmethod
+    def _run_async(async_factory) -> Any:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(async_factory())
+
+        result: dict[str, Any] = {}
+
+        def runner() -> None:
+            try:
+                result["value"] = asyncio.run(async_factory())
+            except BaseException as exc:
+                result["error"] = exc
+
+        thread = threading.Thread(target=runner, daemon=True)
+        thread.start()
+        thread.join()
+        if "error" in result:
+            raise result["error"]
+        return result.get("value")
+
+    @staticmethod
+    def _play_media_windows(path: Path) -> None:
+        alias = f"tts_{time.time_ns()}"
+        suffix = path.suffix.lower()
+        if suffix == ".mp3":
+            open_command = f'open "{path}" type mpegvideo alias {alias}'
+        else:
+            open_command = f'open "{path}" alias {alias}'
+        try:
+            _mci_send(open_command)
+            _mci_send(f"play {alias} wait")
+        finally:
+            try:
+                _mci_send(f"close {alias}")
+            except Exception:
+                pass
+
+    @staticmethod
+    def _find_player() -> list[str] | None:
+        candidates = (
+            ("ffplay", ["-nodisp", "-autoexit", "-loglevel", "quiet"]),
+            ("afplay", []),
+            ("mpg123", ["-q"]),
+            ("aplay", []),
+        )
+        for name, args in candidates:
+            exe = shutil.which(name)
+            if exe:
+                return [exe] + args
+        return None
+
+
+def _mci_send(command: str) -> None:
+    error = ctypes.windll.winmm.mciSendStringW(command, None, 0, None)
+    if error:
+        buffer = ctypes.create_unicode_buffer(255)
+        ctypes.windll.winmm.mciGetErrorStringW(error, buffer, len(buffer))
+        raise RuntimeError(f"MCI error {error}: {buffer.value}")
+
+
+def _safe_name(value: str) -> str:
+    cleaned = re.sub(r"[^0-9A-Za-z_.-]+", "_", str(value or "").strip())
+    return cleaned.strip("._") or "pet"
+
+
+def _int_setting(value: Any, env_key: str, default: int) -> int:
+    raw = value if value is not None else os.getenv(env_key, default)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_setting(value: Any, env_key: str, default: float) -> float:
+    raw = value if value is not None else os.getenv(env_key, default)
+    try:
+        return max(0.0, min(1.0, float(raw)))
+    except (TypeError, ValueError):
+        return default
+
+
+_default_manager: TTSManager | None = None
+
+
+def _manager() -> TTSManager:
+    global _default_manager
+    if _default_manager is None:
+        _default_manager = TTSManager()
+    return _default_manager
+
+
+def speak(text: str, pet_id: str = "cat", state: str = "neutral", action: str = "speak"):
+    return _manager().speak(text, pet_id=pet_id, state=state, action=action)
