@@ -2113,13 +2113,13 @@ class DesktopPet:
     self._computer_activity_detector: ComputerActivityDetector | None = None
     if self._computer_companion_enabled:
       self._computer_activity_detector = ComputerActivityDetector(
-        min_comment_duration=_config_float("COMPUTER_ACTIVITY_MIN_DURATION", 45.0)
+        min_comment_duration=_config_float("COMPUTER_ACTIVITY_MIN_DURATION", 0.0)
       )
     self._computer_comment_timer: Optional[QTimer] = None
     self._computer_comment_busy = False
     self._last_computer_comment_at = 0.0
     self._last_computer_comment_signature = ""
-    self._computer_poll_ms = max(2000, _config_int("COMPUTER_ACTIVITY_POLL_MS", 5000))
+    self._computer_poll_ms = max(500, _config_int("COMPUTER_ACTIVITY_POLL_MS", 1000))
     self._computer_comment_cooldown = max(30.0, _config_float("COMPUTER_ACTIVITY_COMMENT_COOLDOWN", 150.0))
 
     self._bind_team_interfaces()

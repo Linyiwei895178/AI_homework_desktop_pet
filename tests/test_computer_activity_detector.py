@@ -8,6 +8,8 @@ from models.nlp.prompt_builder import build_proactive_prompt, build_state_contex
 from models.vision.computer_activity_detector import (
     ACTIVITY_GAMING,
     ACTIVITY_WATCHING,
+    ComputerActivityDetector,
+    ForegroundWindow,
     build_companion_event,
     build_local_companion_comment,
     classify_window_activity,
@@ -51,6 +53,23 @@ def test_builds_companion_event_for_commentable_activity():
     assert event["activity_code"] == ACTIVITY_WATCHING
     assert event["need_response"] is True
     assert "看剧" in event["suggestion"] or "视频" in event["suggestion"]
+
+
+def test_default_detector_comments_on_first_game_detection():
+    detector = ComputerActivityDetector()
+    detector._read_foreground_window = lambda: ForegroundWindow(
+        hwnd=1,
+        process_name="Stardew Valley.exe",
+        process_path="",
+        window_title="Stardew Valley",
+        is_fullscreen=True,
+    )
+
+    state = detector.get_state()
+
+    assert state["activity_code"] == ACTIVITY_GAMING
+    assert state["duration"] == 0.0
+    assert state["need_response"] is True
 
 
 def test_prompt_builder_includes_computer_activity_context():

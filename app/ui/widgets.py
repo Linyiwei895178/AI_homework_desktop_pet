@@ -71,6 +71,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from models.tts.voice_pack import (
+    AUDIO_SAMPLE_EXTENSIONS,
+    IMPORT_SAMPLE_EXTENSIONS,
+    VOICE_PACK_LANGUAGE_PRESETS,
+    create_imported_voice_pack,
+)
 from utils.logger import get_logger
 
 # ---------------------------------------------------------------------------
@@ -213,6 +219,7 @@ TTS_STYLE_PRESETS: tuple[dict[str, Any], ...] = (
     {"id": "auto", "label": "自动跟随情绪", "voice_profile": "default", "cute_style": True},
     {"id": "neutral", "label": "自然", "voice_profile": "default", "cute_style": False},
     {"id": "cheerful", "label": "开心活泼", "voice_profile": "cute", "cute_style": True},
+    {"id": "playful", "label": "顽皮童声", "voice_profile": "playful", "cute_style": True},
     {"id": "comfort", "label": "温柔安抚", "voice_profile": "calm", "cute_style": False},
     {"id": "serious", "label": "严肃专业", "voice_profile": "default", "cute_style": False},
     {"id": "story", "label": "故事旁白", "voice_profile": "default", "cute_style": False},
@@ -1283,7 +1290,7 @@ def scan_voice_packs(project_root: str) -> list[dict]:
     packs: list[dict] = [
         {
             "id": "",
-            "name": "默认",
+            "name": "跟随语音包 / 默认",
             "display_name": "默认",
             "icon": "🎙️",
             "description": "跟随当前角色或 .env 默认音色。",
@@ -1308,6 +1315,8 @@ def scan_voice_packs(project_root: str) -> list[dict]:
             data = {}
         pack_id = str(data.get("id") or dirname).strip() or dirname
         name = str(data.get("display_name") or data.get("name") or pack_id).strip() or pack_id
+        noise_reduction = data.get("noise_reduction") if isinstance(data.get("noise_reduction"), dict) else {}
+        conversions = data.get("conversions") if isinstance(data.get("conversions"), list) else []
         packs.append(
             {
                 "id": pack_id,
@@ -1316,9 +1325,175 @@ def scan_voice_packs(project_root: str) -> list[dict]:
                 "icon": str(data.get("icon") or "🎙️"),
                 "description": str(data.get("description") or "TTS 音色参数包。"),
                 "sample_text": str(data.get("sample_text") or "你好呀，今天也一起加油。"),
+                "language": data.get("language") if isinstance(data.get("language"), dict) else {},
+                "is_custom": bool(data.get("is_custom", False)),
+                "sample_count": int((data.get("analysis") or {}).get("sample_count") or 0)
+                if isinstance(data.get("analysis"), dict)
+                else len(data.get("samples") or []) if isinstance(data.get("samples"), list) else 0,
+                "denoised_count": int(noise_reduction.get("processed_count") or 0),
+                "converted_count": len(conversions),
             }
         )
     return packs
+
+
+def tts_voice_preset_choices(current_edge_voice: str = "") -> list[dict]:
+    """把固定 Edge 音色也作为语音包列表里的同级选项。"""
+    preset_values = {voice_id for _label, voice_id in TTS_VOICE_PRESETS if voice_id}
+    choices: list[dict] = []
+    for label, voice_id in TTS_VOICE_PRESETS:
+        voice_id = str(voice_id or "").strip()
+        if not voice_id:
+            continue
+        choices.append(
+            {
+                "id": "",
+                "name": label,
+                "display_name": label,
+                "icon": "🔊",
+                "description": f"固定 Edge TTS 音色：{voice_id}。选择后会覆盖语音包内置音色。",
+                "sample_text": "你好呀，今天也一起加油。",
+                "kind": "edge_voice",
+                "edge_voice": voice_id,
+            }
+        )
+    current_edge_voice = str(current_edge_voice or "").strip()
+    if current_edge_voice and current_edge_voice not in preset_values:
+        choices.append(
+            {
+                "id": "",
+                "name": current_edge_voice,
+                "display_name": current_edge_voice,
+                "icon": "🔊",
+                "description": "当前自定义 Edge TTS 音色。",
+                "sample_text": "你好呀，今天也一起加油。",
+                "kind": "edge_voice",
+                "edge_voice": current_edge_voice,
+            }
+        )
+    return choices
+
+
+class VoicePackImportDialog(QDialog):
+    def __init__(self, project_root: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._project_root = project_root
+        self._files: list[str] = []
+        self._result_pack: dict[str, Any] | None = None
+
+        self.setWindowTitle("导入语音包")
+        self.resize(460, 360)
+        lay = QVBoxLayout(self)
+
+        lay.addWidget(QLabel("语音包名称"))
+        self._name = QLineEdit()
+        self._name.setPlaceholderText("例如：我的中文语音")
+        lay.addWidget(self._name)
+
+        lay.addWidget(QLabel("语言"))
+        self._language = QComboBox()
+        for preset in VOICE_PACK_LANGUAGE_PRESETS:
+            self._language.addItem(str(preset["label"]), str(preset["id"]))
+        lay.addWidget(self._language)
+
+        row = QHBoxLayout()
+        file_btn = QPushButton("选择音频或 MP4")
+        file_btn.setStyleSheet(BTN_GLASS)
+        file_btn.clicked.connect(self._choose_files)
+        folder_btn = QPushButton("导入文件夹")
+        folder_btn.setStyleSheet(BTN_GLASS)
+        folder_btn.clicked.connect(self._choose_folder)
+        row.addWidget(file_btn)
+        row.addWidget(folder_btn)
+        lay.addLayout(row)
+
+        self._file_summary = QLabel("尚未选择音频或 MP4 样本，可一次选择一个或多个文件")
+        self._file_summary.setWordWrap(True)
+        self._file_summary.setStyleSheet("color:#64748b;font-size:12px;")
+        lay.addWidget(self._file_summary, 1)
+
+        hint = QLabel("导入后会保存到 assets/voice_packs；MP4 会先抽取音轨转成 MP3。WAV 样本会生成轻度降噪副本，原始文件不覆盖、不改写。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#94a3b8;font-size:12px;")
+        lay.addWidget(hint)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self._accept_import)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+
+    def result_pack(self) -> dict[str, Any] | None:
+        return self._result_pack
+
+    def _choose_files(self) -> None:
+        exts = " ".join(f"*{ext}" for ext in IMPORT_SAMPLE_EXTENSIONS)
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "选择语音样本",
+            self._project_root,
+            f"音频/视频文件 ({exts});;音频文件 ({' '.join(f'*{ext}' for ext in AUDIO_SAMPLE_EXTENSIONS)});;MP4 视频 (*.mp4);;所有文件 (*.*)",
+        )
+        self._add_files(paths)
+
+    def _choose_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "选择语音包文件夹", self._project_root)
+        if not folder:
+            return
+        found: list[str] = []
+        for root, _dirs, files in os.walk(folder):
+            for fname in files:
+                if os.path.splitext(fname)[1].lower() in IMPORT_SAMPLE_EXTENSIONS:
+                    found.append(os.path.join(root, fname))
+        if not found:
+            QMessageBox.warning(self, "未找到音频", "这个文件夹里没有可导入的音频或 MP4 文件。")
+            return
+        self._add_files(found)
+
+    def _add_files(self, paths: list[str]) -> None:
+        seen = {os.path.normcase(os.path.abspath(path)) for path in self._files}
+        for path in paths or []:
+            if not os.path.isfile(path):
+                continue
+            if os.path.splitext(path)[1].lower() not in IMPORT_SAMPLE_EXTENSIONS:
+                continue
+            key = os.path.normcase(os.path.abspath(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            self._files.append(path)
+        self._refresh_file_summary()
+
+    def _refresh_file_summary(self) -> None:
+        if not self._files:
+            self._file_summary.setText("尚未选择音频或 MP4 样本")
+            return
+        names = [os.path.basename(path) for path in self._files[:6]]
+        more = len(self._files) - len(names)
+        text = f"已选择 {len(self._files)} 个音频样本\n" + "\n".join(names)
+        if more > 0:
+            text += f"\n... 还有 {more} 个"
+        self._file_summary.setText(text)
+
+    def _accept_import(self) -> None:
+        name = self._name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "缺少名称", "请填写语音包名称。")
+            return
+        if not self._files:
+            QMessageBox.warning(self, "缺少音频", "请至少选择一个本地音频或 MP4 样本，也可以一次选择多个。")
+            return
+        base_dir = os.path.join(self._project_root, "assets", "voice_packs")
+        try:
+            self._result_pack = create_imported_voice_pack(
+                display_name=name,
+                language_id=str(self._language.currentData() or "zh-CN"),
+                sample_paths=self._files,
+                base_dir=base_dir,
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "导入失败", f"语音包导入失败：{exc}")
+            return
+        self.accept()
 
 
 def _stem_no_ext(path: str) -> str:
@@ -2861,7 +3036,6 @@ class ControlConsole(QMainWindow):
         menu_lay.addWidget(QLabel("<b>AI 对话</b>"))
         self._ai_tool_btns: dict[str, QPushButton] = {}
         for key, icon, label in (
-            ("roles", "👤", "角色选择"),
             ("voice_pack", "🎙️", "语音包选择"),
             ("history", "💬", "聊天记录"),
             ("voice_settings", "🔊", "语音设置"),
@@ -2876,34 +3050,30 @@ class ControlConsole(QMainWindow):
         lay.addWidget(menu_panel)
 
         self._ai_tool_stack = QStackedWidget()
-        self._ai_tool_stack.addWidget(self._ai_roles_page())
         self._ai_tool_stack.addWidget(self._ai_voice_pack_page())
         self._ai_tool_stack.addWidget(self._ai_history_page())
         self._ai_tool_stack.addWidget(self._ai_voice_settings_page())
         lay.addWidget(self._ai_tool_stack, 1)
 
-        self._refresh_contact_list()
+        if self._chats:
+            self._pick_chat(0)
         self._apply_tts_controls_from_settings()
         self._refresh_voice_pack_list()
-        self._switch_ai_tool("roles")
+        self._switch_ai_tool("voice_pack")
         return w
-
-    def _ai_roles_page(self) -> QWidget:
-        page = QFrame()
-        page.setStyleSheet(_glass_style(14))
-        lay = QVBoxLayout(page)
-        lay.addWidget(QLabel("<b>角色选择</b>"))
-        self._contact_btns = []
-        self._contact_list = QListWidget()
-        self._contact_list.itemClicked.connect(self._pick_chat_by_name)
-        lay.addWidget(self._contact_list, 1)
-        return page
 
     def _ai_voice_pack_page(self) -> QWidget:
         page = QFrame()
         page.setStyleSheet(_glass_style(14))
         lay = QVBoxLayout(page)
-        lay.addWidget(QLabel("<b>语音包选择</b>"))
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<b>语音包选择</b>"))
+        header.addStretch()
+        import_btn = QPushButton("导入语音包")
+        import_btn.setStyleSheet(BTN_PRIMARY)
+        import_btn.clicked.connect(self._import_voice_pack)
+        header.addWidget(import_btn)
+        lay.addLayout(header)
         self._voice_pack_list = QListWidget()
         self._voice_pack_list.itemClicked.connect(self._pick_voice_pack_by_item)
         lay.addWidget(self._voice_pack_list, 1)
@@ -2912,6 +3082,21 @@ class ControlConsole(QMainWindow):
         self._voice_pack_detail.setStyleSheet("color:#64748b;font-size:12px;")
         lay.addWidget(self._voice_pack_detail)
         return page
+
+    def _import_voice_pack(self) -> None:
+        dlg = VoicePackImportDialog(self._project_root, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        pack = dlg.result_pack()
+        if not pack:
+            return
+        self._voice_pack_id = str(pack.get("id") or "").strip()
+        self._refresh_voice_pack_list()
+        selected = next(
+            (p for p in self._voice_packs if str(p.get("id", "")).strip() == self._voice_pack_id),
+            pack,
+        )
+        self._select_voice_pack(selected, toast_prefix="已导入并切换语音包")
 
     def _ai_history_page(self) -> QWidget:
         page = QFrame()
@@ -2957,12 +3142,6 @@ class ControlConsole(QMainWindow):
             self._tts_quality_combo.addItem(str(preset["label"]), str(preset["id"]))
         self._tts_quality_combo.currentIndexChanged.connect(self._on_tts_controls_changed)
         lay.addWidget(self._tts_quality_combo)
-        lay.addWidget(QLabel("语言 / 音色"))
-        self._tts_voice_combo = QComboBox()
-        for label, voice_id in TTS_VOICE_PRESETS:
-            self._tts_voice_combo.addItem(label, voice_id)
-        self._tts_voice_combo.currentIndexChanged.connect(self._on_tts_controls_changed)
-        lay.addWidget(self._tts_voice_combo)
         lay.addWidget(QLabel("情感 / 风格"))
         self._tts_style_combo = QComboBox()
         for preset in TTS_STYLE_PRESETS:
@@ -2978,10 +3157,9 @@ class ControlConsole(QMainWindow):
 
     def _switch_ai_tool(self, key: str) -> None:
         idx = {
-            "roles": 0,
-            "voice_pack": 1,
-            "history": 2,
-            "voice_settings": 3,
+            "voice_pack": 0,
+            "history": 1,
+            "voice_settings": 2,
         }.get(key, 0)
         if hasattr(self, "_ai_tool_stack"):
             self._ai_tool_stack.setCurrentIndex(idx)
@@ -3004,10 +3182,10 @@ class ControlConsole(QMainWindow):
         self._tts_control_syncing = True
         self._tts_enabled_check.setChecked(bool(self._tts_settings.get("enabled", True)))
         self._set_combo_current_data(self._tts_quality_combo, str(self._tts_settings.get("quality") or "basic"))
-        self._set_combo_current_data(self._tts_voice_combo, str(self._tts_settings.get("edge_voice") or ""))
         self._set_combo_current_data(self._tts_style_combo, str(self._tts_settings.get("emotion_style") or "auto"))
         self._tts_control_syncing = False
         self._render_tts_detail()
+        self._render_current_voice_pack_detail()
 
     def _on_tts_controls_changed(self, *_args: Any) -> None:
         if self._tts_control_syncing or not hasattr(self, "_tts_quality_combo"):
@@ -3024,7 +3202,6 @@ class ControlConsole(QMainWindow):
                 "quality": quality_id,
                 "provider": str(preset.get("provider") or "auto"),
                 "enabled": bool(self._tts_enabled_check.isChecked()) and bool(preset.get("enabled", True)),
-                "edge_voice": str(self._tts_voice_combo.currentData() or ""),
                 "emotion_style": style_id,
                 "voice_profile": str(style.get("voice_profile") or "default"),
                 "cute_style": bool(style.get("cute_style", False)),
@@ -3032,6 +3209,7 @@ class ControlConsole(QMainWindow):
         )
         self._tts_settings = normalize_tts_settings(settings)
         self._render_tts_detail()
+        self._render_current_voice_pack_detail()
         if self.on_tts_settings_changed:
             self.on_tts_settings_changed(dict(self._tts_settings))
 
@@ -3043,31 +3221,35 @@ class ControlConsole(QMainWindow):
             (str(p["label"]) for p in TTS_QUALITY_PRESETS if str(p["id"]) == settings.get("quality")),
             "基础语音合成",
         )
-        voice = next(
-            (label for label, value in TTS_VOICE_PRESETS if value == settings.get("edge_voice")),
-            str(settings.get("edge_voice") or "跟随语音包 / 默认"),
-        )
         style = next(
             (str(p["label"]) for p in TTS_STYLE_PRESETS if str(p["id"]) == settings.get("emotion_style")),
             "自动跟随情绪",
         )
         enabled = "已启用" if settings.get("enabled") else "已关闭"
-        self._tts_detail.setText(f"{enabled} · {mode}\n{voice} · {style}")
+        self._tts_detail.setText(f"{enabled} · {mode}\n情感 / 风格: {style}")
+
+    def _current_tts_voice_label(self) -> str:
+        settings = normalize_tts_settings(self._tts_settings)
+        return next(
+            (label for label, value in TTS_VOICE_PRESETS if value == settings.get("edge_voice")),
+            str(settings.get("edge_voice") or "跟随语音包 / 默认"),
+        )
 
     def _refresh_voice_pack_list(self) -> None:
         if not hasattr(self, "_voice_pack_list"):
             return
-        self._voice_packs = scan_voice_packs(self._project_root)
+        current_voice = str(normalize_tts_settings(self._tts_settings).get("edge_voice") or "").strip()
+        self._voice_packs = scan_voice_packs(self._project_root) + tts_voice_preset_choices(current_voice)
         self._voice_pack_list.clear()
-        current = (self._voice_pack_id or "").strip()
+        current = self._current_voice_choice_key()
         selected_row = 0
-        found_current = not current
+        found_current = False
         for i, pack in enumerate(self._voice_packs):
             item = QListWidgetItem(f"{pack.get('icon', '🎙️')}  {pack.get('name', pack.get('id', ''))}")
-            item.setData(Qt.ItemDataRole.UserRole, pack.get("id", ""))
+            item.setData(Qt.ItemDataRole.UserRole, self._voice_choice_key(pack))
             item.setToolTip(str(pack.get("description", "")))
             self._voice_pack_list.addItem(item)
-            if str(pack.get("id", "")).strip() == current:
+            if self._voice_choice_key(pack) == current:
                 selected_row = i
                 found_current = True
         if not found_current:
@@ -3077,40 +3259,95 @@ class ControlConsole(QMainWindow):
         if self._voice_packs:
             self._render_voice_pack_detail(self._voice_packs[selected_row])
 
+    @staticmethod
+    def _voice_choice_key(pack: dict) -> str:
+        if str(pack.get("kind") or "") == "edge_voice":
+            return f"edge_voice:{str(pack.get('edge_voice') or '').strip()}"
+        return f"voice_pack:{str(pack.get('id') or '').strip()}"
+
+    def _current_voice_choice_key(self) -> str:
+        edge_voice = str(normalize_tts_settings(self._tts_settings).get("edge_voice") or "").strip()
+        if edge_voice:
+            return f"edge_voice:{edge_voice}"
+        return f"voice_pack:{(self._voice_pack_id or '').strip()}"
+
+    def _render_current_voice_pack_detail(self) -> None:
+        if not hasattr(self, "_voice_pack_list") or not self._voice_packs:
+            return
+        row = self._voice_pack_list.currentRow()
+        if row < 0 or row >= len(self._voice_packs):
+            row = 0
+        self._render_voice_pack_detail(self._voice_packs[row])
+
+    def _set_current_voice_choice_row(self) -> None:
+        if not hasattr(self, "_voice_pack_list") or not self._voice_packs:
+            return
+        current = self._current_voice_choice_key()
+        for i, pack in enumerate(self._voice_packs):
+            if self._voice_choice_key(pack) == current:
+                self._voice_pack_list.setCurrentRow(i)
+                return
+
     def _pick_voice_pack_by_item(self, item: QListWidgetItem) -> None:
-        pack_id = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
-        pack = next((p for p in self._voice_packs if str(p.get("id", "")).strip() == pack_id), None)
+        choice_key = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+        pack = next((p for p in self._voice_packs if self._voice_choice_key(p) == choice_key), None)
         if pack is None:
             return
+        self._select_voice_pack(pack, toast_prefix="已切换语音包")
+
+    def _select_voice_pack(self, pack: dict, toast_prefix: str = "已切换语音包") -> None:
+        if str(pack.get("kind") or "") == "edge_voice":
+            voice_id = str(pack.get("edge_voice") or "").strip()
+            self._voice_pack_id = ""
+            settings = dict(self._tts_settings)
+            settings["edge_voice"] = voice_id
+            self._tts_settings = normalize_tts_settings(settings)
+            if self.on_voice_pack_changed:
+                self.on_voice_pack_changed({"id": "", "name": pack.get("name") or "默认"})
+            if self.on_tts_settings_changed:
+                self.on_tts_settings_changed(dict(self._tts_settings))
+            self._render_tts_detail()
+            self._set_current_voice_choice_row()
+            self._render_voice_pack_detail(pack)
+            self._show_toast(f"{toast_prefix}: {pack.get('name') or pack.get('display_name') or '默认'}")
+            return
+
+        pack_id = str(pack.get("id", "")).strip()
         self._voice_pack_id = pack_id
+        if str(self._tts_settings.get("edge_voice") or "").strip():
+            settings = dict(self._tts_settings)
+            settings["edge_voice"] = ""
+            self._tts_settings = normalize_tts_settings(settings)
+            self._apply_tts_controls_from_settings()
+            if self.on_tts_settings_changed:
+                self.on_tts_settings_changed(dict(self._tts_settings))
+        self._set_current_voice_choice_row()
         self._render_voice_pack_detail(pack)
         if self.on_voice_pack_changed:
             self.on_voice_pack_changed(pack)
-        self._show_toast(f"已切换语音包: {pack.get('name', '默认')}")
+        self._show_toast(f"{toast_prefix}: {pack.get('name') or pack.get('display_name') or '默认'}")
 
     def _render_voice_pack_detail(self, pack: dict) -> None:
         if not hasattr(self, "_voice_pack_detail"):
             return
         desc = str(pack.get("description") or "")
         sample = str(pack.get("sample_text") or "")
+        lines = [desc] if desc else []
+        language = pack.get("language")
+        if isinstance(language, dict) and language.get("label"):
+            lines.append(f"语言: {language.get('label')}")
+        if pack.get("is_custom"):
+            sample_count = int(pack.get("sample_count") or 0)
+            lines.append(f"本地样本: {sample_count} 个")
+            converted_count = int(pack.get("converted_count") or 0)
+            if converted_count:
+                lines.append(f"MP4 转 MP3: {converted_count} 个")
+            denoised_count = int(pack.get("denoised_count") or 0)
+            lines.append(f"轻度降噪副本: {denoised_count} 个，原始音频已保留")
+        lines.append(f"音色: {self._current_tts_voice_label()}")
         if sample:
-            self._voice_pack_detail.setText(f"{desc}\n试听: {sample}")
-        else:
-            self._voice_pack_detail.setText(desc)
-
-    def _refresh_contact_list(self) -> None:
-        if not hasattr(self, "_contact_list"):
-            return
-        self._contact_list.clear()
-        for i, c in enumerate(self._chats):
-            self._contact_list.addItem(c["name"])
-
-    def _pick_chat_by_name(self, item: QListWidgetItem) -> None:
-        name = item.text()
-        for i, c in enumerate(self._chats):
-            if c["name"] == name:
-                self._pick_chat(i)
-                return
+            lines.append(f"试听: {sample}")
+        self._voice_pack_detail.setText("\n".join(lines))
 
     def _pick_chat(self, idx: int) -> None:
         self._ai_i = idx
@@ -3141,8 +3378,6 @@ class ControlConsole(QMainWindow):
             idx = len(self._chats) - 1
         self._chats[idx]["msgs"].append((role, text))
         self._chat_store.save(character_name, self._chats[idx]["msgs"])
-        if hasattr(self, "_contact_list"):
-            self._refresh_contact_list()
         if self._ai_i == idx and hasattr(self, "_chat_view"):
             self._render_chat_view()
 

@@ -90,7 +90,9 @@ def main():
     # logger.info("[队员B] 用户状态检测器已启动，已绑定队员D")
 
     # ====== 7. 启动定时状态检测 + 自动回应 ======
-    MOCK_ENABLED = True  # demo阶段使用模拟状态
+    MOCK_ENABLED = os.getenv("DESKTOP_PET_MOCK_USER_STATE", "false").strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }  # demo阶段可通过环境变量开启模拟状态
 
     def check_user_state():
         """定时检测用户状态，更新桌宠行为和对话"""
@@ -128,7 +130,8 @@ def main():
         else:
             # 正式模式：从 UserStateDetector 获取真实状态
             # user_state = user_detector.get_state()
-            return  # 暂不执行
+            QTimer.singleShot(3000, check_user_state)
+            return  # 真实视觉检测未开启时保持安静
 
         # 6a. 更新桌宠状态（队员B → 队员D）
         team_d.api_apply_user_state(user_state)
@@ -169,7 +172,7 @@ def main():
 
     # 启动定时检测（延迟 1 秒后首次执行）
     QTimer.singleShot(1000, check_user_state)
-    logger.info("[主循环] 定时状态检测已启动（每3秒一次）")
+    logger.info(f"[主循环] 定时状态检测已启动（每3秒一次，mock={MOCK_ENABLED}）")
 
     # ====== 8. 启动事件循环（Tkinter主事件循环） ======
     logger.info("启动桌面宠物事件循环...")

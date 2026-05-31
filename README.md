@@ -57,7 +57,7 @@ AI_Desktop_Pet/
 ├─ models/
 │   ├─ vision/
 │   │   ├─ qwen_vl_api.py           # Qwen-VL API（Stub + 真实API就绪）
-│   │   └─ user_state_detector.py   # 用户状态感知（MediaPipe + OpenCV降级）
+│   │   ├─ user_state_detector.py   # 用户状态感知（MediaPipe + OpenCV降级）
 │   │   └─ computer_activity_detector.py # 电脑前台状态识别（游戏/看剧等）
 │   ├─ nlp/
 │   │   └─ deepseek_api.py          # DeepSeek API（真实接口 + 本地降级回复）
@@ -172,7 +172,7 @@ python app/main.py
 - **左键拖拽**移动它
 - **左键点击**触发动作
 - **右键点击** → 点击"退出" → 确认退出
-- 控制台将每3秒输出模拟状态检测循环，展示队员B→D→C→A的完整数据流
+- 默认保持安静陪伴；如需演示旧版模拟状态循环，可设置 `DESKTOP_PET_MOCK_USER_STATE=true`
 
 ### 4. 运行测试
 ```
@@ -218,8 +218,8 @@ VOICE_PACK_ENABLED=true
 VOICE_PACK_MODE=prefer
 VOICE_PACK_AUTO_BY_PET=true
 COMPUTER_ACTIVITY_ENABLED=true
-COMPUTER_ACTIVITY_POLL_MS=5000
-COMPUTER_ACTIVITY_MIN_DURATION=45
+COMPUTER_ACTIVITY_POLL_MS=1000
+COMPUTER_ACTIVITY_MIN_DURATION=0
 COMPUTER_ACTIVITY_COMMENT_COOLDOWN=150
 DEBUG=True
 LOG_LEVEL=INFO
@@ -253,7 +253,7 @@ LOG_LEVEL=INFO
 
 ## 外部声音包 / 音色库
 
-项目现在支持两种语音素材方式：可以把本地声音包作为桌宠语音来源，也可以只在 `voice_pack.json` 里存 TTS 音色参数，不放任何音频文件。请只导入你有权使用的音频文件；不要提交或分发未经授权的语音资源。
+项目现在支持两种语音素材方式：可以把本地声音包作为桌宠语音来源，也可以只在 `voice_pack.json` 里存 TTS 音色参数，不放任何音频文件。请只导入你有权使用的音频/视频文件；不要提交或分发未经授权的语音资源。
 
 1. 如果要放音频，把文件放到 `assets/voice_packs/<pack_id>/`，例如 `assets/voice_packs/daji/click_001.wav`。
 2. 如果只用 API/TTS，在同目录 `voice_pack.json` 写 `voice_profiles` 即可。
@@ -271,9 +271,9 @@ VOICE_PACK_AUTO_BY_PET=true
 
 `VOICE_PACK_MODE=prefer` 会优先播放声音包，找不到匹配音频时自动回退到现有 TTS。也可以改成 `fallback`，让 TTS 失败后才尝试声音包；`off` 会同时关闭本地音频包和音色配置。
 
-仓库里已经放了 `sweet_girl`（甜妹）、`mature_sister`（御姐）、`playful_child`（顽皮童声/小新风）三个纯 TTS 参数包。打开桌宠右键菜单 → 设置面板 → AI对话，可在“语音包”列表里和“对话角色”并列切换。
+仓库里已经放了 `sweet_girl`（甜妹）、`mature_sister`（御姐）、`playful_child`（顽皮童声）三个纯 TTS 参数包。打开桌宠右键菜单 → 设置面板 → AI对话，可在“语音包”列表里和“对话角色”并列切换；在“语音包选择”页点击“导入语音包”，填写名称、选择语言并导入一个或多个本地音频样本后，新语音包会以“语言名称”的形式自动出现在列表里。支持 `.wav`、`.mp3`、`.m4a`、`.flac`、`.ogg`、`.aac`、`.wma` 和 `.mp4`；导入 `.mp4` 时会用 ffmpeg 抽取音轨转成 `.mp3` 参与解析，原视频会保留。导入 WAV 样本时会额外生成轻度降噪副本用于后续分析参考，原始音频始终保留且优先。
 
-`playful_child` 只是调皮童声风格的 TTS 参数包，不包含任何角色原声音频；如果要导入真实声音包，请只放入你有权使用的音频文件。
+`playful_child` 只是调皮童声 TTS 参数包，不包含也不模拟任何具体角色原声；如果要导入真实声音包，请只放入你有权使用的音频文件。
 
 ## 许可证
 

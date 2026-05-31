@@ -7,16 +7,18 @@ import os
 import sys
 import tempfile
 import threading
+import wave
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.nlp.chat_memory import ChatMemory
 from models.nlp.deepseek_api import DeepSeekClient
+from models.tts import voice_pack as voice_pack_module
 from models.tts.ai_voice_assistant import AIChatVoiceAssistant
 from models.tts.echo_team_c_interface import EchoTeamCInterface
 from models.tts.tts_manager import TTSManager
-from models.tts.voice_pack import VoicePackManager
+from models.tts.voice_pack import VoicePackManager, create_imported_voice_pack
 from models.state.echo_team_d_interface import EchoTeamDInterface
 from models.state.pet_state import PetState
 
@@ -199,6 +201,112 @@ def test_tts_manager_reads_voice_profile_without_audio_files():
         assert settings["edge_rate"] == "+15%"
         assert settings["edge_pitch"] == "+20Hz"
         assert settings["cute_style"] is False
+
+
+def test_voice_pack_profile_can_mark_spoken_text_playful():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "cat"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps(
+                {
+                    "voice_profiles": {
+                        "default": {
+                            "voice_profile": "playful",
+                            "cute_style": True,
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        manager = TTSManager(
+            enabled=False,
+            voice_pack_id="cat",
+            voice_pack_dir=str(base_dir),
+            voice_pack_enabled=True,
+        )
+        settings = manager._voice_settings(pet_id="cat", state="neutral", action="speak")
+
+        assert settings["voice_profile"] == "playful"
+        assert manager._prepare_spoken_text(
+            "我来了。",
+            cute_style=settings["cute_style"],
+            voice_profile=settings["voice_profile"],
+        ) == "我来了呀。"
+
+
+def test_create_imported_voice_pack_generates_simulated_profile(tmp_path: Path):
+    sample = tmp_path / "voice.wav"
+    with wave.open(str(sample), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * 1600)
+
+    base_dir = tmp_path / "packs"
+    manifest = create_imported_voice_pack(
+        display_name="我的粤语包",
+        language_id="zh-HK",
+        sample_paths=[sample],
+        base_dir=base_dir,
+    )
+
+    pack_dir = base_dir / manifest["id"]
+    manifest_path = pack_dir / "voice_pack.json"
+    copied_sample = pack_dir / manifest["samples"][0]
+    denoised_sample = pack_dir / manifest["noise_reduction"]["processed_samples"][0]
+
+    assert manifest_path.exists()
+    assert copied_sample.exists()
+    assert denoised_sample.exists()
+    assert copied_sample.read_bytes() == sample.read_bytes()
+    assert manifest["display_name"] == "粤语我的粤语包"
+    assert manifest["user_name"] == "我的粤语包"
+    assert manifest["language"]["id"] == "zh-HK"
+    assert manifest["voice_profiles"]["default"]["edge_voice"] == "zh-HK-HiuGaaiNeural"
+    assert manifest["analysis"]["sample_count"] == 1
+    assert manifest["analysis"]["known_duration_seconds"] == 0.1
+    assert manifest["noise_reduction"]["mode"] == "light_conservative"
+    assert manifest["noise_reduction"]["original_priority"] is True
+    assert manifest["noise_reduction"]["processed_count"] == 1
+
+    manager = VoicePackManager(pack_id=manifest["id"], base_dir=base_dir, enabled=True)
+    settings = manager.voice_profile(state="neutral", action="speak")
+
+    assert settings["edge_voice"] == "zh-HK-HiuGaaiNeural"
+    assert manager.pick_clip("任意一句话", state="neutral", action="speak") is None
+
+
+def test_create_imported_voice_pack_converts_mp4_to_mp3(tmp_path: Path, monkeypatch):
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"fake-video")
+
+    def fake_convert(_src: Path, dest: Path) -> None:
+        dest.write_bytes(b"fake-mp3")
+
+    monkeypatch.setattr(voice_pack_module, "_convert_mp4_to_mp3", fake_convert)
+
+    manifest = voice_pack_module.create_imported_voice_pack(
+        display_name="小林音色",
+        language_id="zh-HK",
+        sample_paths=[source],
+        base_dir=tmp_path / "packs",
+    )
+    pack_dir = tmp_path / "packs" / manifest["id"]
+    converted = pack_dir / manifest["samples"][0]
+    original = pack_dir / manifest["source_media"][0]
+
+    assert manifest["display_name"] == "粤语小林音色"
+    assert manifest["conversions"][0]["kind"] == "mp4_to_mp3"
+    assert converted.suffix == ".mp3"
+    assert converted.read_bytes() == b"fake-mp3"
+    assert original.suffix == ".mp4"
+    assert original.read_bytes() == b"fake-video"
+    assert manifest["analysis"]["formats"] == ["mp3"]
 
 
 def test_voice_profile_event_settings_inherit_default_profile():

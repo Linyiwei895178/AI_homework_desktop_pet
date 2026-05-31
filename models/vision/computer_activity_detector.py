@@ -221,7 +221,7 @@ def create_empty_activity_state(activity_code: str = ACTIVITY_UNKNOWN) -> Dict[s
 class ComputerActivityDetector:
     """Foreground-window based computer activity detector."""
 
-    def __init__(self, min_comment_duration: float = 45.0):
+    def __init__(self, min_comment_duration: float = 0.0):
         self.min_comment_duration = max(0.0, float(min_comment_duration))
         self._activity_since = time.time()
         self._last_signature = ""
@@ -375,7 +375,7 @@ def build_companion_event(state: Dict[str, Any]) -> Dict[str, Any]:
         "duration": state.get("duration", 0.0),
         "confidence": state.get("confidence", 0.0),
         "tags": state.get("tags", []),
-        "suggestion": state.get("suggestion", build_activity_suggestion(state)),
+        "suggestion": state.get("suggestion") or build_activity_suggestion(state),
         "need_response": True,
         "state_code": "normal",
     }

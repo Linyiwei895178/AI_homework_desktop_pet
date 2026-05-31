@@ -69,8 +69,8 @@ TTS_EMOTION_STYLE_PROFILES: dict[str, dict[str, Any]] = {
         "cute_style": False,
     },
     "playful": {
-        "edge_rate": "+14%",
-        "edge_pitch": "+26Hz",
+        "edge_rate": "-2%",
+        "edge_pitch": "+38Hz",
         "edge_volume": "+8%",
         "cute_style": True,
     },
@@ -181,7 +181,11 @@ class TTSManager:
 
     def speak(self, text: str, pet_id: str = "cat", state: str = "neutral", action: str = "speak"):
         settings = self._voice_settings(pet_id=pet_id, state=state, action=action)
-        spoken = self._prepare_spoken_text(text, cute_style=bool(settings.get("cute_style", self.cute_style)))
+        spoken = self._prepare_spoken_text(
+            text,
+            cute_style=bool(settings.get("cute_style", self.cute_style)),
+            voice_profile=str(settings.get("voice_profile") or self.voice_profile),
+        )
         if not spoken:
             return None
 
@@ -221,14 +225,20 @@ class TTSManager:
                     return str(clip)
         return None
 
-    def _prepare_spoken_text(self, text: str, cute_style: bool | None = None) -> str:
+    def _prepare_spoken_text(
+        self,
+        text: str,
+        cute_style: bool | None = None,
+        voice_profile: str | None = None,
+    ) -> str:
         value = (text or "").strip()
         if not value:
             return ""
         if URL_RE.match(value):
             return value
         use_cute_style = self.cute_style if cute_style is None else bool(cute_style)
-        if not use_cute_style or self.voice_profile not in {"cute", "cheerful", "playful"}:
+        active_profile = (voice_profile or self.voice_profile or "").strip().lower()
+        if not use_cute_style or active_profile not in {"cute", "cheerful", "playful"}:
             return value
         if value.endswith(("？", "?", "！", "!", "～", "~")):
             return value
