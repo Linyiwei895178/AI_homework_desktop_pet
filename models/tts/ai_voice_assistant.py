@@ -14,7 +14,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from models.nlp.chat_memory import ChatMemory
 from models.nlp.deepseek_api import DeepSeekClient
-from models.nlp.prompt_builder import build_proactive_prompt
+from models.nlp.prompt_builder import (
+    build_proactive_prompt,
+    normalize_response_language,
+    response_language_from_edge_voice,
+)
 from models.tts.tts_manager import TTSManager
 
 
@@ -40,6 +44,7 @@ class AIChatVoiceAssistant:
         self.auto_tts = bool(auto_tts)
         self.stream_delay = max(0.0, float(stream_delay))
         self._last_reply = ""
+        self._tts_settings: Dict[str, Any] = {}
         self._lock = threading.RLock()
 
     def set_pet_id(self, pet_id: str) -> None:
@@ -47,12 +52,18 @@ class AIChatVoiceAssistant:
         if value:
             self.pet_id = value
 
+    def set_memory_path(self, filepath: str | None, load_existing: bool = True) -> None:
+        setter = getattr(self.memory, "set_persist_path", None)
+        if callable(setter):
+            setter(filepath, load_existing=load_existing)
+
     def set_voice_pack_id(self, pack_id: str) -> None:
         setter = getattr(self.tts, "set_voice_pack_id", None)
         if callable(setter):
             setter((pack_id or "").strip())
 
     def set_tts_settings(self, settings: Dict[str, Any] | None) -> None:
+        self._tts_settings = dict(settings or {})
         setter = getattr(self.tts, "apply_runtime_settings", None)
         if callable(setter):
             setter(settings or {})
@@ -76,22 +87,25 @@ class AIChatVoiceAssistant:
         with self._lock:
             history = self.memory.get_messages()
 
-        reply = self.llm.generate(text, user_state=current_state, history=history).strip()
+        voice_state, voice_action = self._voice_context(current_state)
+        llm_state = self._state_with_response_language(current_state, voice_state, voice_action)
+        response_language = self._response_language_from_state(llm_state)
+        reply = self.llm.generate(text, user_state=llm_state, history=history).strip()
         if not reply:
             reply = "我刚刚有点走神了，可以再说一次吗？"
+        display_reply = self._display_reply(reply, response_language=response_language)
 
-        self._stream_to_ui(reply, callback_ui)
+        self._stream_to_ui(display_reply, callback_ui)
 
         with self._lock:
             self.memory.append_user(text)
             self.memory.append_assistant(reply)
-            self._last_reply = reply
+            self._last_reply = display_reply
 
         if self.auto_tts:
-            state, action = self._voice_context(current_state)
-            self._play_voice(reply, state=state, action=action)
+            self._play_voice(reply, state=voice_state, action=voice_action)
 
-        return reply
+        return display_reply
 
     def respond_to_status_event(
         self,
@@ -147,6 +161,100 @@ class AIChatVoiceAssistant:
         action = str(current_state.get("voice_action") or current_state.get("tts_action") or "speak").strip()
         return state, action or "speak"
 
+    def _state_with_response_language(
+        self,
+        current_state: Optional[Dict[str, Any]],
+        state: str,
+        action: str,
+    ) -> Optional[Dict[str, Any]]:
+        language = self._response_language_for_voice_context(state=state, action=action)
+        if not language:
+            return current_state
+        if isinstance(current_state, dict):
+            enriched = dict(current_state)
+            if normalize_response_language(enriched.get("response_language")):
+                return enriched
+        else:
+            enriched = {}
+        enriched["response_language"] = language
+        return enriched
+
+    def _response_language_for_voice_context(self, state: str = "neutral", action: str = "speak") -> str:
+        explicit = normalize_response_language(
+            self._tts_settings.get("response_language")
+            or self._tts_settings.get("reply_language")
+            or self._tts_settings.get("language")
+        )
+        if explicit:
+            return explicit
+
+        runtime_voice = str(self._tts_settings.get("edge_voice") or "").strip()
+        language = response_language_from_edge_voice(runtime_voice)
+        if language:
+            return language
+
+        voice_settings = getattr(self.tts, "_voice_settings", None)
+        if callable(voice_settings):
+            try:
+                settings = voice_settings(pet_id=self.pet_id, state=state, action=action)
+            except TypeError:
+                try:
+                    settings = voice_settings(state=state, action=action)
+                except Exception:
+                    settings = {}
+            except Exception:
+                settings = {}
+            if isinstance(settings, dict):
+                return response_language_from_edge_voice(settings.get("edge_voice"))
+        return ""
+
+    @staticmethod
+    def _response_language_from_state(state: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(state, dict):
+            return ""
+        return normalize_response_language(
+            state.get("response_language")
+            or state.get("reply_language")
+            or state.get("language")
+        )
+
+    def _display_reply(self, reply: str, response_language: str = "") -> str:
+        value = (reply or "").strip()
+        if not value or not _needs_chinese_translation(value, response_language):
+            return reply
+
+        lines = value.splitlines() or [value]
+        display_lines: list[str] = []
+        for line in lines:
+            source_line = line.rstrip()
+            if not source_line.strip():
+                display_lines.append(source_line)
+                continue
+            translation = self._translate_line_to_chinese(source_line, response_language=response_language)
+            display_lines.append(source_line)
+            if translation and translation.strip() and translation.strip() != source_line.strip():
+                display_lines.append(translation.strip())
+        return "\n".join(display_lines)
+
+    def _translate_line_to_chinese(self, text: str, response_language: str = "") -> str:
+        translator = getattr(self.llm, "translate_to_chinese", None)
+        language = normalize_response_language(response_language)
+        source_language = "" if language in {"zh-CN", "zh-HK", "zh-TW"} and not _contains_cjk(text) else language
+        if callable(translator):
+            try:
+                return str(translator(text, source_language=source_language) or "").strip()
+            except Exception as exc:
+                print(f"[AIChatVoiceAssistant] 翻译到中文失败: {exc}")
+
+        fallback = {
+            "I am here. What would you like me to stay with you for today?": "我在这里。今天你想让我陪你做点什么？",
+            "Sure, I am here.": "当然，我在这里。",
+            "Je suis la. Qu'aimerais-tu que je fasse avec toi aujourd'hui ?": "我在这里。今天你想让我陪你做点什么？",
+            "Parlons-en. Dis-moi ce qui compte le plus pour toi.": "我们聊聊这个吧。告诉我对你来说最重要的部分。",
+        }
+        normalized = " ".join((text or "").strip().split())
+        return fallback.get(normalized, f"这句话的中文意思：{normalized}")
+
     def _stream_to_ui(self, reply: str, callback_ui: Optional[UICallback]) -> None:
         if callback_ui is None:
             return
@@ -172,3 +280,19 @@ def _state_code_to_voice_state(state_code: str) -> str:
         "low_light": "sad",
         "camera_error": "angry",
     }.get(state_code, "")
+
+
+def _needs_chinese_translation(text: str, response_language: str = "") -> bool:
+    language = normalize_response_language(response_language)
+    value = (text or "").strip()
+    if not value:
+        return False
+    if language in {"zh-CN", "zh-HK", "zh-TW"}:
+        return not _contains_cjk(value) and any(char.isalpha() for char in value)
+    if language:
+        return True
+    return not _contains_cjk(value) and any(char.isalpha() for char in value)
+
+
+def _contains_cjk(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value or "")

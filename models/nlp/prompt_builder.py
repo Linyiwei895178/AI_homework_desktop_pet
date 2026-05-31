@@ -10,6 +10,177 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Optional
 
 
+RESPONSE_LANGUAGE_NAMES = {
+    "zh-CN": "Chinese",
+    "zh-HK": "Cantonese / Traditional Chinese",
+    "zh-TW": "Taiwan Mandarin / Traditional Chinese",
+    "en-US": "English",
+    "en-GB": "British English",
+    "fr-FR": "French",
+    "de-DE": "German",
+    "es-ES": "Spanish",
+    "es-MX": "Mexican Spanish",
+    "it-IT": "Italian",
+    "pt-BR": "Brazilian Portuguese",
+    "ru-RU": "Russian",
+    "nl-NL": "Dutch",
+    "hi-IN": "Hindi",
+    "ar-EG": "Arabic",
+    "ja-JP": "Japanese",
+    "ko-KR": "Korean",
+}
+
+
+def normalize_response_language(language: Any) -> str:
+    value = str(language or "").strip()
+    if not value:
+        return ""
+    key = value.replace("_", "-").lower()
+    canonical = {locale.lower(): locale for locale in RESPONSE_LANGUAGE_NAMES}
+    if key in canonical:
+        return canonical[key]
+    aliases = {
+        "cn": "zh-CN",
+        "zh": "zh-CN",
+        "zh-cn": "zh-CN",
+        "chinese": "zh-CN",
+        "中文": "zh-CN",
+        "mandarin": "zh-CN",
+        "zh-hk": "zh-HK",
+        "zh-tw": "zh-TW",
+        "yue": "zh-HK",
+        "cantonese": "zh-HK",
+        "粤语": "zh-HK",
+        "粵語": "zh-HK",
+        "en": "en-US",
+        "en-us": "en-US",
+        "en-gb": "en-GB",
+        "english": "en-US",
+        "british english": "en-GB",
+        "英文": "en-US",
+        "英语": "en-US",
+        "英式英语": "en-GB",
+        "英音": "en-GB",
+        "fr": "fr-FR",
+        "fr-fr": "fr-FR",
+        "french": "fr-FR",
+        "法语": "fr-FR",
+        "法文": "fr-FR",
+        "de": "de-DE",
+        "de-de": "de-DE",
+        "german": "de-DE",
+        "德语": "de-DE",
+        "德文": "de-DE",
+        "es": "es-ES",
+        "es-es": "es-ES",
+        "es-mx": "es-MX",
+        "spanish": "es-ES",
+        "西班牙语": "es-ES",
+        "西语": "es-ES",
+        "it": "it-IT",
+        "it-it": "it-IT",
+        "italian": "it-IT",
+        "意大利语": "it-IT",
+        "pt": "pt-BR",
+        "pt-br": "pt-BR",
+        "portuguese": "pt-BR",
+        "葡萄牙语": "pt-BR",
+        "ru": "ru-RU",
+        "ru-ru": "ru-RU",
+        "russian": "ru-RU",
+        "俄语": "ru-RU",
+        "nl": "nl-NL",
+        "nl-nl": "nl-NL",
+        "dutch": "nl-NL",
+        "荷兰语": "nl-NL",
+        "hi": "hi-IN",
+        "hi-in": "hi-IN",
+        "hindi": "hi-IN",
+        "印地语": "hi-IN",
+        "ar": "ar-EG",
+        "ar-eg": "ar-EG",
+        "arabic": "ar-EG",
+        "阿拉伯语": "ar-EG",
+        "ja": "ja-JP",
+        "jp": "ja-JP",
+        "ja-jp": "ja-JP",
+        "japanese": "ja-JP",
+        "日语": "ja-JP",
+        "日文": "ja-JP",
+        "ko": "ko-KR",
+        "kr": "ko-KR",
+        "ko-kr": "ko-KR",
+        "korean": "ko-KR",
+        "韩语": "ko-KR",
+        "韩文": "ko-KR",
+    }
+    if key in aliases:
+        return aliases[key]
+    if key.startswith("en"):
+        return "en-GB" if key.startswith("en-gb") else "en-US"
+    if key.startswith("fr"):
+        return "fr-FR"
+    if key.startswith("de"):
+        return "de-DE"
+    if key.startswith("es-mx"):
+        return "es-MX"
+    if key.startswith("es"):
+        return "es-ES"
+    if key.startswith("it"):
+        return "it-IT"
+    if key.startswith("pt"):
+        return "pt-BR"
+    if key.startswith("ru"):
+        return "ru-RU"
+    if key.startswith("nl"):
+        return "nl-NL"
+    if key.startswith("hi"):
+        return "hi-IN"
+    if key.startswith("ar"):
+        return "ar-EG"
+    if key.startswith("ja"):
+        return "ja-JP"
+    if key.startswith("ko"):
+        return "ko-KR"
+    if key.startswith("zh-hk") or key.startswith("zh-tw"):
+        return "zh-TW" if key.startswith("zh-tw") else "zh-HK"
+    if key.startswith("zh"):
+        return "zh-CN"
+    return ""
+
+
+def response_language_from_edge_voice(edge_voice: Any) -> str:
+    value = str(edge_voice or "").strip()
+    if not value:
+        return ""
+    lowered = value.lower()
+    for locale in RESPONSE_LANGUAGE_NAMES:
+        if locale.lower() in lowered:
+            return locale
+    parts = value.split("-")
+    if len(parts) >= 2:
+        return normalize_response_language(f"{parts[0]}-{parts[1]}")
+    return normalize_response_language(value)
+
+
+def _response_language_from_state(current_state: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(current_state, dict):
+        return ""
+    for key in ("response_language", "reply_language", "language", "lang"):
+        language = normalize_response_language(current_state.get(key))
+        if language:
+            return language
+    tts_settings = current_state.get("tts_settings")
+    if isinstance(tts_settings, dict):
+        language = normalize_response_language(tts_settings.get("response_language") or tts_settings.get("language"))
+        if language:
+            return language
+        language = response_language_from_edge_voice(tts_settings.get("edge_voice"))
+        if language:
+            return language
+    return response_language_from_edge_voice(current_state.get("edge_voice"))
+
+
 STATE_STYLE_HINTS = {
     "normal": "用户状态正常，可以轻松陪伴。",
     "focused": "用户正在专注，回复要短，不打扰。",
@@ -35,11 +206,50 @@ ACTIVITY_STYLE_HINTS = {
 }
 
 
-def build_system_prompt(current_state: Optional[Dict[str, Any]] = None) -> str:
+def build_system_prompt(
+    current_state: Optional[Dict[str, Any]] = None,
+    response_language: Any = None,
+) -> str:
     state_context = build_state_context(current_state)
+    language = (
+        normalize_response_language(response_language)
+        or _response_language_from_state(current_state)
+        or "zh-CN"
+    )
+    if language == "zh-HK":
+        return (
+            "你是桌面宠物 Echo，是一个亲切、活泼、声音甜一点的可爱女孩。"
+            "请优先用自然粤语/繁体中文和用户对话，除非用户明确要求其他语言。"
+            "说话要适合被语音朗读，句子短一点，语气软一点。"
+            "回复要短；不要说自己是大模型，不要暴露接口或状态字段名。"
+            "如果用户状态需要关心，先共情，再给一个很小的行动建议。"
+            f"\n\n当前上下文：{state_context}"
+        )
+    if language == "zh-TW":
+        return (
+            "你是桌面宠物 Echo，是一个亲切、活泼、声音甜一点的可爱女孩。"
+            "请优先用自然繁体中文和用户对话，除非用户明确要求其他语言。"
+            "说话要适合被语音朗读，句子短一点，语气软一点。"
+            "回复要短；不要说自己是大模型，不要暴露接口或状态字段名。"
+            "如果用户状态需要关心，先共情，再给一个很小的行动建议。"
+            f"\n\n当前上下文：{state_context}"
+        )
+    if language != "zh-CN":
+        language_name = RESPONSE_LANGUAGE_NAMES.get(language, "the selected language")
+        return (
+            f"You are Echo, a friendly, lively desktop pet with a slightly sweet voice. "
+            f"You are having a natural {language_name} conversation with the user. "
+            f"Always answer in natural {language_name} unless the user explicitly asks for another language. "
+            "Make replies suitable for spoken TTS: short sentences, warm tone, no dense formatting. "
+            "Keep replies brief unless the user clearly asks for more. "
+            "Do not say you are a large language model, and do not expose API or state field names. "
+            "If the user's state needs care, empathize first, then offer one tiny next step. "
+            f"\n\nCurrent context: {state_context}"
+        )
     return (
         "你是桌面宠物 Echo，是一个亲切、活泼、声音甜一点的可爱女孩。"
         "你正在和用户进行自然中文对话。"
+        "除非用户明确要求其他语言，否则始终用中文回复。"
         "说话要适合被语音朗读，句子短一点，语气软一点。"
         "可以自然地用“呀、呢、啦、哦”等语气词，但不要每句都撒娇，也不要堆颜文字。"
         "回复要短，通常控制在 80 个中文字符以内；除非用户明确要求长回答。"

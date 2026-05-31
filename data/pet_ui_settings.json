@@ -1,22 +1,22 @@
 {
-  "pin_top": true,
+  "pin_top": false,
   "hover_fade": false,
-  "status_bar": true,
+  "status_bar": false,
   "chat_open": true,
   "voice_pack_id": "",
   "tts_settings": {
     "enabled": true,
     "provider": "edge",
     "quality": "neural",
-    "edge_voice": "en-US-JennyNeural",
-    "voice_profile": "playful",
-    "emotion_style": "playful",
+    "edge_voice": "zh-CN-XiaoxiaoNeural",
+    "voice_profile": "default",
+    "emotion_style": "auto",
     "cute_style": true,
     "voice_pack_mode": "prefer",
-    "edge_rate": "",
-    "edge_pitch": "",
-    "edge_volume": "",
-    "tts_rate": "",
-    "tts_volume": ""
+    "edge_rate": "+0%",
+    "edge_pitch": "+12Hz",
+    "edge_volume": "+8%",
+    "tts_rate": "169",
+    "tts_volume": "0.95"
   }
 }

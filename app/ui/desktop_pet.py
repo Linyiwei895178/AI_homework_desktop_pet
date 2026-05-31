@@ -255,6 +255,23 @@ class MockTeamC:
   def api_play_system_voice(self, text: str, state: str = "neutral", action: str = "speak") -> None:
     print(f"[MockTeamC] api_play_system_voice: {text} (state={state}, action={action})")
 
+  def api_read_long_text(
+    self,
+    text: str,
+    current_state: dict[str, Any] | None = None,
+    title: str = "",
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+  ) -> None:
+    value = str(text or "").strip()
+    if progress_callback:
+      progress_callback({"event_type": "long_text_started", "title": title, "total": 1 if value else 0})
+    print(f"[MockTeamC] api_read_long_text: {title or '未命名'} ({len(value)} chars)")
+    if progress_callback:
+      progress_callback({"event_type": "long_text_finished", "title": title, "total": 1 if value else 0})
+
+  def api_stop_long_text(self) -> None:
+    print("[MockTeamC] api_stop_long_text")
+
   def api_register_logic_callback(self, callback: Callable[[dict[str, Any]], None]) -> None:
     self._logic_callback = callback
     print("[MockTeamC] 队员D逻辑回调已绑定（Mock）")
@@ -857,6 +874,8 @@ class PetControlConsole(ControlConsole):
       current_voice_pack_id=desktop_pet.current_voice_pack_id(),
       on_tts_settings_changed=desktop_pet.update_tts_settings,
       current_tts_settings=desktop_pet.current_tts_settings(),
+      on_read_text=desktop_pet.read_text_aloud,
+      on_stop_read_text=desktop_pet.stop_text_reading,
     )
     self._flat = desktop_pet.list_flat_pets_enriched()
     self._history_viewer: StatusHistoryViewer | None = None
@@ -2121,6 +2140,13 @@ class DesktopPet:
     self._last_computer_comment_signature = ""
     self._computer_poll_ms = max(500, _config_int("COMPUTER_ACTIVITY_POLL_MS", 1000))
     self._computer_comment_cooldown = max(30.0, _config_float("COMPUTER_ACTIVITY_COMMENT_COOLDOWN", 150.0))
+    self._speech_hint_enabled = _config_bool("STATE_SPEECH_HINT_ENABLED", True)
+    self._speech_hint_timer: Optional[QTimer] = None
+    self._speech_hint_busy = False
+    self._speech_hint_poll_ms = max(5000, _config_int("STATE_SPEECH_HINT_POLL_MS", 30000))
+    self._speech_hint_cooldown = max(60.0, _config_float("STATE_SPEECH_HINT_COOLDOWN", 180.0))
+    self._last_speech_hint_at = 0.0
+    self._last_speech_hint_text = ""
 
     self._bind_team_interfaces()
     self._load_settings()
@@ -2348,6 +2374,37 @@ class DesktopPet:
     self._sync_team_c_voice_context()
     self._save_settings()
     print(f"[DesktopPet] TTS settings updated: {self._tts_settings}")
+
+  def read_text_aloud(self, text: str, title: str = "") -> None:
+    value = str(text or "").strip()
+    if not value:
+      return
+    self._sync_team_c_voice_context()
+    context = self._current_voice_state_context()
+    context["voice_action"] = "read"
+    context["tts_action"] = "read"
+    if hasattr(self.team_c, "api_read_long_text"):
+      try:
+        self.team_c.api_read_long_text(value, current_state=context, title=title or "文本")
+        return
+      except Exception as exc:
+        print(f"[DesktopPet] 长文本朗读失败: {exc}")
+    if not hasattr(self.team_c, "api_play_system_voice"):
+      return
+    state = str(context.get("mood") or context.get("state_code") or "neutral").strip() or "neutral"
+    if state == "normal":
+      state = "neutral"
+    try:
+      self.team_c.api_play_system_voice(value, state=state, action="read")
+    except Exception as exc:
+      print(f"[DesktopPet] 文本朗读失败: {exc}")
+
+  def stop_text_reading(self) -> None:
+    if hasattr(self.team_c, "api_stop_long_text"):
+      try:
+        self.team_c.api_stop_long_text()
+      except Exception as exc:
+        print(f"[DesktopPet] 停止长文本朗读失败: {exc}")
 
   def _sync_team_c_voice_context(self) -> None:
     pet_id = self._last_pet_id or str((self._active_pet or {}).get("id", ""))
@@ -2597,6 +2654,7 @@ class DesktopPet:
     self._timer.start(16)
 
     self._start_computer_companion()
+    self._start_state_speech_hints()
     QTimer.singleShot(0, self._restore_last_pet)
 
     self._app.exec()
@@ -2858,6 +2916,9 @@ class DesktopPet:
     if self._computer_comment_timer:
       self._computer_comment_timer.stop()
       self._computer_comment_timer = None
+    if self._speech_hint_timer:
+      self._speech_hint_timer.stop()
+      self._speech_hint_timer = None
     for widget in (self.info_bubble, self.chat_bubble, self.input_box):
       if widget is not None:
         widget.hide()
@@ -2904,6 +2965,69 @@ class DesktopPet:
     self._computer_comment_timer.start(self._computer_poll_ms)
     QTimer.singleShot(self._computer_poll_ms, self._poll_computer_companion)
     print("[DesktopPet] 电脑状态陪伴点评已开启。")
+
+  def _start_state_speech_hints(self) -> None:
+    if not self._speech_hint_enabled:
+      return
+    if self._speech_hint_timer is not None:
+      self._speech_hint_timer.stop()
+    self._speech_hint_timer = QTimer()
+    self._speech_hint_timer.timeout.connect(self._poll_state_speech_hint)
+    self._speech_hint_timer.start(self._speech_hint_poll_ms)
+    QTimer.singleShot(self._speech_hint_poll_ms, self._poll_state_speech_hint)
+    print("[DesktopPet] 桌宠主动语音提示已开启。")
+
+  def _poll_state_speech_hint(self) -> None:
+    if (
+      not self._running
+      or self._speech_hint_busy
+      or self._computer_comment_busy
+      or self._chat_open
+      or self._any_menu_open()
+      or self._resizing_corner
+    ):
+      return
+    if not hasattr(self.team_d, "api_should_speak") or not hasattr(self.team_d, "api_get_speech_hint"):
+      return
+    try:
+      if not self.team_d.api_should_speak():
+        return
+      hint = str(self.team_d.api_get_speech_hint() or "").strip()
+    except Exception as exc:
+      print(f"[DesktopPet] 主动语音提示检查失败: {exc}")
+      return
+    if not hint:
+      return
+
+    now = time.time()
+    if now - self._last_speech_hint_at < self._speech_hint_cooldown:
+      return
+    if hint == self._last_speech_hint_text and now - self._last_speech_hint_at < self._speech_hint_cooldown * 2:
+      return
+
+    self._last_speech_hint_at = now
+    self._last_speech_hint_text = hint
+    self._emit_state_speech_hint(hint)
+
+  def _emit_state_speech_hint(self, hint: str) -> None:
+    self._speech_hint_busy = True
+    self._begin_companion_bubble()
+
+    def _run() -> None:
+      try:
+        self._stream_text_to_ui(hint)
+        if hasattr(self.team_c, "api_play_speech_hint"):
+          self.team_c.api_play_speech_hint(hint)
+        elif hasattr(self.team_c, "api_play_system_voice"):
+          self.team_c.api_play_system_voice(hint, state="hint", action="speak")
+      except Exception as exc:
+        print(f"[DesktopPet] 主动语音提示失败: {exc}")
+      finally:
+        self._speech_hint_busy = False
+        if self._chat_stream is not None:
+          self._chat_stream.comment_finished.emit()
+
+    threading.Thread(target=_run, daemon=True).start()
 
   def _poll_computer_companion(self) -> None:
     if (
@@ -3815,6 +3939,12 @@ class DesktopPet:
     if self._timer:
       self._timer.stop()
       self._timer = None
+    if self._computer_comment_timer:
+      self._computer_comment_timer.stop()
+      self._computer_comment_timer = None
+    if self._speech_hint_timer:
+      self._speech_hint_timer.stop()
+      self._speech_hint_timer = None
     self._dismiss_menus()
     if self._window is not None:
       self._window.hide()
@@ -3878,6 +4008,10 @@ class DesktopPet:
     emotion_style = str(self._tts_settings.get("emotion_style") or "auto").strip()
     if emotion_style:
       state["tts_style"] = emotion_style
+    tts_settings = dict(self._tts_settings)
+    state["tts_settings"] = tts_settings
+    if str(tts_settings.get("edge_voice") or "").strip():
+      state["edge_voice"] = str(tts_settings.get("edge_voice") or "").strip()
     return state
 
   def _save_ai_reply_from_bubble(self) -> None:

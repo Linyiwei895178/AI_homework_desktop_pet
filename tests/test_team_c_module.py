@@ -8,16 +8,25 @@ import sys
 import tempfile
 import threading
 import wave
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.nlp.chat_memory import ChatMemory
 from models.nlp.deepseek_api import DeepSeekClient
+from models.nlp.prompt_builder import build_system_prompt, response_language_from_edge_voice
 from models.tts import voice_pack as voice_pack_module
 from models.tts.ai_voice_assistant import AIChatVoiceAssistant
 from models.tts.echo_team_c_interface import EchoTeamCInterface
+from models.tts.long_text_reader import combine_documents, read_book_file, split_text_for_tts
 from models.tts.tts_manager import TTSManager
+from models.tts.language_match import (
+    detect_text_language,
+    language_from_edge_voice,
+    language_label,
+    languages_match,
+)
 from models.tts.voice_pack import VoicePackManager, create_imported_voice_pack
 from models.state.echo_team_d_interface import EchoTeamDInterface
 from models.state.pet_state import PetState
@@ -167,6 +176,36 @@ def test_tts_manager_prefers_voice_pack_before_synthesis():
         assert played == [clip]
 
 
+def test_tts_manager_long_read_skips_short_voice_pack_clips():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "story"
+        pack_dir.mkdir(parents=True)
+        clip = pack_dir / "speak.wav"
+        clip.write_bytes(b"RIFFfake")
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps(
+                {
+                    "id": "story",
+                    "clips": {"speak": ["speak.wav"]},
+                    "voice_profiles": {"default": {"edge_voice": "zh-CN-XiaoyiNeural"}},
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        manager = TTSManager(
+            provider="pyttsx3",
+            enabled=False,
+            voice_pack_id="story",
+            voice_pack_dir=str(base_dir),
+            voice_pack_enabled=True,
+            voice_pack_mode="prefer",
+        )
+
+        assert manager.speak("这一段应该走文本合成，而不是短音效。", action="read") is None
+
+
 def test_tts_manager_reads_voice_profile_without_audio_files():
     with tempfile.TemporaryDirectory() as tmpdir:
         base_dir = Path(tmpdir) / "packs"
@@ -279,6 +318,16 @@ def test_create_imported_voice_pack_generates_simulated_profile(tmp_path: Path):
 
     assert settings["edge_voice"] == "zh-HK-HiuGaaiNeural"
     assert manager.pick_clip("任意一句话", state="neutral", action="speak") is None
+
+
+def test_voice_pack_language_preset_supports_common_european_languages():
+    french = voice_pack_module.voice_pack_language_preset("fr-FR")
+    german = voice_pack_module.voice_pack_language_preset("de-DE")
+    spanish = voice_pack_module.voice_pack_language_preset("es-ES")
+
+    assert french["edge_voice"] == "fr-FR-DeniseNeural"
+    assert german["edge_voice"] == "de-DE-KatjaNeural"
+    assert spanish["edge_voice"] == "es-ES-ElviraNeural"
 
 
 def test_create_imported_voice_pack_converts_mp4_to_mp3(tmp_path: Path, monkeypatch):
@@ -428,6 +477,19 @@ def test_tts_runtime_settings_override_voice_pack_profile():
         assert manager.voice_profile == "cute"
 
 
+def test_tts_cute_suffix_stays_chinese_only_for_english_voice():
+    manager = TTSManager(enabled=False, voice_profile="playful", cute_style=True)
+
+    spoken = manager._prepare_spoken_text(
+        "Hello there.",
+        cute_style=True,
+        voice_profile="playful",
+        edge_voice="en-US-JennyNeural",
+    )
+
+    assert spoken == "Hello there."
+
+
 def test_tts_emotion_style_auto_follows_voice_state_without_overriding_pack():
     with tempfile.TemporaryDirectory() as tmpdir:
         base_dir = Path(tmpdir) / "packs"
@@ -546,12 +608,12 @@ def test_team_c_can_switch_voice_pack_without_changing_pet_id():
     interface = EchoTeamCInterface(assistant)
 
     interface.api_set_pet_id("mao_pro_zh")
-    interface.api_set_voice_pack_id("sweet_girl")
+    interface.api_set_voice_pack_id("custom_voice")
     thread = interface.api_user_speak("你好", {"mood": "happy"}, lambda chunk: None)
     thread.join(timeout=3)
 
     assert tts.calls[-1]["pet_id"] == "mao_pro_zh"
-    assert tts.voice_pack_ids[-1] == "sweet_girl"
+    assert tts.voice_pack_ids[-1] == "custom_voice"
 
 
 def test_team_c_can_update_tts_runtime_settings():
@@ -579,6 +641,87 @@ def test_team_c_can_update_tts_runtime_settings():
     assert tts.tts_settings[-1]["provider"] == "edge"
     assert tts.tts_settings[-1]["edge_voice"] == "en-US-JennyNeural"
     assert tts.tts_settings[-1]["emotion_style"] == "serious"
+
+
+def test_team_c_adds_response_language_from_english_voice():
+    class CapturingLLM:
+        def __init__(self):
+            self.user_state = None
+
+        def generate(self, text_prompt, user_state=None, history=None):
+            self.user_state = dict(user_state or {})
+            return "Sure, I am here."
+
+    llm = CapturingLLM()
+    assistant = AIChatVoiceAssistant(
+        llm_client=llm,
+        tts_manager=TTSManager(enabled=False),
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=False,
+        stream_delay=0,
+    )
+    assistant.set_tts_settings({"provider": "edge", "edge_voice": "en-US-JennyNeural"})
+
+    assistant.chat_with_context("hello", current_state={"state_code": "normal"})
+
+    assert llm.user_state["response_language"] == "en-US"
+
+
+def test_team_c_displays_foreign_reply_with_line_by_line_chinese_translation():
+    class TranslatingLLM:
+        def generate(self, text_prompt, user_state=None, history=None):
+            return "Hello there.\nHow are you?"
+
+        def translate_to_chinese(self, text, source_language=""):
+            return {
+                "Hello there.": "你好呀。",
+                "How are you?": "你还好吗？",
+            }[text]
+
+    tts = RecordingTTS()
+    chunks = []
+    assistant = AIChatVoiceAssistant(
+        llm_client=TranslatingLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+    )
+    assistant.set_tts_settings({"provider": "edge", "edge_voice": "en-US-JennyNeural"})
+
+    display = assistant.chat_with_context("hello", current_state={"state_code": "normal"}, callback_ui=chunks.append)
+
+    assert display == "Hello there.\n你好呀。\nHow are you?\n你还好吗？"
+    assert "".join(chunks) == display
+    assert tts.calls[-1]["text"] == "Hello there.\nHow are you?"
+    assert assistant.get_memory_messages()[-1]["content"] == "Hello there.\nHow are you?"
+
+
+def test_team_c_translates_non_chinese_reply_even_when_voice_language_is_chinese():
+    class TranslatingLLM:
+        def __init__(self):
+            self.source_languages = []
+
+        def generate(self, text_prompt, user_state=None, history=None):
+            return "Hello there."
+
+        def translate_to_chinese(self, text, source_language=""):
+            self.source_languages.append(source_language)
+            return "你好呀。"
+
+    llm = TranslatingLLM()
+    assistant = AIChatVoiceAssistant(
+        llm_client=llm,
+        tts_manager=TTSManager(enabled=False),
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=False,
+        stream_delay=0,
+    )
+
+    display = assistant.chat_with_context("hello", current_state={"response_language": "zh-CN"})
+
+    assert display == "Hello there.\n你好呀。"
+    assert llm.source_languages == [""]
 
 
 def test_deepseek_uses_official_chat_url_and_current_default_model():
@@ -614,6 +757,119 @@ def test_deepseek_mock_default_reply_is_contextual_not_note_taking():
 
     assert "记下" not in reply
     assert "今天窗外下雨了" in reply
+
+
+def test_prompt_builder_uses_english_for_english_response_language():
+    prompt = build_system_prompt({"response_language": "en-US", "state_code": "normal"})
+
+    assert "natural English conversation" in prompt
+    assert "Always answer in natural English" in prompt
+
+
+def test_prompt_builder_uses_common_language_from_edge_voice():
+    prompt = build_system_prompt({"edge_voice": "fr-FR-DeniseNeural", "state_code": "normal"})
+
+    assert "natural French conversation" in prompt
+    assert "Always answer in natural French" in prompt
+
+
+def test_response_language_detects_common_edge_voice_locales():
+    assert response_language_from_edge_voice("de-DE-KatjaNeural") == "de-DE"
+    assert response_language_from_edge_voice("es-ES-ElviraNeural") == "es-ES"
+    assert response_language_from_edge_voice("pt-BR-FranciscaNeural") == "pt-BR"
+
+
+def test_text_reader_language_detection_matches_voice_families():
+    assert detect_text_language("你好，今天一起加油。") == "zh-CN"
+    assert detect_text_language("Hello, I am here with you.") == "en-US"
+    assert detect_text_language("Bonjour, je suis là avec toi.") == "fr-FR"
+    assert detect_text_language("こんにちは、そばにいるよ。") == "ja-JP"
+    assert languages_match("en-GB", "en-US")
+    assert languages_match("zh-HK", "zh-CN")
+    assert not languages_match("en-US", "zh-CN")
+
+
+def test_text_reader_language_label_and_edge_voice_language():
+    language = language_from_edge_voice("ko-KR-SunHiNeural")
+
+    assert language == "ko-KR"
+    assert language_label(language) == "韩语"
+
+
+def test_long_text_reader_imports_multiple_book_formats(tmp_path: Path):
+    txt = tmp_path / "story.txt"
+    txt.write_text("第一章\n你好，世界。", encoding="utf-8")
+    docx = tmp_path / "notes.docx"
+    with zipfile.ZipFile(docx, "w") as archive:
+        archive.writestr(
+            "word/document.xml",
+            """<?xml version="1.0" encoding="UTF-8"?>
+            <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+              <w:body><w:p><w:r><w:t>Word 段落内容</w:t></w:r></w:p></w:body>
+            </w:document>""",
+        )
+    epub = tmp_path / "book.epub"
+    with zipfile.ZipFile(epub, "w") as archive:
+        archive.writestr("OPS/chapter.xhtml", "<html><body><h1>章节</h1><p>EPUB 正文内容</p></body></html>")
+
+    documents = [read_book_file(path) for path in (txt, docx, epub)]
+    combined = combine_documents(documents)
+
+    assert "你好，世界" in combined
+    assert "Word 段落内容" in combined
+    assert "EPUB 正文内容" in combined
+
+
+def test_team_c_reads_long_text_in_tts_chunks():
+    tts = RecordingTTS()
+    assistant = AIChatVoiceAssistant(
+        llm_client=FakeLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=False,
+        stream_delay=0,
+        pet_id="cat",
+    )
+    interface = EchoTeamCInterface(assistant)
+    text = "第一段很适合朗读。" * 140
+    expected_chunks = split_text_for_tts(text, max_chars=700)
+
+    thread = interface.api_read_long_text(text, current_state={"mood": "happy"}, title="测试书")
+    thread.join(timeout=3)
+
+    assert len(expected_chunks) > 1
+    assert len(tts.calls) == len(expected_chunks)
+    assert {call["action"] for call in tts.calls} == {"read"}
+    assert {call["state"] for call in tts.calls} == {"happy"}
+
+
+def test_deepseek_mock_uses_english_for_english_response_language():
+    client = DeepSeekClient(api_key="", force_mock=True)
+
+    reply = client.generate("hello", user_state={"response_language": "en-US"})
+
+    assert "I am here" in reply
+    assert "在" not in reply
+
+
+def test_deepseek_mock_uses_french_for_french_response_language():
+    client = DeepSeekClient(api_key="", force_mock=True)
+
+    reply = client.generate("bonjour", user_state={"response_language": "fr-FR"})
+
+    assert "Je suis la" in reply
+    assert "在" not in reply
+
+
+def test_deepseek_mock_translates_common_foreign_reply_to_chinese():
+    client = DeepSeekClient(api_key="", force_mock=True)
+
+    translation = client.translate_to_chinese(
+        "Je suis la. Qu'aimerais-tu que je fasse avec toi aujourd'hui ?",
+        source_language="fr-FR",
+    )
+
+    assert translation == "我在这里。今天你想让我陪你做点什么？"
 
 
 def test_team_c_interface_sends_event_dict_callback():

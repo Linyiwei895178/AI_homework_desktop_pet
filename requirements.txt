@@ -26,6 +26,9 @@ edge-tts>=6.1.12         # 更自然的微软神经语音
 pyttsx3>=2.90            # 离线回退语音
 pywin32>=306; platform_system == "Windows"  # Windows 后台播放 MP3
 
+# 长文本 / 书籍导入
+pypdf>=4.0.0              # PDF 文本提取
+
 # 语音输入
 SpeechRecognition>=3.10.4  # 麦克风语音转文字
 PyAudio>=0.2.14            # SpeechRecognition 麦克风采集后端

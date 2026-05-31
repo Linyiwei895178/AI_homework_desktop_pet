@@ -185,11 +185,13 @@ class TTSManager:
             text,
             cute_style=bool(settings.get("cute_style", self.cute_style)),
             voice_profile=str(settings.get("voice_profile") or self.voice_profile),
+            edge_voice=str(settings.get("edge_voice") or ""),
         )
         if not spoken:
             return None
 
-        if self.voice_pack_mode in {"prefer", "only"}:
+        use_voice_clip = str(action or "").strip().lower() not in {"read", "long-read", "long_text", "long-text"}
+        if use_voice_clip and self.voice_pack_mode in {"prefer", "only"}:
             clip = self.voice_pack.pick_clip(spoken, state=state, action=action)
             if clip:
                 self._play_media(clip)
@@ -218,7 +220,7 @@ class TTSManager:
                         return self._speak_windows_sapi(spoken, settings)
                 except Exception as exc:
                     print(f"[TTS] {backend} 播放失败: {exc}")
-            if self.voice_pack_mode == "fallback":
+            if use_voice_clip and self.voice_pack_mode == "fallback":
                 clip = self.voice_pack.pick_clip(spoken, state=state, action=action)
                 if clip:
                     self._play_media(clip)
@@ -230,6 +232,7 @@ class TTSManager:
         text: str,
         cute_style: bool | None = None,
         voice_profile: str | None = None,
+        edge_voice: str | None = None,
     ) -> str:
         value = (text or "").strip()
         if not value:
@@ -239,6 +242,11 @@ class TTSManager:
         use_cute_style = self.cute_style if cute_style is None else bool(cute_style)
         active_profile = (voice_profile or self.voice_profile or "").strip().lower()
         if not use_cute_style or active_profile not in {"cute", "cheerful", "playful"}:
+            return value
+        active_voice = str(edge_voice or "").strip().lower()
+        if active_voice and not active_voice.startswith(("zh-", "zh_")):
+            return value
+        if not _contains_cjk(value):
             return value
         if value.endswith(("？", "?", "！", "!", "～", "~")):
             return value
@@ -503,6 +511,10 @@ def _mci_send(command: str) -> None:
 def _safe_name(value: str) -> str:
     cleaned = re.sub(r"[^0-9A-Za-z_.-]+", "_", str(value or "").strip())
     return cleaned.strip("._") or "pet"
+
+
+def _contains_cjk(value: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in value or "")
 
 
 def _int_setting(value: Any, env_key: str, default: int) -> int:

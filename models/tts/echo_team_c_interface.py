@@ -5,12 +5,18 @@ Team C interface: NLP conversation plus TTS playback.
 from __future__ import annotations
 
 import inspect
+import re
 import threading
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from models.nlp.deepseek_api import DeepSeekClient
 from models.tts.ai_voice_assistant import AIChatVoiceAssistant
+from models.tts.long_text_reader import split_text_for_tts
 from utils.config import config
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class EchoTeamCInterface:
@@ -28,10 +34,15 @@ class EchoTeamCInterface:
     ):
         if assistant is not None and hasattr(assistant, "chat_with_context"):
             self.assistant = assistant
+            self._owns_assistant = False
         else:
             self.assistant = AIChatVoiceAssistant(llm_client=deepseek_client)
+            self._owns_assistant = True
         self._logic_status_callback: Optional[Callable[..., None]] = None
         self._explicit_voice_pack_id = str(config.get("VOICE_PACK_ID", "") or "").strip()
+        self._long_text_stop = threading.Event()
+        if self._owns_assistant:
+            self._sync_memory_for_pet(getattr(self.assistant, "pet_id", "cat"))
 
     def api_user_speak(
         self,
@@ -80,6 +91,55 @@ class EchoTeamCInterface:
         thread.start()
         return thread
 
+    def api_read_long_text(
+        self,
+        text: str,
+        current_state: Dict[str, Any] | None = None,
+        title: str = "",
+        progress_callback: Callable[[Dict[str, Any]], None] | None = None,
+    ) -> threading.Thread:
+        """
+        Read imported long text through the active pet voice/TTS settings.
+        """
+        chunks = split_text_for_tts(text, max_chars=700)
+        self._long_text_stop.clear()
+        voice_state, _voice_action = self.assistant._voice_context(current_state or {})
+
+        def emit(event: Dict[str, Any]) -> None:
+            if progress_callback:
+                try:
+                    progress_callback(event)
+                except Exception as exc:
+                    print(f"[EchoTeamCInterface] long text progress callback 异常: {exc}")
+
+        def run() -> None:
+            emit({"event_type": "long_text_started", "title": title, "total": len(chunks)})
+            try:
+                for index, chunk in enumerate(chunks, start=1):
+                    if self._long_text_stop.is_set():
+                        emit({"event_type": "long_text_stopped", "title": title, "index": index - 1, "total": len(chunks)})
+                        return
+                    emit(
+                        {
+                            "event_type": "long_text_chunk",
+                            "title": title,
+                            "index": index,
+                            "total": len(chunks),
+                        }
+                    )
+                    self.assistant._play_voice(chunk, state=voice_state, action="read")
+                emit({"event_type": "long_text_finished", "title": title, "total": len(chunks)})
+            except Exception as exc:
+                print(f"[EchoTeamCInterface] api_read_long_text 异常: {exc}")
+                emit({"event_type": "long_text_error", "title": title, "error": str(exc), "total": len(chunks)})
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return thread
+
+    def api_stop_long_text(self) -> None:
+        self._long_text_stop.set()
+
     def api_play_speech_hint(self, hint_text: str) -> threading.Thread | None:
         if not hint_text or not hint_text.strip():
             return None
@@ -98,6 +158,8 @@ class EchoTeamCInterface:
 
     def api_set_pet_id(self, pet_id: str) -> None:
         self.assistant.set_pet_id(pet_id)
+        if self._owns_assistant:
+            self._sync_memory_for_pet(pet_id)
         if not self._explicit_voice_pack_id and self._auto_voice_pack_by_pet():
             self.assistant.set_voice_pack_id(pet_id)
 
@@ -118,6 +180,17 @@ class EchoTeamCInterface:
 
     def api_on_status_event(self, event_data: Dict[str, Any], ui_callback: Callable[[str], None] | None = None) -> str:
         return self.assistant.respond_to_status_event(event_data, callback_ui=ui_callback)
+
+    def _sync_memory_for_pet(self, pet_id: str) -> None:
+        setter = getattr(self.assistant, "set_memory_path", None)
+        if not callable(setter):
+            return
+        memory_dir = PROJECT_ROOT / "assets" / "ai_memory"
+        safe_pet_id = _safe_memory_pet_id(pet_id)
+        try:
+            setter(str(memory_dir / f"{safe_pet_id}.json"), load_existing=True)
+        except Exception as exc:
+            print(f"[EchoTeamCInterface] AI 记忆加载失败: {exc}")
 
     def _notify_logic_callback(self, event_data: Dict[str, Any]) -> None:
         callback = self._logic_status_callback
@@ -149,3 +222,8 @@ class EchoTeamCInterface:
             return True
         annotation = param.annotation
         return annotation is int or annotation == "int"
+
+
+def _safe_memory_pet_id(pet_id: str) -> str:
+    value = re.sub(r'[\\/:*?"<>|\s]+', "_", str(pet_id or "").strip())
+    return value.strip("._") or "cat"

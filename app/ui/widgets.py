@@ -63,6 +63,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QStackedWidget,
     QTabWidget,
     QTextEdit,
@@ -77,6 +78,20 @@ from models.tts.voice_pack import (
     VOICE_PACK_LANGUAGE_PRESETS,
     create_imported_voice_pack,
 )
+from models.tts.long_text_reader import (
+    BOOK_FILE_DIALOG_FILTER,
+    BookDocument,
+    combine_documents,
+    read_book_files,
+)
+from models.tts.language_match import (
+    detect_text_language,
+    language_from_edge_voice,
+    language_label,
+    languages_match,
+    normalize_language_id,
+)
+from utils.config import config
 from utils.logger import get_logger
 
 # ---------------------------------------------------------------------------
@@ -210,7 +225,23 @@ TTS_VOICE_PRESETS: tuple[tuple[str, str], ...] = (
     ("中文女声 Xiaomo", "zh-CN-XiaomoNeural"),
     ("中文男声 Yunxi", "zh-CN-YunxiNeural"),
     ("粤语女声 HiuGaai", "zh-HK-HiuGaaiNeural"),
-    ("英文女声 Jenny", "en-US-JennyNeural"),
+    ("英语女声 Jenny（美音）", "en-US-JennyNeural"),
+    ("英语男声 Guy（美音）", "en-US-GuyNeural"),
+    ("英语女声 Sonia（英音）", "en-GB-SoniaNeural"),
+    ("英语男声 Ryan（英音）", "en-GB-RyanNeural"),
+    ("法语女声 Denise", "fr-FR-DeniseNeural"),
+    ("法语男声 Henri", "fr-FR-HenriNeural"),
+    ("德语女声 Katja", "de-DE-KatjaNeural"),
+    ("德语男声 Conrad", "de-DE-ConradNeural"),
+    ("西班牙语女声 Elvira", "es-ES-ElviraNeural"),
+    ("西班牙语男声 Alvaro", "es-ES-AlvaroNeural"),
+    ("墨西哥西语女声 Dalia", "es-MX-DaliaNeural"),
+    ("意大利语女声 Elsa", "it-IT-ElsaNeural"),
+    ("葡萄牙语女声 Francisca", "pt-BR-FranciscaNeural"),
+    ("俄语女声 Svetlana", "ru-RU-SvetlanaNeural"),
+    ("荷兰语女声 Colette", "nl-NL-ColetteNeural"),
+    ("印地语女声 Swara", "hi-IN-SwaraNeural"),
+    ("阿拉伯语女声 Salma", "ar-EG-SalmaNeural"),
     ("日文女声 Nanami", "ja-JP-NanamiNeural"),
     ("韩文女声 SunHi", "ko-KR-SunHiNeural"),
 )
@@ -219,7 +250,6 @@ TTS_STYLE_PRESETS: tuple[dict[str, Any], ...] = (
     {"id": "auto", "label": "自动跟随情绪", "voice_profile": "default", "cute_style": True},
     {"id": "neutral", "label": "自然", "voice_profile": "default", "cute_style": False},
     {"id": "cheerful", "label": "开心活泼", "voice_profile": "cute", "cute_style": True},
-    {"id": "playful", "label": "顽皮童声", "voice_profile": "playful", "cute_style": True},
     {"id": "comfort", "label": "温柔安抚", "voice_profile": "calm", "cute_style": False},
     {"id": "serious", "label": "严肃专业", "voice_profile": "default", "cute_style": False},
     {"id": "story", "label": "故事旁白", "voice_profile": "default", "cute_style": False},
@@ -269,6 +299,42 @@ def normalize_tts_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
     for key in ("edge_rate", "edge_pitch", "edge_volume", "tts_rate", "tts_volume"):
         data[key] = str(data.get(key) or "").strip()
     return data
+
+
+def _parse_signed_int_setting(value: Any, default: str = "+0") -> int:
+    raw = str(value or default).strip()
+    raw = raw.replace("Hz", "").replace("%", "").strip()
+    try:
+        return int(round(float(raw)))
+    except ValueError:
+        return 0
+
+
+def _parse_tts_rate_setting(value: Any) -> int:
+    raw = str(value or os.getenv("TTS_RATE", "168")).strip()
+    try:
+        return max(80, min(260, int(round(float(raw)))))
+    except ValueError:
+        return 168
+
+
+def _parse_tts_volume_setting(value: Any) -> int:
+    raw = str(value or os.getenv("TTS_VOLUME", "0.95")).strip()
+    try:
+        number = float(raw)
+    except ValueError:
+        number = 0.95
+    if number <= 1:
+        number *= 100
+    return max(0, min(100, int(round(number))))
+
+
+def _signed_percent(value: int) -> str:
+    return f"{int(value):+d}%"
+
+
+def _signed_hz(value: int) -> str:
+    return f"{int(value):+d}Hz"
 
 
 def _scaled_int(value: float, scale: float, minimum: int = 1) -> int:
@@ -1287,6 +1353,7 @@ class ChatHistoryStore:
 
 def scan_voice_packs(project_root: str) -> list[dict]:
     """扫描 assets/voice_packs 下的 TTS 音色包清单。"""
+    default_language = language_from_edge_voice(config.EDGE_TTS_VOICE)
     packs: list[dict] = [
         {
             "id": "",
@@ -1295,6 +1362,12 @@ def scan_voice_packs(project_root: str) -> list[dict]:
             "icon": "🎙️",
             "description": "跟随当前角色或 .env 默认音色。",
             "sample_text": "你好呀，今天也一起加油。",
+            "edge_voice": config.EDGE_TTS_VOICE,
+            "language": (
+                {"id": default_language, "label": language_label(default_language)}
+                if default_language
+                else {}
+            ),
         }
     ]
     base_dir = os.path.join(project_root, "assets", "voice_packs")
@@ -1317,6 +1390,13 @@ def scan_voice_packs(project_root: str) -> list[dict]:
         name = str(data.get("display_name") or data.get("name") or pack_id).strip() or pack_id
         noise_reduction = data.get("noise_reduction") if isinstance(data.get("noise_reduction"), dict) else {}
         conversions = data.get("conversions") if isinstance(data.get("conversions"), list) else []
+        voice_profiles = data.get("voice_profiles") if isinstance(data.get("voice_profiles"), dict) else {}
+        default_profile = voice_profiles.get("default") if isinstance(voice_profiles.get("default"), dict) else {}
+        profile_edge_voice = str(default_profile.get("edge_voice") or "").strip()
+        profile_language = language_from_edge_voice(profile_edge_voice)
+        language = data.get("language") if isinstance(data.get("language"), dict) else {}
+        if profile_language and not language:
+            language = {"id": profile_language, "label": language_label(profile_language)}
         packs.append(
             {
                 "id": pack_id,
@@ -1325,7 +1405,8 @@ def scan_voice_packs(project_root: str) -> list[dict]:
                 "icon": str(data.get("icon") or "🎙️"),
                 "description": str(data.get("description") or "TTS 音色参数包。"),
                 "sample_text": str(data.get("sample_text") or "你好呀，今天也一起加油。"),
-                "language": data.get("language") if isinstance(data.get("language"), dict) else {},
+                "language": language,
+                "edge_voice": profile_edge_voice,
                 "is_custom": bool(data.get("is_custom", False)),
                 "sample_count": int((data.get("analysis") or {}).get("sample_count") or 0)
                 if isinstance(data.get("analysis"), dict)
@@ -1355,6 +1436,11 @@ def tts_voice_preset_choices(current_edge_voice: str = "") -> list[dict]:
                 "sample_text": "你好呀，今天也一起加油。",
                 "kind": "edge_voice",
                 "edge_voice": voice_id,
+                "language": (
+                    {"id": language_from_edge_voice(voice_id), "label": language_label(language_from_edge_voice(voice_id))}
+                    if language_from_edge_voice(voice_id)
+                    else {}
+                ),
             }
         )
     current_edge_voice = str(current_edge_voice or "").strip()
@@ -1369,6 +1455,14 @@ def tts_voice_preset_choices(current_edge_voice: str = "") -> list[dict]:
                 "sample_text": "你好呀，今天也一起加油。",
                 "kind": "edge_voice",
                 "edge_voice": current_edge_voice,
+                "language": (
+                    {
+                        "id": language_from_edge_voice(current_edge_voice),
+                        "label": language_label(language_from_edge_voice(current_edge_voice)),
+                    }
+                    if language_from_edge_voice(current_edge_voice)
+                    else {}
+                ),
             }
         )
     return choices
@@ -2347,6 +2441,8 @@ class ControlConsole(QMainWindow):
         current_voice_pack_id: str = "",
         on_tts_settings_changed: Callable[[dict], None] | None = None,
         current_tts_settings: dict[str, Any] | None = None,
+        on_read_text: Callable[..., None] | None = None,
+        on_stop_read_text: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self._project_root = project_root
@@ -2357,12 +2453,15 @@ class ControlConsole(QMainWindow):
         self.on_pet_changed = on_pet_changed
         self.on_voice_pack_changed = on_voice_pack_changed
         self.on_tts_settings_changed = on_tts_settings_changed
+        self.on_read_text = on_read_text
+        self.on_stop_read_text = on_stop_read_text
         self.stats = {"mood": 85, "energy": 72, "affection": 90}
         self._page = "dashboard"
         self._pet_main_id: str | None = None
         self._sel_pet: str | None = None
         self._voice_pack_id = (current_voice_pack_id or "").strip()
         self._voice_packs: list[dict] = []
+        self._read_documents: list[BookDocument] = []
         self._tts_settings = normalize_tts_settings(current_tts_settings)
         self._tts_control_syncing = False
         self._char_tab = 0
@@ -3037,6 +3136,7 @@ class ControlConsole(QMainWindow):
         self._ai_tool_btns: dict[str, QPushButton] = {}
         for key, icon, label in (
             ("voice_pack", "🎙️", "语音包选择"),
+            ("text_reader", "📖", "文本朗读"),
             ("history", "💬", "聊天记录"),
             ("voice_settings", "🔊", "语音设置"),
         ):
@@ -3051,6 +3151,7 @@ class ControlConsole(QMainWindow):
 
         self._ai_tool_stack = QStackedWidget()
         self._ai_tool_stack.addWidget(self._ai_voice_pack_page())
+        self._ai_tool_stack.addWidget(self._ai_text_reader_page())
         self._ai_tool_stack.addWidget(self._ai_history_page())
         self._ai_tool_stack.addWidget(self._ai_voice_settings_page())
         lay.addWidget(self._ai_tool_stack, 1)
@@ -3097,6 +3198,181 @@ class ControlConsole(QMainWindow):
             pack,
         )
         self._select_voice_pack(selected, toast_prefix="已导入并切换语音包")
+
+    def _ai_text_reader_page(self) -> QWidget:
+        page = QFrame()
+        page.setStyleSheet(_glass_style(14))
+        lay = QVBoxLayout(page)
+
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<b>文本朗读</b>"))
+        header.addStretch()
+        import_btn = QPushButton("导入文本")
+        import_btn.setStyleSheet(BTN_GLASS)
+        import_btn.clicked.connect(self._import_text_for_reading)
+        header.addWidget(import_btn)
+        lay.addLayout(header)
+
+        self._read_text_edit = QTextEdit()
+        self._read_text_edit.setAcceptRichText(False)
+        self._read_text_edit.setPlaceholderText("在这里粘贴或导入要朗读的文本…")
+        self._read_text_edit.textChanged.connect(self._update_text_reader_state)
+        lay.addWidget(self._read_text_edit, 1)
+
+        self._read_text_hint = QLabel("导入或输入文本后会按当前语音音色朗读。")
+        self._read_text_hint.setWordWrap(True)
+        self._read_text_hint.setStyleSheet("color:#64748b;font-size:12px;")
+        lay.addWidget(self._read_text_hint)
+
+        bottom = QHBoxLayout()
+        bottom.addStretch()
+        self._stop_read_text_btn = QPushButton("停止")
+        self._stop_read_text_btn.setStyleSheet(BTN_GLASS)
+        self._stop_read_text_btn.clicked.connect(self._stop_text_reading)
+        bottom.addWidget(self._stop_read_text_btn)
+        self._read_text_btn = QPushButton("朗读")
+        self._read_text_btn.setStyleSheet(BTN_PRIMARY)
+        self._read_text_btn.clicked.connect(self._read_text_aloud)
+        bottom.addWidget(self._read_text_btn)
+        lay.addLayout(bottom)
+
+        self._update_text_reader_state()
+        return page
+
+    def _import_text_for_reading(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "导入文本",
+            self._project_root,
+            BOOK_FILE_DIALOG_FILTER,
+        )
+        if not paths:
+            return
+        try:
+            documents = read_book_files(paths)
+            text = combine_documents(documents)
+        except Exception as exc:
+            QMessageBox.warning(self, "导入失败", f"文本导入失败：{exc}")
+            return
+        self._read_documents = documents
+        self._read_text_edit.setPlainText(text)
+        names = "、".join(doc.title for doc in documents[:3])
+        more = len(documents) - min(3, len(documents))
+        if more > 0:
+            names += f" 等 {len(documents)} 本"
+        self._show_toast(f"已导入：{names}")
+
+    def _read_text_aloud(self) -> None:
+        if not hasattr(self, "_read_text_edit"):
+            return
+        text = self._read_text_edit.toPlainText().strip()
+        if not text:
+            return
+        if not self._text_reader_can_read(text):
+            self._update_text_reader_state()
+            return
+        if not self.on_read_text:
+            self._show_toast("朗读功能未连接桌宠")
+            return
+        title = self._current_read_text_title()
+        try:
+            self.on_read_text(text, title=title)
+        except Exception as exc:
+            self._show_toast(f"朗读失败：{exc}")
+            return
+        self._show_toast("已开始朗读文本")
+
+    def _stop_text_reading(self) -> None:
+        if not self.on_stop_read_text:
+            return
+        try:
+            self.on_stop_read_text()
+        except Exception as exc:
+            self._show_toast(f"停止失败：{exc}")
+            return
+        self._show_toast("已请求停止朗读")
+
+    def _current_read_text_title(self) -> str:
+        docs = list(getattr(self, "_read_documents", []) or [])
+        if not docs:
+            return "文本"
+        if len(docs) == 1:
+            return docs[0].title
+        return f"{docs[0].title} 等 {len(docs)} 本"
+
+    def _update_text_reader_state(self) -> None:
+        if not hasattr(self, "_read_text_hint") or not hasattr(self, "_read_text_btn"):
+            return
+        text = self._read_text_edit.toPlainText().strip() if hasattr(self, "_read_text_edit") else ""
+        settings = normalize_tts_settings(self._tts_settings)
+        if not text:
+            self._set_text_reader_hint("导入或输入文本后会按当前语音音色朗读。", enabled=False)
+            return
+        if not settings.get("enabled"):
+            self._set_text_reader_hint("语音已关闭，启用语音后才能朗读。", enabled=False)
+            return
+        expected = self._current_voice_language()
+        detected = detect_text_language(text)
+        if not expected:
+            self._set_text_reader_hint("当前音色语言未知，无法校验朗读语言。", enabled=False)
+            return
+        if not detected:
+            self._set_text_reader_hint("无法识别输入语言，无法朗读。", enabled=False)
+            return
+        if languages_match(expected, detected):
+            self._set_text_reader_hint(
+                f"语言匹配：当前音色 {language_label(expected)}，输入 {language_label(detected)}。",
+                enabled=True,
+                ok=True,
+            )
+            return
+        self._set_text_reader_hint(
+            f"语言不匹配无法朗读（当前音色：{language_label(expected)}，输入：{language_label(detected)}）。",
+            enabled=False,
+            ok=False,
+        )
+
+    def _set_text_reader_hint(self, message: str, enabled: bool, ok: bool | None = None) -> None:
+        color = "#64748b"
+        if ok is True:
+            color = "#0f766e"
+        elif ok is False:
+            color = "#dc2626"
+        self._read_text_hint.setText(message)
+        self._read_text_hint.setStyleSheet(f"color:{color};font-size:12px;")
+        self._read_text_btn.setEnabled(enabled)
+
+    def _text_reader_can_read(self, text: str) -> bool:
+        settings = normalize_tts_settings(self._tts_settings)
+        if not text.strip() or not settings.get("enabled"):
+            return False
+        expected = self._current_voice_language()
+        detected = detect_text_language(text)
+        return languages_match(expected, detected)
+
+    def _current_voice_language(self) -> str:
+        settings = normalize_tts_settings(self._tts_settings)
+        language = language_from_edge_voice(settings.get("edge_voice"))
+        if language:
+            return language
+
+        pack = self._current_voice_pack()
+        if pack:
+            raw_language = pack.get("language")
+            if isinstance(raw_language, dict):
+                language = normalize_language_id(raw_language.get("id") or raw_language.get("label"))
+                if language:
+                    return language
+            language = language_from_edge_voice(pack.get("edge_voice"))
+            if language:
+                return language
+        return language_from_edge_voice(config.EDGE_TTS_VOICE)
+
+    def _current_voice_pack(self) -> dict | None:
+        if not getattr(self, "_voice_packs", None):
+            return None
+        current = self._current_voice_choice_key()
+        return next((p for p in self._voice_packs if self._voice_choice_key(p) == current), None)
 
     def _ai_history_page(self) -> QWidget:
         page = QFrame()
@@ -3148,6 +3424,24 @@ class ControlConsole(QMainWindow):
             self._tts_style_combo.addItem(str(preset["label"]), str(preset["id"]))
         self._tts_style_combo.currentIndexChanged.connect(self._on_tts_controls_changed)
         lay.addWidget(self._tts_style_combo)
+        lay.addWidget(QLabel("精细参数"))
+        controls = QGridLayout()
+        self._tts_edge_rate_slider, self._tts_edge_rate_value = self._add_tts_slider(
+            controls, 0, "神经语速", -50, 50
+        )
+        self._tts_edge_pitch_slider, self._tts_edge_pitch_value = self._add_tts_slider(
+            controls, 1, "神经音调", -50, 50
+        )
+        self._tts_edge_volume_slider, self._tts_edge_volume_value = self._add_tts_slider(
+            controls, 2, "神经音量", -50, 50
+        )
+        self._tts_rate_slider, self._tts_rate_value = self._add_tts_slider(
+            controls, 3, "离线语速", 80, 260
+        )
+        self._tts_volume_slider, self._tts_volume_value = self._add_tts_slider(
+            controls, 4, "离线音量", 0, 100
+        )
+        lay.addLayout(controls)
         self._tts_detail = QLabel()
         self._tts_detail.setWordWrap(True)
         self._tts_detail.setStyleSheet("color:#64748b;font-size:12px;")
@@ -3158,8 +3452,9 @@ class ControlConsole(QMainWindow):
     def _switch_ai_tool(self, key: str) -> None:
         idx = {
             "voice_pack": 0,
-            "history": 1,
-            "voice_settings": 2,
+            "text_reader": 1,
+            "history": 2,
+            "voice_settings": 3,
         }.get(key, 0)
         if hasattr(self, "_ai_tool_stack"):
             self._ai_tool_stack.setCurrentIndex(idx)
@@ -3175,6 +3470,55 @@ class ControlConsole(QMainWindow):
                 return
         combo.setCurrentIndex(0)
 
+    def _add_tts_slider(
+        self,
+        layout: QGridLayout,
+        row: int,
+        label: str,
+        minimum: int,
+        maximum: int,
+    ) -> tuple[QSlider, QLabel]:
+        title = QLabel(label)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(minimum, maximum)
+        slider.setSingleStep(1)
+        slider.setPageStep(5)
+        value_label = QLabel("")
+        value_label.setMinimumWidth(58)
+        value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        slider.valueChanged.connect(self._update_tts_slider_labels)
+        slider.valueChanged.connect(self._on_tts_controls_changed)
+        layout.addWidget(title, row, 0)
+        layout.addWidget(slider, row, 1)
+        layout.addWidget(value_label, row, 2)
+        return slider, value_label
+
+    def _set_tts_slider_values_from_settings(self) -> None:
+        if not hasattr(self, "_tts_edge_rate_slider"):
+            return
+        settings = normalize_tts_settings(self._tts_settings)
+        self._tts_edge_rate_slider.setValue(
+            _parse_signed_int_setting(settings.get("edge_rate"), os.getenv("EDGE_TTS_RATE", "+8%"))
+        )
+        self._tts_edge_pitch_slider.setValue(
+            _parse_signed_int_setting(settings.get("edge_pitch"), os.getenv("EDGE_TTS_PITCH", "+12Hz"))
+        )
+        self._tts_edge_volume_slider.setValue(
+            _parse_signed_int_setting(settings.get("edge_volume"), os.getenv("EDGE_TTS_VOLUME", "+8%"))
+        )
+        self._tts_rate_slider.setValue(_parse_tts_rate_setting(settings.get("tts_rate")))
+        self._tts_volume_slider.setValue(_parse_tts_volume_setting(settings.get("tts_volume")))
+        self._update_tts_slider_labels()
+
+    def _update_tts_slider_labels(self, *_args: Any) -> None:
+        if not hasattr(self, "_tts_edge_rate_value"):
+            return
+        self._tts_edge_rate_value.setText(_signed_percent(self._tts_edge_rate_slider.value()))
+        self._tts_edge_pitch_value.setText(_signed_hz(self._tts_edge_pitch_slider.value()))
+        self._tts_edge_volume_value.setText(_signed_percent(self._tts_edge_volume_slider.value()))
+        self._tts_rate_value.setText(str(self._tts_rate_slider.value()))
+        self._tts_volume_value.setText(f"{self._tts_volume_slider.value()}%")
+
     def _apply_tts_controls_from_settings(self) -> None:
         if not hasattr(self, "_tts_quality_combo"):
             return
@@ -3183,9 +3527,11 @@ class ControlConsole(QMainWindow):
         self._tts_enabled_check.setChecked(bool(self._tts_settings.get("enabled", True)))
         self._set_combo_current_data(self._tts_quality_combo, str(self._tts_settings.get("quality") or "basic"))
         self._set_combo_current_data(self._tts_style_combo, str(self._tts_settings.get("emotion_style") or "auto"))
+        self._set_tts_slider_values_from_settings()
         self._tts_control_syncing = False
         self._render_tts_detail()
         self._render_current_voice_pack_detail()
+        self._update_text_reader_state()
 
     def _on_tts_controls_changed(self, *_args: Any) -> None:
         if self._tts_control_syncing or not hasattr(self, "_tts_quality_combo"):
@@ -3207,9 +3553,20 @@ class ControlConsole(QMainWindow):
                 "cute_style": bool(style.get("cute_style", False)),
             }
         )
+        if hasattr(self, "_tts_edge_rate_slider"):
+            settings.update(
+                {
+                    "edge_rate": _signed_percent(self._tts_edge_rate_slider.value()),
+                    "edge_pitch": _signed_hz(self._tts_edge_pitch_slider.value()),
+                    "edge_volume": _signed_percent(self._tts_edge_volume_slider.value()),
+                    "tts_rate": str(self._tts_rate_slider.value()),
+                    "tts_volume": f"{self._tts_volume_slider.value() / 100:.2f}",
+                }
+            )
         self._tts_settings = normalize_tts_settings(settings)
         self._render_tts_detail()
         self._render_current_voice_pack_detail()
+        self._update_text_reader_state()
         if self.on_tts_settings_changed:
             self.on_tts_settings_changed(dict(self._tts_settings))
 
@@ -3226,7 +3583,17 @@ class ControlConsole(QMainWindow):
             "自动跟随情绪",
         )
         enabled = "已启用" if settings.get("enabled") else "已关闭"
-        self._tts_detail.setText(f"{enabled} · {mode}\n情感 / 风格: {style}")
+        edge_rate = settings.get("edge_rate") or os.getenv("EDGE_TTS_RATE", "+8%")
+        edge_pitch = settings.get("edge_pitch") or os.getenv("EDGE_TTS_PITCH", "+12Hz")
+        edge_volume = settings.get("edge_volume") or os.getenv("EDGE_TTS_VOLUME", "+8%")
+        tts_rate = settings.get("tts_rate") or os.getenv("TTS_RATE", "168")
+        tts_volume = settings.get("tts_volume") or os.getenv("TTS_VOLUME", "0.95")
+        self._tts_detail.setText(
+            f"{enabled} · {mode}\n"
+            f"情感 / 风格: {style}\n"
+            f"神经语音: 语速 {edge_rate}，音调 {edge_pitch}，音量 {edge_volume}\n"
+            f"离线回退: 语速 {tts_rate}，音量 {tts_volume}"
+        )
 
     def _current_tts_voice_label(self) -> str:
         settings = normalize_tts_settings(self._tts_settings)
@@ -3258,6 +3625,7 @@ class ControlConsole(QMainWindow):
         self._voice_pack_list.setCurrentRow(selected_row)
         if self._voice_packs:
             self._render_voice_pack_detail(self._voice_packs[selected_row])
+        self._update_text_reader_state()
 
     @staticmethod
     def _voice_choice_key(pack: dict) -> str:
@@ -3309,6 +3677,7 @@ class ControlConsole(QMainWindow):
             self._render_tts_detail()
             self._set_current_voice_choice_row()
             self._render_voice_pack_detail(pack)
+            self._update_text_reader_state()
             self._show_toast(f"{toast_prefix}: {pack.get('name') or pack.get('display_name') or '默认'}")
             return
 
@@ -3323,6 +3692,7 @@ class ControlConsole(QMainWindow):
                 self.on_tts_settings_changed(dict(self._tts_settings))
         self._set_current_voice_choice_row()
         self._render_voice_pack_detail(pack)
+        self._update_text_reader_state()
         if self.on_voice_pack_changed:
             self.on_voice_pack_changed(pack)
         self._show_toast(f"{toast_prefix}: {pack.get('name') or pack.get('display_name') or '默认'}")
