@@ -93,6 +93,13 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _positive_float(value: Any, default: float, minimum: float = 1.0) -> float:
+    try:
+        return max(minimum, float(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _normalize_chat_url(api_url: str | None, base_url: str | None = None) -> str:
     raw = (api_url or "").strip() or (base_url or "").strip() or "https://api.deepseek.com"
     raw = raw.rstrip("/")
@@ -120,7 +127,7 @@ class DeepSeekClient:
         model: Optional[str] = None,
         force_mock: Optional[bool] = None,
         fallback_to_mock: Optional[bool] = None,
-        timeout: float = 20.0,
+        timeout: float = 12.0,
     ):
         self.api_key = api_key if api_key is not None else config.DEEPSEEK_API_KEY
         self.api_url = _normalize_chat_url(
@@ -134,7 +141,11 @@ class DeepSeekClient:
             if fallback_to_mock is None
             else bool(fallback_to_mock)
         )
-        self.timeout = float(timeout)
+        self.timeout = _positive_float(os.getenv("DEEPSEEK_TIMEOUT"), float(timeout))
+        self.translate_timeout = min(
+            self.timeout,
+            _positive_float(os.getenv("DEEPSEEK_TRANSLATE_TIMEOUT"), 8.0),
+        )
 
     def generate(
         self,
@@ -237,7 +248,7 @@ class DeepSeekClient:
                 "temperature": 0.1,
                 "stream": False,
             },
-            timeout=self.timeout,
+            timeout=self.translate_timeout,
         )
         response.raise_for_status()
         data = response.json()

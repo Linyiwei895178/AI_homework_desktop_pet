@@ -2799,13 +2799,13 @@ class DesktopPet:
     if status_on and self.info_bubble:
       self.info_bubble.show(0, 0)
       items.append((self.info_bubble, self.info_bubble.width(), self.info_bubble.height()))
+    if input_on and self.input_box:
+      self.input_box.show(0, 0)
+      items.append((self.input_box, self.input_box.width(), self.input_box.height()))
     if chat_on and self.chat_bubble:
       text = chat_text if chat_text is not None else self.chat_bubble.text
       self.chat_bubble.show(0, 0, text)
       items.append((self.chat_bubble, self.chat_bubble.width(), self.chat_bubble.height()))
-    if input_on and self.input_box:
-      self.input_box.show(0, 0)
-      items.append((self.input_box, self.input_box.width(), self.input_box.height()))
 
     if not items:
       return
@@ -2826,7 +2826,7 @@ class DesktopPet:
   def _reflow_visible_bubbles(self) -> None:
     """Reposition already-visible overlays without hiding/showing them."""
     visible: list[QWidget] = []
-    for widget in (self.info_bubble, self.chat_bubble, self.input_box):
+    for widget in (self.info_bubble, self.input_box, self.chat_bubble):
       if widget is not None and widget.isVisible():
         visible.append(widget)
     if not visible:

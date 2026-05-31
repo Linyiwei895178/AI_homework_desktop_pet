@@ -27,6 +27,7 @@ TTS_RUNTIME_OVERRIDE_KEYS = (
     "edge_rate",
     "edge_pitch",
     "edge_volume",
+    "edge_timeout",
     "tts_rate",
     "tts_volume",
 )
@@ -347,7 +348,10 @@ class TTSManager:
                 volume=str(settings.get("edge_volume") or "+0%"),
                 pitch=str(settings.get("edge_pitch") or "+0Hz"),
             )
-            await communicate.save(str(output_path))
+            await asyncio.wait_for(
+                communicate.save(str(output_path)),
+                timeout=_positive_float_setting(settings.get("edge_timeout"), "EDGE_TTS_TIMEOUT", 15.0),
+            )
 
         self._run_async(save_audio)
         if not output_path.exists() or output_path.stat().st_size <= 0:
@@ -538,6 +542,14 @@ def _float_setting(value: Any, env_key: str, default: float) -> float:
     raw = value if value is not None else os.getenv(env_key, default)
     try:
         return max(0.0, min(1.0, float(raw)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _positive_float_setting(value: Any, env_key: str, default: float) -> float:
+    raw = value if value is not None else os.getenv(env_key, default)
+    try:
+        return max(1.0, float(raw))
     except (TypeError, ValueError):
         return default
 

@@ -191,6 +191,188 @@ DEFAULT_TTS_UI_SETTINGS: dict[str, Any] = {
     "tts_volume": "",
 }
 
+DEFAULT_PET_PERSONALIZATION_SETTINGS: dict[str, dict[str, Any]] = {
+    "speech_style": {
+        "tone": "朋友感",
+        "nickname": "用户",
+        "catchphrase": "我在呢",
+        "use_emoji": True,
+    },
+    "interaction_frequency": {
+        "proactive_level": 45,
+        "quiet_when_busy": True,
+        "quiet_hours": "23:00-08:00",
+    },
+    "appearance_actions": {
+        "theme_color": "樱花粉",
+        "idle_action": "轻轻晃动",
+        "transparency": 92,
+    },
+    "companion_mode": {
+        "mode": "学习陪伴",
+        "auto_switch": True,
+        "focus_silence": True,
+    },
+    "emotion_system": {
+        "enable_emotion": True,
+        "mood_sensitivity": 60,
+        "intimacy_growth": 50,
+    },
+    "reminders": {
+        "water": True,
+        "rest": True,
+        "pomodoro": False,
+        "meal": False,
+        "sleep": True,
+        "style": "温柔提醒",
+    },
+    "memory_relationship": {
+        "relationship": "朋友",
+        "remember_preferences": True,
+        "remember_projects": True,
+        "user_title": "用户",
+    },
+    "voice_expression": {
+        "voice_enabled": True,
+        "voice_style": "自然可爱",
+        "speech_rate": 55,
+        "bubble_density": 50,
+    },
+    "desktop_behavior": {
+        "activity_range": "屏幕边缘和空白处",
+        "avoid_windows": True,
+        "follow_mouse": False,
+        "multi_screen": True,
+    },
+    "boundaries": {
+        "no_disturb_when_fullscreen": True,
+        "safe_topics": "不过度亲密、不讨论隐私",
+        "comfort_level": "轻度安慰",
+        "allow_close_expression": False,
+    },
+}
+
+PET_PERSONALIZATION_SECTIONS: tuple[dict[str, Any], ...] = (
+    {
+        "key": "speech_style",
+        "icon": "💬",
+        "title": "说话风格",
+        "summary": "称呼、口头禅、语气和表情使用。",
+        "fields": (
+            {"key": "tone", "label": "语气模板", "type": "combo", "options": ("朋友感", "温柔撒娇", "电子管家", "毒舌吐槽", "恋人陪伴")},
+            {"key": "nickname", "label": "怎么称呼你", "type": "line", "placeholder": "用户 / 主人 / 同学"},
+            {"key": "catchphrase", "label": "口头禅", "type": "line", "placeholder": "我在呢"},
+            {"key": "use_emoji", "label": "表情符号", "type": "check", "text": "允许使用"},
+        ),
+    },
+    {
+        "key": "interaction_frequency",
+        "icon": "⏱️",
+        "title": "互动频率",
+        "summary": "主动打招呼、安静时段和忙碌时的打扰程度。",
+        "fields": (
+            {"key": "proactive_level", "label": "主动程度", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
+            {"key": "quiet_when_busy", "label": "忙碌识别", "type": "check", "text": "检测到忙碌时少打扰"},
+            {"key": "quiet_hours", "label": "安静时段", "type": "combo", "options": ("无", "22:00-07:00", "23:00-08:00", "00:00-09:00")},
+        ),
+    },
+    {
+        "key": "appearance_actions",
+        "icon": "🎀",
+        "title": "外观与动作",
+        "summary": "颜色主题、透明度、待机动作和被点击时的表现。",
+        "fields": (
+            {"key": "theme_color", "label": "颜色主题", "type": "combo", "options": ("樱花粉", "薄荷绿", "天空蓝", "暖阳橙", "极简灰")},
+            {"key": "idle_action", "label": "待机动作", "type": "combo", "options": ("轻轻晃动", "原地眨眼", "小步走动", "贴边休息", "安静站立")},
+            {"key": "transparency", "label": "不透明度", "type": "slider", "min": 30, "max": 100, "suffix": "%"},
+        ),
+    },
+    {
+        "key": "companion_mode",
+        "icon": "🧭",
+        "title": "陪伴模式",
+        "summary": "工作、学习、摸鱼、睡前和游戏陪伴的行为模式。",
+        "fields": (
+            {"key": "mode", "label": "默认模式", "type": "combo", "options": ("工作陪伴", "学习陪伴", "摸鱼搭子", "睡前陪伴", "游戏陪伴")},
+            {"key": "auto_switch", "label": "模式切换", "type": "check", "text": "允许自动切换"},
+            {"key": "focus_silence", "label": "专注保护", "type": "check", "text": "专注时减少气泡"},
+        ),
+    },
+    {
+        "key": "emotion_system",
+        "icon": "💗",
+        "title": "情绪系统",
+        "summary": "心情、精力、亲密度的响应强度。",
+        "fields": (
+            {"key": "enable_emotion", "label": "情绪状态", "type": "check", "text": "启用"},
+            {"key": "mood_sensitivity", "label": "心情敏感度", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
+            {"key": "intimacy_growth", "label": "亲密度成长", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
+        ),
+    },
+    {
+        "key": "reminders",
+        "icon": "🔔",
+        "title": "提醒偏好",
+        "summary": "喝水、休息、番茄钟、吃饭和睡觉提醒。",
+        "fields": (
+            {"key": "water", "label": "喝水", "type": "check", "text": "开启"},
+            {"key": "rest", "label": "休息", "type": "check", "text": "开启"},
+            {"key": "pomodoro", "label": "番茄钟", "type": "check", "text": "开启"},
+            {"key": "meal", "label": "吃饭", "type": "check", "text": "开启"},
+            {"key": "sleep", "label": "睡觉", "type": "check", "text": "开启"},
+            {"key": "style", "label": "提醒语气", "type": "combo", "options": ("温柔提醒", "严格督促", "搞笑吐槽", "安静弹窗")},
+        ),
+    },
+    {
+        "key": "memory_relationship",
+        "icon": "🧠",
+        "title": "记忆与关系",
+        "summary": "关系定位、称呼、偏好和项目记忆。",
+        "fields": (
+            {"key": "relationship", "label": "关系定位", "type": "combo", "options": ("朋友", "搭档", "管家", "姐姐感", "妹妹感", "损友")},
+            {"key": "user_title", "label": "用户称呼", "type": "line", "placeholder": "用户"},
+            {"key": "remember_preferences", "label": "偏好记忆", "type": "check", "text": "记住"},
+            {"key": "remember_projects", "label": "项目记忆", "type": "check", "text": "记住"},
+        ),
+    },
+    {
+        "key": "voice_expression",
+        "icon": "🎙️",
+        "title": "声音与表达",
+        "summary": "语音开关、音色风格、语速和气泡密度。",
+        "fields": (
+            {"key": "voice_enabled", "label": "语音播报", "type": "check", "text": "开启"},
+            {"key": "voice_style", "label": "声音风格", "type": "combo", "options": ("自然可爱", "温柔安静", "元气活泼", "冷静可靠", "轻微毒舌")},
+            {"key": "speech_rate", "label": "语速", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
+            {"key": "bubble_density", "label": "气泡密度", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
+        ),
+    },
+    {
+        "key": "desktop_behavior",
+        "icon": "🖥️",
+        "title": "桌面行为",
+        "summary": "活动范围、避让窗口、跟随鼠标和多屏移动。",
+        "fields": (
+            {"key": "activity_range", "label": "活动范围", "type": "combo", "options": ("屏幕边缘和空白处", "只在当前屏幕", "固定在角落", "跟随活跃窗口")},
+            {"key": "avoid_windows", "label": "窗口避让", "type": "check", "text": "开启"},
+            {"key": "follow_mouse", "label": "跟随鼠标", "type": "check", "text": "开启"},
+            {"key": "multi_screen", "label": "多屏移动", "type": "check", "text": "允许"},
+        ),
+    },
+    {
+        "key": "boundaries",
+        "icon": "🛡️",
+        "title": "边界设置",
+        "summary": "不打扰、话题边界、安慰尺度和亲密表达。",
+        "fields": (
+            {"key": "no_disturb_when_fullscreen", "label": "全屏不打扰", "type": "check", "text": "开启"},
+            {"key": "safe_topics", "label": "话题边界", "type": "line", "placeholder": "不过度亲密、不讨论隐私"},
+            {"key": "comfort_level", "label": "安慰尺度", "type": "combo", "options": ("只给建议", "轻度安慰", "明显关心", "高亲密陪伴")},
+            {"key": "allow_close_expression", "label": "亲密表达", "type": "check", "text": "允许更亲近的表达"},
+        ),
+    },
+)
+
 TTS_QUALITY_PRESETS: tuple[dict[str, Any], ...] = (
     {
         "id": "basic",
@@ -2467,6 +2649,13 @@ class ControlConsole(QMainWindow):
         self._read_documents: list[BookDocument] = []
         self._tts_settings = normalize_tts_settings(current_tts_settings)
         self._tts_control_syncing = False
+        self._pet_settings_path = os.path.join(
+            self._project_root,
+            "data",
+            "pet_personalization_settings.json",
+        )
+        self._pet_settings = self._load_pet_personalization_settings()
+        self._pet_setting_controls: dict[tuple[str, str], QWidget] = {}
         self._char_tab = 0
         self._ai_i = -1
         self._detail_pic: QLabel | None = None
@@ -2603,6 +2792,7 @@ class ControlConsole(QMainWindow):
         sb_lay.addWidget(QLabel("桌面宠物"))
         self._menu_btns: dict[str, QPushButton] = {}
         for pid, icon, label in (
+            ("pet_settings", "⚙️", "桌宠设置"),
             ("dashboard", "📊", "仪表盘"),
             ("characters", "👤", "角色选择"),
             ("ai_settings", "💬", "AI对话"),
@@ -2629,6 +2819,7 @@ class ControlConsole(QMainWindow):
             chrome.addWidget(b)
         right.addLayout(chrome)
         self._stack = QStackedWidget()
+        self._stack.addWidget(self._page_pet_settings())
         self._stack.addWidget(self._page_dashboard())
         self._stack.addWidget(self._page_characters())
         self._stack.addWidget(self._page_ai())
@@ -2648,12 +2839,13 @@ class ControlConsole(QMainWindow):
             return
         self._page = page
         idx = {
-            "dashboard": 0,
-            "characters": 1,
-            "ai_settings": 2,
-            "permissions": 3,
-            "theme": 4,
-            "pet_main": 5,
+            "pet_settings": 0,
+            "dashboard": 1,
+            "characters": 2,
+            "ai_settings": 3,
+            "permissions": 4,
+            "theme": 5,
+            "pet_main": 6,
         }.get(page, 0)
         self._stack.setCurrentIndex(idx)
         for pid, btn in self._menu_btns.items():
@@ -2796,6 +2988,246 @@ class ControlConsole(QMainWindow):
         self._toast.raise_()
         self._toast.show()
         QTimer.singleShot(2200, self._toast.hide)
+
+    @staticmethod
+    def _default_pet_personalization_settings() -> dict[str, dict[str, Any]]:
+        return json.loads(json.dumps(DEFAULT_PET_PERSONALIZATION_SETTINGS))
+
+    @staticmethod
+    def _setting_bool(value: Any) -> bool:
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on", "开启", "允许", "记住"}
+        return bool(value)
+
+    def _load_pet_personalization_settings(self) -> dict[str, dict[str, Any]]:
+        data = self._default_pet_personalization_settings()
+        if not os.path.isfile(self._pet_settings_path):
+            return data
+        try:
+            with open(self._pet_settings_path, encoding="utf-8") as f:
+                loaded = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            self._log(f"读取桌宠设置失败，使用默认值: {exc}")
+            return data
+        if not isinstance(loaded, dict):
+            return data
+        for section in PET_PERSONALIZATION_SECTIONS:
+            section_key = str(section["key"])
+            incoming = loaded.get(section_key)
+            if not isinstance(incoming, dict):
+                continue
+            for field in section["fields"]:
+                field_key = str(field["key"])
+                if field_key in incoming:
+                    data[section_key][field_key] = incoming[field_key]
+        return data
+
+    def _save_pet_personalization_settings(self) -> bool:
+        try:
+            os.makedirs(os.path.dirname(self._pet_settings_path), exist_ok=True)
+            with open(self._pet_settings_path, "w", encoding="utf-8") as f:
+                json.dump(self._pet_settings, f, ensure_ascii=False, indent=2)
+            return True
+        except OSError as exc:
+            QMessageBox.warning(self, "保存失败", f"无法保存桌宠设置：{exc}")
+            return False
+
+    def _pet_setting_value(self, section_key: str, field_key: str) -> Any:
+        section = self._pet_settings.get(section_key, {})
+        if field_key in section:
+            return section[field_key]
+        return DEFAULT_PET_PERSONALIZATION_SETTINGS.get(section_key, {}).get(field_key, "")
+
+    def _set_combo_text(self, combo: QComboBox, value: Any) -> None:
+        text = str(value or "")
+        idx = combo.findText(text)
+        if idx < 0 and text:
+            combo.addItem(text)
+            idx = combo.findText(text)
+        combo.setCurrentIndex(max(0, idx))
+
+    def _create_pet_setting_control(self, field: dict[str, Any], value: Any) -> tuple[QWidget, QWidget]:
+        control_type = str(field.get("type") or "line")
+        if control_type == "combo":
+            combo = QComboBox()
+            for option in field.get("options", ()):
+                combo.addItem(str(option))
+            combo.setMinimumWidth(220)
+            self._set_combo_text(combo, value)
+            return combo, combo
+        if control_type == "check":
+            check = QCheckBox(str(field.get("text") or "开启"))
+            check.setChecked(self._setting_bool(value))
+            return check, check
+        if control_type == "slider":
+            wrap = QWidget()
+            row = QHBoxLayout(wrap)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(10)
+            slider = QSlider(Qt.Orientation.Horizontal)
+            minimum = int(field.get("min", 0))
+            maximum = int(field.get("max", 100))
+            slider.setRange(minimum, maximum)
+            try:
+                current = int(value)
+            except (TypeError, ValueError):
+                current = minimum
+            slider.setValue(max(minimum, min(maximum, current)))
+            value_label = QLabel()
+            value_label.setMinimumWidth(48)
+            value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            suffix = str(field.get("suffix") or "")
+
+            def _update_slider_label(v: int, label: QLabel = value_label, unit: str = suffix) -> None:
+                label.setText(f"{v}{unit}")
+
+            slider.valueChanged.connect(_update_slider_label)
+            _update_slider_label(slider.value())
+            row.addWidget(slider, 1)
+            row.addWidget(value_label)
+            return wrap, slider
+        line = QLineEdit()
+        line.setText(str(value or ""))
+        line.setPlaceholderText(str(field.get("placeholder") or ""))
+        return line, line
+
+    def _read_pet_setting_control(self, control: QWidget) -> Any:
+        if isinstance(control, QComboBox):
+            return control.currentText()
+        if isinstance(control, QCheckBox):
+            return control.isChecked()
+        if isinstance(control, QSlider):
+            return control.value()
+        if isinstance(control, QLineEdit):
+            return control.text().strip()
+        return ""
+
+    def _set_pet_setting_control_value(self, control: QWidget, value: Any) -> None:
+        if isinstance(control, QComboBox):
+            self._set_combo_text(control, value)
+        elif isinstance(control, QCheckBox):
+            control.setChecked(self._setting_bool(value))
+        elif isinstance(control, QSlider):
+            try:
+                control.setValue(int(value))
+            except (TypeError, ValueError):
+                pass
+        elif isinstance(control, QLineEdit):
+            control.setText(str(value or ""))
+
+    def _apply_pet_personalization_controls(self) -> None:
+        for section in PET_PERSONALIZATION_SECTIONS:
+            section_key = str(section["key"])
+            for field in section["fields"]:
+                field_key = str(field["key"])
+                control = self._pet_setting_controls.get((section_key, field_key))
+                if control is not None:
+                    self._set_pet_setting_control_value(
+                        control,
+                        self._pet_setting_value(section_key, field_key),
+                    )
+
+    def _collect_pet_personalization_controls(self) -> dict[str, dict[str, Any]]:
+        data = self._default_pet_personalization_settings()
+        for section in PET_PERSONALIZATION_SECTIONS:
+            section_key = str(section["key"])
+            for field in section["fields"]:
+                field_key = str(field["key"])
+                control = self._pet_setting_controls.get((section_key, field_key))
+                if control is not None:
+                    data[section_key][field_key] = self._read_pet_setting_control(control)
+        return data
+
+    def _save_pet_personalization_from_controls(self) -> None:
+        self._pet_settings = self._collect_pet_personalization_controls()
+        if self._save_pet_personalization_settings():
+            if hasattr(self, "_pet_settings_status"):
+                self._pet_settings_status.setText("已保存")
+            self._show_toast("桌宠设置已保存")
+            self._log("桌宠设置已保存")
+
+    def _reset_pet_personalization_settings(self) -> None:
+        self._pet_settings = self._default_pet_personalization_settings()
+        self._apply_pet_personalization_controls()
+        if self._save_pet_personalization_settings():
+            if hasattr(self, "_pet_settings_status"):
+                self._pet_settings_status.setText("已恢复默认")
+            self._show_toast("桌宠设置已恢复默认")
+            self._log("桌宠设置已恢复默认")
+
+    def _build_pet_setting_section(self, index: int, section: dict[str, Any]) -> QFrame:
+        section_key = str(section["key"])
+        frame = QFrame()
+        frame.setObjectName("glass")
+        frame.setStyleSheet(_glass_style(14))
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(16, 12, 16, 14)
+        lay.setSpacing(8)
+
+        title = QLabel(f"<b>{index}. {section.get('icon', '')} {section.get('title', '')}</b>")
+        title.setWordWrap(True)
+        lay.addWidget(title)
+        summary = QLabel(str(section.get("summary") or ""))
+        summary.setWordWrap(True)
+        summary.setStyleSheet("color:#64748b;")
+        lay.addWidget(summary)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(1, 1)
+        for row, field in enumerate(section["fields"]):
+            field_key = str(field["key"])
+            label = QLabel(str(field.get("label") or field_key))
+            label.setMinimumWidth(96)
+            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            widget, control = self._create_pet_setting_control(
+                field,
+                self._pet_setting_value(section_key, field_key),
+            )
+            self._pet_setting_controls[(section_key, field_key)] = control
+            grid.addWidget(label, row, 0)
+            grid.addWidget(widget, row, 1)
+        lay.addLayout(grid)
+        return frame
+
+    def _page_pet_settings(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(24, 16, 24, 24)
+        lay.setSpacing(12)
+
+        header = QHBoxLayout()
+        header.addWidget(QLabel("<h2>桌宠设置</h2>"))
+        header.addStretch()
+        self._pet_settings_status = QLabel("")
+        self._pet_settings_status.setStyleSheet("color:#64748b;")
+        header.addWidget(self._pet_settings_status)
+        reset_btn = QPushButton("恢复默认")
+        reset_btn.setStyleSheet(BTN_GLASS)
+        reset_btn.clicked.connect(self._reset_pet_personalization_settings)
+        save_btn = QPushButton("保存设置")
+        save_btn.setStyleSheet(BTN_PRIMARY)
+        save_btn.clicked.connect(self._save_pet_personalization_from_controls)
+        header.addWidget(reset_btn)
+        header.addWidget(save_btn)
+        lay.addLayout(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        inner = QWidget()
+        inner_lay = QVBoxLayout(inner)
+        inner_lay.setContentsMargins(0, 0, 8, 0)
+        inner_lay.setSpacing(12)
+        self._pet_setting_controls.clear()
+        for index, section in enumerate(PET_PERSONALIZATION_SECTIONS, start=1):
+            inner_lay.addWidget(self._build_pet_setting_section(index, section))
+        inner_lay.addStretch()
+        scroll.setWidget(inner)
+        lay.addWidget(scroll, 1)
+        return w
 
     def _on_pet_main_switch(self) -> None:
         pet = self._get_pet(self._pet_main_id)

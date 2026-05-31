@@ -93,6 +93,10 @@ class AIChatVoiceAssistant:
         reply = self.llm.generate(text, user_state=llm_state, history=history).strip()
         if not reply:
             reply = "我刚刚有点走神了，可以再说一次吗？"
+        tts_started = False
+        if self.auto_tts and _can_start_tts_before_display(reply, response_language):
+            self._play_voice_async(reply, state=voice_state, action=voice_action)
+            tts_started = True
         display_reply = self._display_reply(reply, response_language=response_language)
         spoken_reply = self._spoken_reply(reply, display_reply, response_language=response_language)
 
@@ -103,7 +107,7 @@ class AIChatVoiceAssistant:
             self.memory.append_assistant(spoken_reply)
             self._last_reply = display_reply
 
-        if self.auto_tts:
+        if self.auto_tts and not tts_started:
             self._play_voice(spoken_reply, state=voice_state, action=voice_action)
 
         return display_reply
@@ -151,6 +155,15 @@ class AIChatVoiceAssistant:
 
     def _play_voice(self, text: str, state: str = "neutral", action: str = "speak") -> Optional[str]:
         return self.tts.speak(text, pet_id=self.pet_id, state=state, action=action)
+
+    def _play_voice_async(self, text: str, state: str = "neutral", action: str = "speak") -> None:
+        def run() -> None:
+            try:
+                self._play_voice(text, state=state, action=action)
+            except Exception as exc:
+                print(f"[AIChatVoiceAssistant] TTS 播放异常: {exc}")
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _voice_context(self, current_state: Optional[Dict[str, Any]]) -> tuple[str, str]:
         if not isinstance(current_state, dict):
@@ -227,18 +240,10 @@ class AIChatVoiceAssistant:
         if _is_chinese_language(response_language):
             return self._translate_reply_to_chinese(value, response_language=response_language) or reply
 
-        lines = value.splitlines() or [value]
-        display_lines: list[str] = []
-        for line in lines:
-            source_line = line.rstrip()
-            if not source_line.strip():
-                display_lines.append(source_line)
-                continue
-            translation = self._translate_line_to_chinese(source_line, response_language=response_language)
-            display_lines.append(source_line)
-            if translation and translation.strip() and translation.strip() != source_line.strip():
-                display_lines.append(translation.strip())
-        return "\n".join(display_lines)
+        translation = self._translate_reply_to_chinese(value, response_language=response_language)
+        if translation and translation.strip() and translation.strip() != value:
+            return f"{value}\n{translation.strip()}"
+        return reply
 
     def _spoken_reply(self, reply: str, display_reply: str, response_language: str = "") -> str:
         if _is_chinese_language(response_language) and _needs_chinese_translation(reply, response_language):
@@ -246,16 +251,11 @@ class AIChatVoiceAssistant:
         return reply
 
     def _translate_reply_to_chinese(self, text: str, response_language: str = "") -> str:
-        lines = text.splitlines() or [text]
-        translated_lines: list[str] = []
-        for line in lines:
-            source_line = line.rstrip()
-            if not source_line.strip():
-                translated_lines.append(source_line)
-                continue
-            translation = self._translate_line_to_chinese(source_line, response_language=response_language)
-            translated_lines.append(translation.strip() if translation.strip() else source_line)
-        return "\n".join(translated_lines).strip()
+        value = (text or "").strip()
+        if not value:
+            return ""
+        translation = self._translate_line_to_chinese(value, response_language=response_language)
+        return translation.strip() if translation.strip() else value
 
     def _translate_line_to_chinese(self, text: str, response_language: str = "") -> str:
         translator = getattr(self.llm, "translate_to_chinese", None)
@@ -353,6 +353,14 @@ def _language_mismatch(text: str, expected_language: str = "") -> bool:
 
 def _is_chinese_language(language: str = "") -> bool:
     return language_family(normalize_response_language(language)) == "zh"
+
+
+def _can_start_tts_before_display(text: str, response_language: str = "") -> bool:
+    language = normalize_response_language(response_language)
+    if not language or _is_chinese_language(language):
+        return False
+    detected = detect_text_language(text)
+    return not detected or languages_match(language, detected)
 
 
 def _contains_cjk(value: str) -> bool:
