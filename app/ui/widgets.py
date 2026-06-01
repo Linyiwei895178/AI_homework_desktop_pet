@@ -2669,12 +2669,21 @@ class ControlConsole(QMainWindow):
         self._toast: QLabel | None = None
         self._chat_store = ChatHistoryStore(project_root)
         self._custom_ids = load_custom_pet_ids(project_root)
-        if is_mao_pro_zh_model(model_path):
+        # 自动扫描 assets/models/ 下所有 Live2D 模型
+        from app.live2d_scanner import scan_live2d_models
+        models_dir = os.path.join(project_root, "assets", "models")
+        scanned = scan_live2d_models(models_dir)
+        if scanned:
+            self._live2d = scanned
+            # 修正 mao_pro_zh 的显示名和缩略图
+            for i, pet in enumerate(self._live2d):
+                if pet["id"] == "mao_pro_zh" and is_mao_pro_zh_model(model_path):
+                    self._live2d[i] = build_mao_pro_pet_record(model_path, available_motions)
+                    break
+        elif is_mao_pro_zh_model(model_path):
             self._live2d = [build_mao_pro_pet_record(model_path, available_motions)]
         else:
-            tex = resolve_live2d_thumb(model_path) or os.path.join(
-                os.path.dirname(model_path), "mao_pro.4096", "texture_00.png"
-            )
+            tex = resolve_live2d_thumb(model_path) or ""
             motions = [
                 {"id": m, "label": m, "gif": "", "frames": []}
                 for m in available_motions

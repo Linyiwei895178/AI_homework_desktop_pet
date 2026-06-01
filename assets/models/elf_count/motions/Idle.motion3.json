@@ -1,0 +1,9 @@
+{
+  "Version": 3,
+  "Meta": {
+    "Duration": 99999.0,
+    "FadeInTime": 0.5,
+    "FadeOutTime": 0.5
+  },
+  "Curves": []
+}

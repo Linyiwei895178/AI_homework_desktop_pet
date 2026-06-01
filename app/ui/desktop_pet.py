@@ -2367,6 +2367,11 @@ class DesktopPet:
     else:
       self._window._plane_player.hide()
       self._window._gl.show()
+      # Live2D model reload on switch
+      from app.model_switcher import reload_live2d_model
+      new_model_path = pet.get("model_path") or self.model_path
+      if new_model_path and os.path.isfile(new_model_path):
+        reload_live2d_model(self, new_model_path)
       self._start_idle_motion()
     self._update_mouse_passthrough(self._local_mouse_pos())
     self._show_switch_notice(name)
@@ -3230,12 +3235,17 @@ class DesktopPet:
     return gp.x(), gp.y()
 
   def _init_model_gl(self) -> None:
-    self._model = live2d.LAppModel()
-    self._model.LoadModelJson(self.model_path, maskBufferCount=2)
-    self._model.Resize(self._win_w, self._win_h)
-    self._build_motion_index()
-    self._load_available_motions()
-    self._start_idle_motion()
+    try:
+      self._model = live2d.LAppModel()
+      self._model.LoadModelJson(self.model_path, maskBufferCount=2)
+      self._model.Resize(self._win_w, self._win_h)
+      self._build_motion_index()
+      self._load_available_motions()
+      self._start_idle_motion()
+    except Exception as exc:
+      msg = "init failed: " + str(exc)
+      print(msg)
+      self._model = None
 
   def _capture_mao_pro_motion_preview(self) -> None:
     """mao_pro_zh：从首个 motion3 首帧生成预览图。"""
@@ -4088,12 +4098,24 @@ class DesktopPet:
   def _start_idle_motion(self, *_args: Any) -> None:
     if self._model is None:
       return
+    if not self._has_idle_motions():
+      return
     self._model.StartMotion("Idle", 0, MotionPriority.IDLE, onFinishMotionHandler=self._start_idle_motion)
+
+  def _has_idle_motions(self) -> bool:
+    """Check if the current model has any Idle motion entries."""
+    try:
+      with open(self.model_path, encoding="utf-8-sig") as f:
+        data = json.load(f)
+      idle_entries = data.get("FileReferences", {}).get("Motions", {}).get("Idle", [])
+      return len(idle_entries) > 0
+    except (OSError, json.JSONDecodeError):
+      return True
 
   def _build_motion_index(self) -> None:
     self._motion_index.clear()
     try:
-      with open(self.model_path, encoding="utf-8") as f:
+      with open(self.model_path, encoding="utf-8-sig") as f:
         data = json.load(f)
       motion_groups = data.get("FileReferences", {}).get("Motions", {})
     except (OSError, json.JSONDecodeError) as exc:
@@ -4135,7 +4157,7 @@ class DesktopPet:
   def _scan_motions_from_model_json(self) -> list[str]:
     names: list[str] = []
     try:
-      with open(self.model_path, encoding="utf-8") as f:
+      with open(self.model_path, encoding="utf-8-sig") as f:
         data = json.load(f)
       motion_groups = data.get("FileReferences", {}).get("Motions", {})
     except (OSError, json.JSONDecodeError):

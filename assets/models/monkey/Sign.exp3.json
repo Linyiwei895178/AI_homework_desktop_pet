@@ -1,0 +1,20 @@
+{
+    "Type": "Live2D Expression",
+    "Parameters": [
+        {
+            "Id": "STYLE",
+            "Value": 1.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "BRA",
+            "Value": 0.0,
+            "Blend": "Add"
+        },
+        {
+            "Id": "COAT",
+            "Value": 0.0,
+            "Blend": "Add"
+        }
+    ]
+}
