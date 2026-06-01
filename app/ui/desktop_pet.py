@@ -2118,7 +2118,7 @@ class DesktopPet:
     self._win_w = 0
     self._win_h = 0
     self._pin_top = True
-    self._hover_fade_enabled = True
+    self._hover_fade_enabled = False
     self._status_bar_enabled = False
     self._hovering_window = False
     self._window_alpha = 255
