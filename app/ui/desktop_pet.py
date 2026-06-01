@@ -77,6 +77,7 @@ from app.ui.ui_settings_store import load_ui_settings
 from app.ui.feedback_bubble import show_feedback_message
 from models.state.user_profile import UserProfile
 from utils.config import config
+from app.model_switcher import reload_live2d_model
 
 try:
     import win32api
@@ -2404,6 +2405,10 @@ class DesktopPet:
     else:
       self._window._plane_player.hide()
       self._window._gl.show()
+      # 重新加载 Live2D 模型（根据 pet 中的 model_path）
+      model_path = pet.get('model_path') or ''
+      if model_path and os.path.isfile(model_path):
+        reload_live2d_model(self, model_path)
       self._start_idle_motion()
     self._update_mouse_passthrough(self._local_mouse_pos())
     self._show_switch_notice(name)
