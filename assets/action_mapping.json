@@ -17,5 +17,37 @@
       "这狗_anim_idle.gif"
     ]
   },
-  "winter": {}
+  "winter": {},
+  "monkey": {
+    "idle": [
+      "Idle"
+    ],
+    "happy": [
+      "WTF"
+    ],
+    "surprised": [
+      "WTF"
+    ],
+    "angry": [
+      "WTF"
+    ],
+    "sad": [
+      "BRA"
+    ],
+    "shy": [
+      "BRA"
+    ],
+    "customize_hair": [
+      "HairCustom"
+    ],
+    "wear_glasses": [
+      "GLASSES"
+    ],
+    "wear_sunglasses": [
+      "SUNGLASSES"
+    ],
+    "wear_coat": [
+      "COAT"
+    ]
+  }
 }

@@ -12,6 +12,41 @@
         {
           "File": "motions/Idle.motion3.json"
         }
+      ],
+      "BRA": [
+        {
+          "File": "motions/BRA.motion3.json"
+        }
+      ],
+      "COAT": [
+        {
+          "File": "motions/COAT.motion3.json"
+        }
+      ],
+      "GLASSES": [
+        {
+          "File": "motions/GLASSES.motion3.json"
+        }
+      ],
+      "SUNGLASSES": [
+        {
+          "File": "motions/SUNGLASSES.motion3.json"
+        }
+      ],
+      "WTF": [
+        {
+          "File": "motions/WTF.motion3.json"
+        }
+      ],
+      "Sign_STYLE1": [
+        {
+          "File": "motions/Sign.motion3.json"
+        }
+      ],
+      "HairCustom": [
+        {
+          "File": "motions/HairCustom.motion3.json"
+        }
       ]
     }
   },
