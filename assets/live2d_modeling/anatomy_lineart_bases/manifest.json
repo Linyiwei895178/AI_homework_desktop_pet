@@ -1,0 +1,24 @@
+{
+  "format": "pet_buddy_live2d_anatomy_lineart_bases_v1",
+  "canvas": {
+    "width": 1024,
+    "height": 1536
+  },
+  "parameters": "anatomy_parameters.json",
+  "renderer": "tools/render_anatomy_lineart_model.py",
+  "default_base": "male",
+  "bases": {
+    "male": {
+      "label": "男性结构线稿",
+      "description": "Front-facing adult male anime anatomy line art with detailed muscle and construction lines.",
+      "preview": "male_standing_anatomy_lineart.png",
+      "transparent": "male_standing_anatomy_lineart_transparent.png"
+    },
+    "female": {
+      "label": "女性结构线稿",
+      "description": "Front-facing adult female anime anatomy line art with detailed muscle and construction lines.",
+      "preview": "female_standing_anatomy_lineart.png",
+      "transparent": "female_standing_anatomy_lineart_transparent.png"
+    }
+  }
+}

@@ -1,0 +1,105 @@
+{
+  "format": "pet_buddy_pose_study_taxonomy_v1",
+  "source_pdfs": [
+    "473-手机浏览-动漫线稿内容一样-1.pdf",
+    "473-手机浏览-动漫线稿内容一样-2.pdf"
+  ],
+  "page_count_scanned": 472,
+  "selected_reference_count": 96,
+  "contact_sheets": [
+    "pose_candidates_sheet_1.jpg",
+    "pose_candidates_sheet_2.jpg",
+    "pose_candidates_sheet_3.jpg",
+    "pose_candidates_sheet_4.jpg"
+  ],
+  "pose_families": [
+    {
+      "id": "neutral_and_anatomy_stand",
+      "label": "正立/基础解剖站姿",
+      "reference_pages": ["pdf2:p82", "pdf1:p196", "pdf2:p216", "pdf2:p246", "pdf2:p247"],
+      "learned_anatomy": [
+        "Head, rib cage, pelvis, knees, and feet stack on a clear vertical center line.",
+        "Muscle lines use darker outside contours and lighter construction cross-contours.",
+        "Knees, ankles, deltoids, pectorals, pelvis, and abdomen are drawn as separate readable forms."
+      ],
+      "live2d_use": "Primary source pose for model build, texture cutting, and default idle stance."
+    },
+    {
+      "id": "side_profile",
+      "label": "侧身轮廓",
+      "reference_pages": ["pdf2:p184", "pdf2:p185", "pdf2:p188", "pdf2:p191", "pdf2:p208", "pdf2:p209"],
+      "learned_anatomy": [
+        "Side view is driven by chest mass, pelvis mass, and knee offset rather than by a flat vertical line.",
+        "Rib cage and pelvis are offset in depth; spine curve is visible through neck, chest, waist, and hip landmarks.",
+        "Arms crossing or resting near the torso require occlusion layers over the chest and abdomen."
+      ],
+      "live2d_use": "Use as an angle target for ParamBodyAngleX and ParamAngleX, not as a full replacement for front art."
+    },
+    {
+      "id": "contrapposto_s_curve",
+      "label": "S 曲线重心/姿态摆动",
+      "reference_pages": ["pdf1:p49", "pdf1:p60", "pdf1:p107", "pdf1:p153", "pdf1:p154", "pdf2:p168", "pdf1:p177"],
+      "learned_anatomy": [
+        "Weight-bearing leg stays more vertical; free leg bends or crosses the center line.",
+        "Pelvis tilt and shoulder tilt oppose each other, creating a readable S curve.",
+        "Waist compression appears on the loaded side; the stretched side shows longer oblique and rib lines."
+      ],
+      "live2d_use": "Good for idle variations, breathing plus hip sway, and soft body-angle motion."
+    },
+    {
+      "id": "arms_overhead",
+      "label": "举臂/抱头/手臂越过头顶",
+      "reference_pages": ["pdf2:p160", "pdf2:p159", "pdf2:p236", "pdf2:p237", "pdf2:p152", "pdf2:p189"],
+      "learned_anatomy": [
+        "Raised arms lift and rotate the scapula and deltoid cap; armpit lines stretch upward.",
+        "Pectoral or breast forms shift upward and inward when the upper arm crosses the head.",
+        "Elbows and wrists need independent rotation pivots; a single arm layer is not enough."
+      ],
+      "live2d_use": "Requires split upper arm, lower arm, hand, deltoid cover, and armpit/shoulder correction layers."
+    },
+    {
+      "id": "single_leg_balance",
+      "label": "单腿平衡/舞蹈姿态",
+      "reference_pages": ["pdf2:p208", "pdf2:p209", "pdf1:p66", "pdf1:p106", "pdf2:p246", "pdf2:p247"],
+      "learned_anatomy": [
+        "The standing hip sits higher or locks under the rib cage; the lifted leg creates strong pelvis rotation.",
+        "Foot contact and ankle angle communicate balance; the free foot is smaller or lighter when pulled back.",
+        "Core line tilts opposite the raised knee to keep the pose balanced."
+      ],
+      "live2d_use": "Use as pose preset or motion target. Large knee lift should be an alternate pose, not only a slider."
+    },
+    {
+      "id": "kneel_crouch_sit",
+      "label": "跪坐/蹲伏/低姿态",
+      "reference_pages": ["pdf1:p38", "pdf1:p95", "pdf1:p168", "pdf1:p176", "pdf2:p157", "pdf2:p22"],
+      "learned_anatomy": [
+        "Torso compresses over pelvis; abdomen folds and rib cage overlaps hip or thigh.",
+        "Thigh and calf shapes broaden because of foreshortening; knee becomes a major silhouette landmark.",
+        "Hands often become support points, so wrist and palm layers need ground-contact variants."
+      ],
+      "live2d_use": "Better as separate motion/pose artwork. A standing front model cannot naturally become a full kneel."
+    },
+    {
+      "id": "lunge_fight_run",
+      "label": "弓步/战斗/奔跑",
+      "reference_pages": ["pdf1:p69", "pdf1:p99", "pdf2:p98", "pdf1:p144", "pdf1:p86", "pdf1:p87"],
+      "learned_anatomy": [
+        "Front leg and rear leg separate into opposing diagonals; pelvis rotates toward the action line.",
+        "Shoulder line counters the pelvis line, especially in punches, running, and weapon poses.",
+        "Motion reads through long curves from head to foot, then through shorter muscle compression marks."
+      ],
+      "live2d_use": "Good for motion clips if limbs are separate. Extreme foreshortening needs alternate art layers."
+    },
+    {
+      "id": "jump_flying_twist",
+      "label": "跳跃/腾空/大扭转",
+      "reference_pages": ["pdf1:p60", "pdf1:p62", "pdf1:p73", "pdf1:p88", "pdf1:p151"],
+      "learned_anatomy": [
+        "Center of mass floats between chest and pelvis; limbs fan outward to show force and direction.",
+        "Torso twist changes which shoulder, chest side, and hip side are visible.",
+        "Line weight emphasizes the leading side of the body and lets trailing limbs become lighter."
+      ],
+      "live2d_use": "Use for special motions or expression poses. Do not expect a single frontal rig to cover all of this cleanly."
+    }
+  ]
+}
