@@ -23,6 +23,7 @@ from models.cloud.cloud_models import CloudPetEvent
 from models.nlp.emotion_analyzer import analyze_chat_emotion
 from models.nlp.proactive_event_builder import build_cloud_pet_event, build_screen_time_event
 from models.nlp.prompt_builder import build_proactive_prompt, build_system_prompt, response_language_from_edge_voice
+from models.tts import gpt_sovits as gpt_sovits_module
 from models.tts import voice_pack as voice_pack_module
 from models.tts.ai_voice_assistant import AIChatVoiceAssistant
 from models.tts.echo_team_c_interface import EchoTeamCInterface
@@ -391,6 +392,73 @@ def test_tts_manager_long_read_skips_short_voice_pack_clips():
         assert manager.speak("这一段应该走文本合成，而不是短音效。", action="read") is None
 
 
+def test_tts_manager_uses_gpt_sovits_voice_pack_backend(monkeypatch, tmp_path):
+    base_dir = tmp_path / "packs"
+    pack_dir = base_dir / "clone"
+    pack_dir.mkdir(parents=True)
+    ref = pack_dir / "ref.wav"
+    ref.write_bytes(b"RIFFref")
+    (pack_dir / "voice_pack.json").write_text(
+        json.dumps(
+            {
+                "id": "clone",
+                "voice_profiles": {
+                    "default": {
+                        "provider": "gpt-sovits",
+                        "cute_style": False,
+                        "edge_voice": "zh-CN-XiaoyiNeural",
+                        "gpt_sovits": {
+                            "api_url": "http://127.0.0.1:9880",
+                            "ref_audio_path": "ref.wav",
+                            "prompt_text": "hello",
+                            "prompt_lang": "zh",
+                            "text_lang": "zh",
+                            "media_type": "wav",
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"content-type": "audio/wav"}
+        content = b"RIFFgenerated"
+        text = ""
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(gpt_sovits_module.requests, "post", fake_post)
+    manager = TTSManager(
+        provider="auto",
+        enabled=True,
+        voice_pack_id="clone",
+        voice_pack_dir=str(base_dir),
+        voice_pack_enabled=True,
+    )
+    manager.sounds_dir = tmp_path / "sounds"
+    played = []
+    manager._play_media = played.append
+
+    output = manager.speak("hello", state="neutral", action="speak")
+
+    assert output is not None
+    assert Path(output).read_bytes() == b"RIFFgenerated"
+    assert played == [Path(output)]
+    assert captured["url"] == "http://127.0.0.1:9880/tts"
+    assert captured["json"]["ref_audio_path"] == str(ref)
+    assert captured["json"]["prompt_text"] == "hello"
+    assert captured["json"]["text"] == "hello"
+
+
 def test_tts_edge_adds_playback_guard_before_synthesis(monkeypatch, tmp_path):
     captured = {}
 
@@ -630,6 +698,35 @@ def test_imported_voice_pack_fits_edge_profile_from_pitch(tmp_path: Path):
     assert profile["fit_source"] == "audio_features"
     assert profile["edge_voice"] == "zh-CN-XiaoyiNeural"
     assert profile["edge_pitch"] in {"+16Hz", "+24Hz"}
+
+
+def test_create_imported_voice_pack_can_use_gpt_sovits_backend(tmp_path: Path):
+    sample = tmp_path / "voice.wav"
+    with wave.open(str(sample), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16000)
+        wav.writeframes(b"\x00\x00" * 1600)
+
+    manifest = create_imported_voice_pack(
+        display_name="clone",
+        language_id="zh-CN",
+        sample_paths=[sample],
+        base_dir=tmp_path / "packs",
+        clone_backend="gpt-sovits",
+        prompt_text="hello",
+        gpt_sovits_api_url="http://127.0.0.1:9880",
+    )
+
+    default_profile = manifest["voice_profiles"]["default"]
+    clone_backend = manifest["clone_backend"]
+
+    assert default_profile["provider"] == "gpt-sovits"
+    assert default_profile["gpt_sovits"]["ref_audio_path"] == manifest["samples"][0]
+    assert default_profile["gpt_sovits"]["prompt_text"] == "hello"
+    assert default_profile["gpt_sovits"]["text_lang"] == "zh"
+    assert clone_backend["provider"] == "gpt-sovits"
+    assert clone_backend["mode"] == "zero_shot_reference"
 
 
 def test_voice_pack_language_preset_supports_common_european_languages():

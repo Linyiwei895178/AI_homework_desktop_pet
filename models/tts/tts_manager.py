@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from models.tts.gpt_sovits import GPTSoVITSClient, is_gpt_sovits_provider, normalize_gpt_sovits_provider
 from models.tts.openvoice_bridge import OpenVoicePostProcessor
 from models.tts.voice_pack import VoicePackManager
 from models.tts.voice_style_pack import resolve_voice_style_pack_settings
@@ -161,7 +162,7 @@ class TTSManager:
         if "enabled" in settings:
             self.enabled = bool(settings.get("enabled"))
 
-        provider = str(settings.get("provider") or "").strip().lower().replace("_", "-")
+        provider = normalize_gpt_sovits_provider(settings.get("provider"))
         if provider:
             if provider in {"disabled", "none", "false"}:
                 provider = "off"
@@ -223,13 +224,15 @@ class TTSManager:
 
         print(
             "[TTS] "
-            f"provider={self.provider}, voice={settings['edge_voice']}, "
-            f"rate={settings['edge_rate']}, pitch={settings['edge_pitch']}: {spoken}"
+            f"provider={settings.get('provider', self.provider)}, voice={settings.get('edge_voice', '')}, "
+            f"rate={settings.get('edge_rate', '')}, pitch={settings.get('edge_pitch', '')}: {spoken}"
         )
 
         with self._speech_lock:
-            for backend in self._provider_order():
+            for backend in self._provider_order(settings):
                 try:
+                    if backend == "gpt-sovits":
+                        return self._speak_gpt_sovits(spoken, pet_id, state, action, settings)
                     if backend == "edge":
                         return self._speak_edge(spoken, pet_id, state, action, settings)
                     if backend == "pyttsx3":
@@ -290,6 +293,7 @@ class TTSManager:
 
     def _voice_settings(self, pet_id: str = "cat", state: str = "neutral", action: str = "speak") -> dict:
         settings = {
+            "provider": normalize_gpt_sovits_provider(self.provider),
             "edge_voice": config.EDGE_TTS_VOICE,
             "edge_rate": os.getenv("EDGE_TTS_RATE", "+8%"),
             "edge_pitch": os.getenv("EDGE_TTS_PITCH", "+12Hz"),
@@ -328,6 +332,8 @@ class TTSManager:
                 ):
                     runtime_overrides.pop(key, None)
         settings.update(runtime_overrides)
+        if isinstance(settings.get("gpt_sovits"), dict):
+            settings["gpt_sovits"] = self.voice_pack.resolve_gpt_sovits_backend(settings["gpt_sovits"])
         return settings
 
     def _style_pack_enabled(self) -> bool:
@@ -365,11 +371,16 @@ class TTSManager:
                 return key
         return "neutral"
 
-    def _provider_order(self) -> tuple[str, ...]:
+    def _provider_order(self, settings: dict[str, Any] | None = None) -> tuple[str, ...]:
         windows_fallback = ("windows-sapi",) if platform.system() == "Windows" else ()
-        provider = (self.provider or "auto").strip().lower().replace("_", "-")
+        provider = normalize_gpt_sovits_provider((settings or {}).get("provider") or self.provider or "auto")
+        has_gpt_sovits_backend = isinstance((settings or {}).get("gpt_sovits"), dict)
         if provider in {"", "auto"}:
+            if has_gpt_sovits_backend:
+                return ("gpt-sovits", "edge", "pyttsx3") + windows_fallback
             return ("edge", "pyttsx3") + windows_fallback
+        if is_gpt_sovits_provider(provider):
+            return ("gpt-sovits", "edge", "pyttsx3") + windows_fallback
         if provider in {"edge", "edge-tts", "neural", "edge-neural", "high-realism"}:
             return ("edge", "pyttsx3") + windows_fallback
         if provider in {"pyttsx3", "offline", "local"}:
@@ -377,6 +388,26 @@ class TTSManager:
         if provider in {"off", "none", "disabled", "false"}:
             return ()
         return ("edge", "pyttsx3") + windows_fallback
+
+    def _speak_gpt_sovits(self, text: str, pet_id: str, state: str, action: str, settings: dict) -> str:
+        backend = settings.get("gpt_sovits")
+        if not isinstance(backend, dict):
+            raise RuntimeError("GPT-SoVITS voice pack settings are missing.")
+
+        media_type = str(backend.get("media_type") or "wav").strip().lower().lstrip(".")
+        if media_type not in {"wav", "mp3", "ogg", "aac", "raw"}:
+            media_type = "wav"
+        output_path = self._next_audio_path(pet_id=pet_id, state=state, action=action, suffix=f".{media_type}")
+
+        client = GPTSoVITSClient(
+            api_url=str(backend.get("api_url") or config.get("GPT_SOVITS_API_URL", "")),
+            timeout=_positive_float_setting(backend.get("timeout"), "GPT_SOVITS_TIMEOUT", 90.0),
+        )
+        client.synthesize(text=text, output_path=output_path, backend=backend)
+        if not output_path.exists() or output_path.stat().st_size <= 0:
+            raise RuntimeError("GPT-SoVITS did not generate an audio file.")
+        self._play_media(output_path)
+        return str(output_path)
 
     def _speak_edge(self, text: str, pet_id: str, state: str, action: str, settings: dict) -> str:
         try:

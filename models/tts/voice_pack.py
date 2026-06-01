@@ -14,6 +14,8 @@ import wave
 from pathlib import Path
 from typing import Any
 
+from models.tts.gpt_sovits import build_voice_pack_backend
+
 
 AUDIO_SAMPLE_EXTENSIONS = (".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".wma")
 VIDEO_SAMPLE_EXTENSIONS = (".mp4",)
@@ -212,6 +214,9 @@ def create_imported_voice_pack(
     language_id: str,
     sample_paths: list[str | Path],
     base_dir: str | Path = "assets/voice_packs",
+    clone_backend: str | None = None,
+    prompt_text: str = "",
+    gpt_sovits_api_url: str = "",
 ) -> dict[str, Any]:
     name = str(display_name or "").strip()
     if not name:
@@ -222,6 +227,7 @@ def create_imported_voice_pack(
         raise ValueError("请选择至少一个可用的音频文件")
 
     preset = voice_pack_language_preset(language_id)
+    display_name_with_language = f"{preset['label']}{name}"
     base_path = Path(base_dir)
     base_path.mkdir(parents=True, exist_ok=True)
     pack_id = _unique_pack_id(f"{preset['id']}_{name}", base_path)
@@ -266,9 +272,24 @@ def create_imported_voice_pack(
         analysis = analyze_audio_samples(copied_paths)
         noise_reduction = create_conservative_noise_reduced_samples(copied_paths, pack_dir)
         profile = _profile_from_audio_features(preset, analysis)
+        clone_backend_id = _normalize_clone_backend(clone_backend)
+        clone_config: dict[str, Any] = {}
+        if clone_backend_id == "gpt-sovits":
+            clone_config = build_voice_pack_backend(
+                sample_paths=copied,
+                language_id=str(preset["id"]),
+                prompt_text=prompt_text,
+                api_url=gpt_sovits_api_url,
+            )
+            profile.update(
+                {
+                    "provider": "gpt-sovits",
+                    "gpt_sovits": clone_config,
+                }
+            )
         manifest: dict[str, Any] = {
             "id": pack_id,
-            "display_name": name,
+            "display_name": display_name_with_language,
             "user_name": name,
             "icon": "🎙️",
             "description": (
@@ -288,8 +309,9 @@ def create_imported_voice_pack(
             "conversions": conversions,
             "analysis": analysis,
             "noise_reduction": noise_reduction,
+            "clone_backend": _voice_pack_clone_backend_manifest(clone_config),
             "simulation": {
-                "mode": "audio_feature_profile",
+                "mode": "gpt_sovits_zero_shot" if clone_config else "audio_feature_profile",
                 "note": "当前版本会按样本音高、响度和语音密度微调底层 TTS 参数；如启用 OpenVoice，可再进行可选声纹后处理。",
             },
             "voice_profiles": {
@@ -836,6 +858,29 @@ def _valid_sample_paths(sample_paths: list[str | Path]) -> list[Path]:
     return valid
 
 
+def _normalize_clone_backend(value: str | None) -> str:
+    backend = str(value or "").strip().lower().replace("_", "-")
+    if backend in {"gpt-sovits", "gptsovits", "sovits", "voice-clone"}:
+        return "gpt-sovits"
+    return ""
+
+
+def _voice_pack_clone_backend_manifest(clone_config: dict[str, Any]) -> dict[str, Any]:
+    if not clone_config:
+        return {}
+    return {
+        "provider": "gpt-sovits",
+        "mode": "zero_shot_reference",
+        "status": "ready",
+        "api_url": clone_config.get("api_url", ""),
+        "ref_audio_path": clone_config.get("ref_audio_path", ""),
+        "aux_ref_audio_paths": clone_config.get("aux_ref_audio_paths", []),
+        "prompt_text": clone_config.get("prompt_text", ""),
+        "prompt_lang": clone_config.get("prompt_lang", ""),
+        "text_lang": clone_config.get("text_lang", ""),
+    }
+
+
 def _unique_pack_id(display_name: str, base_path: Path) -> str:
     stem = re.sub(r"[^0-9A-Za-z_-]+", "_", display_name.strip()).strip("_-").lower()
     if stem:
@@ -970,6 +1015,40 @@ class VoicePackManager:
             if match:
                 return match
         return samples[0]
+
+    def resolve_gpt_sovits_backend(self, backend: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(backend, dict):
+            return {}
+        pack_dir = self._pack_dir()
+        resolved = dict(backend)
+        ref_audio_path = str(backend.get("ref_audio_path") or "").strip()
+        resolved["ref_audio_path"] = (
+            str(self._resolve_pack_path(ref_audio_path, pack_dir))
+            if ref_audio_path
+            else ""
+        )
+        aux_paths = backend.get("aux_ref_audio_paths")
+        if isinstance(aux_paths, str):
+            aux_paths = [aux_paths]
+        if isinstance(aux_paths, list):
+            resolved["aux_ref_audio_paths"] = [
+                str(self._resolve_pack_path(path, pack_dir))
+                for path in aux_paths
+                if str(path or "").strip()
+            ]
+        else:
+            resolved["aux_ref_audio_paths"] = []
+        return resolved
+
+    @staticmethod
+    def _resolve_pack_path(value: Any, pack_dir: Path) -> Path:
+        raw = str(value or "").strip()
+        if not raw:
+            return Path("")
+        path = Path(raw)
+        if path.is_absolute():
+            return path
+        return pack_dir / path
 
     @staticmethod
     def _pick_existing(pack_dir: Path, files) -> Path | None:

@@ -67,6 +67,8 @@ class Config:
         self.TTS_API_URL = os.getenv("TTS_API_URL", "")
         self.TTS_PROVIDER = os.getenv("TTS_PROVIDER", "auto")
         self.EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "zh-CN-XiaoyiNeural")
+        self.GPT_SOVITS_API_URL = os.getenv("GPT_SOVITS_API_URL", "http://127.0.0.1:9880")
+        self.GPT_SOVITS_TIMEOUT = os.getenv("GPT_SOVITS_TIMEOUT", "90")
         self.VOICE_PACK_ID = os.getenv("VOICE_PACK_ID", "")
         self.VOICE_PACK_MODE = os.getenv("VOICE_PACK_MODE", "prefer")
         self.VOICE_PACK_AUTO_BY_PET = os.getenv("VOICE_PACK_AUTO_BY_PET", "true")

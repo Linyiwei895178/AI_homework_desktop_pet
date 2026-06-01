@@ -40,3 +40,26 @@ Regenerate assets with:
 & 'C:\Users\醨\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' tools\extract_ai_live2d_layers.py
 & 'C:\Users\醨\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' tools\fit_live2d_base_to_reference.py --target 'C:\Users\醨\xwechat_files\wxid_odh8547copbs32_bb21\temp\RWTemp\2026-06\40f32654c2889e4312cd53deb0bda6c1.png' --crop 395,540,395,1240 --iterations 520 --seed 13
 ```
+
+## Parametric body and face controls
+
+- `rig_parameters.json`: slider schema for body and facial-feature adjustment.
+- `parameter_presets.json`: default, round/cute, tall/slim, and wide-face presets.
+- `parametric/default_preview.png`: rendered default adjustable base preview.
+- `parametric/default_transparent.png`: rendered default transparent adjustable base.
+- `tools/render_parametric_live2d_base.py`: renderer that applies parameter values to the layer set.
+
+Main control groups:
+
+- Global: overall scale and x/y offset.
+- Head: head size, width, height, x/y, ear size, ear spread, ear y.
+- Body: neck width/length/y, torso width/length/y, shoulder width.
+- Arms: arm length/thickness/spread/y, hand size/y.
+- Legs: leg length/thickness/spread/y, foot width/height.
+- Face: eye x/y/spacing/width/height/depth, nose x/y/size/depth, mouth x/y/width/curve/depth.
+
+Render a preset with:
+
+```powershell
+& 'C:\Users\醨\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' tools\render_parametric_live2d_base.py --preset default --name default
+```

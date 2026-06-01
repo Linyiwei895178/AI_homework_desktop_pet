@@ -259,6 +259,10 @@ class AIChatVoiceAssistant:
         if _is_chinese_language(response_language):
             return self._translate_reply_to_chinese(value, response_language=response_language) or reply
 
+        bilingual = self._bilingual_reply_with_line_translations(value, response_language=response_language)
+        if bilingual:
+            return bilingual
+
         translation = self._translate_reply_to_chinese(value, response_language=response_language)
         if translation and translation.strip() and translation.strip() != value:
             return f"{value}\n{translation.strip()}"
@@ -273,8 +277,40 @@ class AIChatVoiceAssistant:
         value = (text or "").strip()
         if not value:
             return ""
+        lines = [line.strip() for line in value.splitlines()]
+        non_empty_lines = [line for line in lines if line]
+        if len(non_empty_lines) > 1:
+            translated_lines: list[str] = []
+            for line in lines:
+                if not line:
+                    translated_lines.append("")
+                    continue
+                translation = self._translate_line_to_chinese(line, response_language=response_language).strip()
+                translated_lines.append(translation or line)
+            return "\n".join(translated_lines).strip()
         translation = self._translate_line_to_chinese(value, response_language=response_language)
         return translation.strip() if translation.strip() else value
+
+    def _bilingual_reply_with_line_translations(self, text: str, response_language: str = "") -> str:
+        lines = [line.strip() for line in (text or "").strip().splitlines()]
+        if len([line for line in lines if line]) <= 1:
+            return ""
+
+        display_lines: list[str] = []
+        changed = False
+        for line in lines:
+            if not line:
+                if display_lines and display_lines[-1]:
+                    display_lines.append("")
+                continue
+            display_lines.append(line)
+            translation = self._translate_line_to_chinese(line, response_language=response_language).strip()
+            if translation and translation != line:
+                display_lines.append(translation)
+                changed = True
+        if not changed:
+            return ""
+        return "\n".join(display_lines).strip()
 
     def _translate_line_to_chinese(self, text: str, response_language: str = "") -> str:
         translator = getattr(self.llm, "translate_to_chinese", None)

@@ -1,5 +1,5 @@
 {
-  "last_pet_id": "mao_pro_zh",
+  "last_pet_id": "elf_count",
   "pin_top": true,
   "hover_fade": false,
   "status_bar": false,
@@ -11,15 +11,19 @@
     "quality": "neural",
     "edge_voice": "",
     "response_language": "zh-CN",
-    "voice_style_pack": "boss",
+    "voice_style_pack": "taiwan",
     "voice_style_pack_enabled": true,
+    "edge_playback_guard": false,
+    "text_normalizer": "zh_tw_natural",
+    "prosody_style": "taiwan",
+    "voice_style_pack_locks_prosody": true,
     "voice_profile": "default",
     "emotion_style": "auto",
     "cute_style": false,
     "voice_pack_mode": "off",
-    "edge_rate": "-14%",
-    "edge_pitch": "-20Hz",
-    "edge_volume": "+7%",
+    "edge_rate": "-2%",
+    "edge_pitch": "+0Hz",
+    "edge_volume": "+2%",
     "openvoice_enabled": false,
     "openvoice_python": "",
     "openvoice_repo_dir": "",
@@ -29,8 +33,8 @@
     "tts_volume": "0.95"
   },
   "position": [
-    1158,
-    217
+    1223,
+    364
   ],
   "window_size": [
     406,
