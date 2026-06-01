@@ -2692,6 +2692,7 @@ class DesktopPet:
     if group is None:
       print(f"[DesktopPet] 未找到动作: {motion_name}")
       return False
+    self._model.StopAllMotions()
     self._model.StartMotion(
       group,
       index,
