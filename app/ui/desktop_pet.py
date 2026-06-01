@@ -2610,7 +2610,7 @@ class DesktopPet:
     self._model.StartMotion(
       group,
       index,
-      MotionPriority.NORMAL,
+      MotionPriority.FORCE,
       onFinishMotionHandler=self._start_idle_motion,
     )
     print(f"[DesktopPet] 播放动作: {motion_name}")

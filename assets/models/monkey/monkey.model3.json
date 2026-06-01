@@ -38,14 +38,14 @@
           "File": "motions/WTF.motion3.json"
         }
       ],
-      "Sign_STYLE1": [
-        {
-          "File": "motions/Sign.motion3.json"
-        }
-      ],
       "HairCustom": [
         {
           "File": "motions/HairCustom.motion3.json"
+        }
+      ],
+      "Sign": [
+        {
+          "File": "motions/Sign.motion3.json"
         }
       ]
     }
