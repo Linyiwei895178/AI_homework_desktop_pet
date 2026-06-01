@@ -1,13 +1,20 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.nlp.deepseek_api import DeepSeekClient
 from models.nlp.prompt_builder import build_proactive_prompt, build_state_context
 from models.vision.computer_activity_detector import (
+    ACTIVITY_BROWSING,
+    ACTIVITY_CHATTING,
+    ACTIVITY_CODING,
     ACTIVITY_GAMING,
+    ACTIVITY_UNKNOWN,
     ACTIVITY_WATCHING,
+    ACTIVITY_WORKING,
     ComputerActivityDetector,
     ForegroundWindow,
     build_companion_event,
@@ -38,6 +45,53 @@ def test_classifies_video_site_window_as_watching():
     assert state["activity_code"] == ACTIVITY_WATCHING
     assert state["confidence"] >= 0.7
     assert "陪看" in state["tags"]
+
+
+@pytest.mark.parametrize(
+    ("process_name", "window_title", "expected_code"),
+    [
+        ("Code.exe", "main.py - Visual Studio Code", ACTIVITY_CODING),
+        ("chrome.exe", "GitHub - SWT-0407/AI_homework_desktop_pet", ACTIVITY_CODING),
+        ("chrome.exe", "LeetCode - 两数之和 - Google Chrome", ACTIVITY_CODING),
+        ("POWERPNT.EXE", "项目汇报.pptx - PowerPoint", ACTIVITY_WORKING),
+        ("wps.exe", "论文.docx - WPS Writer", ACTIVITY_WORKING),
+        ("chrome.exe", "飞书文档 - 项目计划", ACTIVITY_WORKING),
+        ("msedge.exe", "百度搜索 - Microsoft Edge", ACTIVITY_BROWSING),
+        ("random.exe", "知乎 - 搜索结果 - Chrome", ACTIVITY_BROWSING),
+        ("WeChat.exe", "微信", ACTIVITY_CHATTING),
+        ("chrome.exe", "Telegram Web", ACTIVITY_CHATTING),
+        ("chrome.exe", "腾讯视频 - 电视剧 - Google Chrome", ACTIVITY_WATCHING),
+        ("vlc.exe", "VLC 播放器", ACTIVITY_WATCHING),
+        ("steam.exe", "Steam", ACTIVITY_GAMING),
+        ("chrome.exe", "原神 - HoYoLAB", ACTIVITY_GAMING),
+    ],
+)
+def test_classifies_required_activity_keywords(process_name, window_title, expected_code):
+    state = classify_window_activity(
+        process_name=process_name,
+        window_title=window_title,
+        is_fullscreen=False,
+    )
+
+    assert state["activity_code"] == expected_code
+    assert state["activity_name"]
+    assert state["description"]
+    assert state["confidence"] > 0
+    assert state["source"]
+
+
+def test_classifies_unknown_window():
+    state = classify_window_activity(
+        process_name="mystery.exe",
+        window_title="Untitled Window",
+        is_fullscreen=False,
+    )
+
+    assert state["activity_code"] == ACTIVITY_UNKNOWN
+    assert state["activity_name"]
+    assert state["description"]
+    assert state["confidence"] > 0
+    assert state["source"] == ["foreground_window"]
 
 
 def test_builds_companion_event_for_commentable_activity():

@@ -50,6 +50,7 @@ ACTIVITY_NAME_MAP = {
 
 BROWSER_PROCESSES = {
     "chrome.exe",
+    "chromium.exe",
     "msedge.exe",
     "firefox.exe",
     "brave.exe",
@@ -68,17 +69,23 @@ VIDEO_PLAYER_PROCESSES = {
     "moviesandtv.exe",
     "bilibili.exe",
     "qqlive.exe",
+    "tenvideo.exe",
     "qiyi.exe",
+    "qyclient.exe",
     "youku.exe",
+    "qqplayer.exe",
 }
 
 CHAT_PROCESSES = {
     "wechat.exe",
     "weixin.exe",
+    "wechatapp.exe",
     "qq.exe",
+    "qqnt.exe",
     "tim.exe",
     "discord.exe",
     "telegram.exe",
+    "telegram desktop.exe",
     "dingtalk.exe",
     "feishu.exe",
     "lark.exe",
@@ -92,8 +99,21 @@ CODING_PROCESSES = {
     "idea64.exe",
     "webstorm64.exe",
     "devenv.exe",
+    "devcpp.exe",
+    "dev-cpp.exe",
     "sublime_text.exe",
     "notepad++.exe",
+    "windowsterminal.exe",
+    "terminal.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "cmd.exe",
+    "python.exe",
+    "pythonw.exe",
+    "java.exe",
+    "gcc.exe",
+    "g++.exe",
+    "cl.exe",
 }
 
 OFFICE_PROCESSES = {
@@ -106,9 +126,17 @@ OFFICE_PROCESSES = {
     "onenote.exe",
     "notion.exe",
     "obsidian.exe",
+    "acrord32.exe",
+    "acrobat.exe",
+    "foxitreader.exe",
+    "tencentmeeting.exe",
+    "voovmeeting.exe",
 }
 
 KNOWN_GAME_PROCESSES = {
+    "steam.exe",
+    "epicgameslauncher.exe",
+    "wegame.exe",
     "eldenring.exe",
     "starfield.exe",
     "stardew valley.exe",
@@ -116,22 +144,104 @@ KNOWN_GAME_PROCESSES = {
     "minecraft.exe",
     "javaw.exe",
     "league of legends.exe",
+    "leagueclient.exe",
     "leagueclientux.exe",
+    "valorant.exe",
     "valorant-win64-shipping.exe",
     "cs2.exe",
+    "crossfire.exe",
+    "dnf.exe",
+    "dnfchina.exe",
     "dota2.exe",
     "overwatch.exe",
     "r5apex.exe",
     "genshinimpact.exe",
+    "yuanshen.exe",
     "yuan shen.exe",
     "hkrpg.exe",
+    "starrail.exe",
+    "honkaistarrail.exe",
     "zenlesszonezero.exe",
     "palworld-win64-shipping.exe",
 }
 
+CODING_TITLE_KEYWORDS = (
+    "visual studio code",
+    "vs code",
+    "vscode",
+    "pycharm",
+    "dev-c++",
+    "dev cpp",
+    "visual studio",
+    "github",
+    "leetcode",
+    "力扣",
+    "codeforces",
+    "洛谷",
+    "terminal",
+    "windows terminal",
+    "powershell",
+    "cmd",
+    "command prompt",
+    "python",
+    "cpp",
+    "c++",
+    "java",
+    "代码",
+    "编程",
+)
+
+WORKING_TITLE_KEYWORDS = (
+    "word",
+    "excel",
+    "powerpoint",
+    "power point",
+    "ppt",
+    "wps",
+    "pdf",
+    "腾讯会议",
+    "飞书文档",
+    "钉钉文档",
+    "office",
+    "onenote",
+    "文档",
+    "会议",
+)
+
+CHATTING_TITLE_KEYWORDS = (
+    "微信",
+    "wechat",
+    "qq",
+    "tim",
+    "飞书",
+    "lark",
+    "钉钉",
+    "dingtalk",
+    "telegram",
+    "聊天",
+    "群聊",
+)
+
+BROWSING_TITLE_KEYWORDS = (
+    "chrome",
+    "edge",
+    "firefox",
+    "百度",
+    "知乎",
+    "搜索",
+    "搜索结果",
+    "网页",
+    "浏览器",
+    "browser",
+    "google search",
+    "bing",
+)
+
 GAME_TITLE_KEYWORDS = (
     "steam",
+    "epic",
     "epic games",
+    "wegame",
     "xbox",
     "minecraft",
     "stardew valley",
@@ -142,12 +252,18 @@ GAME_TITLE_KEYWORDS = (
     "无畏契约",
     "counter-strike",
     "cs2",
+    "crossfire",
+    "穿越火线",
+    "dnf",
+    "地下城与勇士",
     "dota 2",
     "apex legends",
     "overwatch",
     "守望先锋",
     "原神",
     "崩坏",
+    "星穹铁道",
+    "honkai: star rail",
     "绝区零",
     "elden ring",
     "艾尔登法环",
@@ -174,6 +290,7 @@ WATCHING_TITLE_KEYWORDS = (
     "hulu",
     "potplayer",
     "vlc",
+    "播放器",
     "番剧",
     "电视剧",
     "电影",
@@ -299,6 +416,7 @@ def classify_window_activity(
     """Classify a foreground window into a coarse computer activity state."""
     process = _normalize_process_name(process_name)
     title = (window_title or "").strip()
+    title_text = title.lower()
     haystack = f"{process} {title}".lower()
     tags: list[str] = []
     source = ["foreground_window"]
@@ -318,21 +436,21 @@ def classify_window_activity(
         code = ACTIVITY_GAMING
         confidence = 0.62
         tags.extend(["全屏", "可能是游戏"])
-    elif process in CHAT_PROCESSES:
-        code = ACTIVITY_CHATTING
-        confidence = 0.82
-        tags.append("聊天")
-    elif process in CODING_PROCESSES:
+    elif process in CODING_PROCESSES or _contains_any(title_text, CODING_TITLE_KEYWORDS):
         code = ACTIVITY_CODING
-        confidence = 0.84
+        confidence = 0.84 if process in CODING_PROCESSES else 0.76
         tags.append("编程")
-    elif process in OFFICE_PROCESSES:
+    elif process in OFFICE_PROCESSES or _contains_any(title_text, WORKING_TITLE_KEYWORDS):
         code = ACTIVITY_WORKING
-        confidence = 0.82
+        confidence = 0.82 if process in OFFICE_PROCESSES else 0.74
         tags.append("办公")
-    elif process in BROWSER_PROCESSES:
+    elif process in CHAT_PROCESSES or _contains_any(title_text, CHATTING_TITLE_KEYWORDS):
+        code = ACTIVITY_CHATTING
+        confidence = 0.82 if process in CHAT_PROCESSES else 0.74
+        tags.append("聊天")
+    elif process in BROWSER_PROCESSES or _contains_any(title_text, BROWSING_TITLE_KEYWORDS):
         code = ACTIVITY_BROWSING
-        confidence = 0.68
+        confidence = 0.68 if process in BROWSER_PROCESSES else 0.62
         tags.append("网页")
     else:
         code = ACTIVITY_UNKNOWN

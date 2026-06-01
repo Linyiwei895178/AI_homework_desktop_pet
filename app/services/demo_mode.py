@@ -11,13 +11,137 @@ import time
 from typing import Any, Dict, Optional
 
 from models.vision.user_state_detector import (
+    STATE_NAME_MAP,
     STATE_NORMAL,
     STATE_FOCUSED,
     STATE_DISTRACTED,
     STATE_TIRED,
     STATE_AWAY,
     STATE_RETURN,
+    STATE_STUDY_LONG,
+    STATE_LOW_LIGHT,
+    STATE_UNKNOWN,
 )
+
+
+DEFAULT_MOCK_USER_STATE_CYCLE = [
+    STATE_NORMAL,
+    STATE_FOCUSED,
+    STATE_DISTRACTED,
+    STATE_TIRED,
+    STATE_AWAY,
+    STATE_RETURN,
+    STATE_LOW_LIGHT,
+    STATE_STUDY_LONG,
+]
+
+MOCK_USER_STATE_TEMPLATES: Dict[str, Dict[str, Any]] = {
+    STATE_NORMAL: {
+        "description": "模拟状态：用户姿态正常，正在电脑前自然使用设备。",
+        "tags": ["正常", "mock"],
+        "confidence": 0.92,
+        "need_response": False,
+        "suggestion": "保持普通陪伴即可，不需要主动说话。",
+    },
+    STATE_FOCUSED: {
+        "description": "模拟状态：用户正在专注学习或工作，视线稳定。",
+        "tags": ["专注", "学习", "mock"],
+        "confidence": 0.9,
+        "need_response": False,
+        "suggestion": "保持安静陪伴，不要打断用户思路。",
+    },
+    STATE_DISTRACTED: {
+        "description": "模拟状态：用户注意力有些分散，疑似偏离当前任务。",
+        "tags": ["分心", "提醒", "mock"],
+        "confidence": 0.84,
+        "need_response": True,
+        "suggestion": "用轻松、不责备的方式提醒用户回到当前任务。",
+    },
+    STATE_TIRED: {
+        "description": "模拟状态：用户看起来有些疲劳，可能需要短暂休息。",
+        "tags": ["疲劳", "休息", "mock"],
+        "confidence": 0.86,
+        "need_response": True,
+        "suggestion": "用温柔关心的语气提醒用户休息眼睛或喝水。",
+    },
+    STATE_AWAY: {
+        "description": "模拟状态：用户暂时离开座位。",
+        "tags": ["离开", "无人", "mock"],
+        "confidence": 0.88,
+        "need_response": False,
+        "suggestion": "桌宠进入等待状态，不要频繁说话。",
+    },
+    STATE_RETURN: {
+        "description": "模拟状态：用户刚刚回到座位。",
+        "tags": ["返回", "欢迎", "mock"],
+        "confidence": 0.87,
+        "need_response": True,
+        "suggestion": "用开心、简短的方式欢迎用户回来。",
+    },
+    STATE_LOW_LIGHT: {
+        "description": "模拟状态：当前环境光线偏暗。",
+        "tags": ["低光照", "用眼提醒", "mock"],
+        "confidence": 0.85,
+        "need_response": True,
+        "suggestion": "提醒用户开灯或调整光线，保护眼睛。",
+    },
+    STATE_STUDY_LONG: {
+        "description": "模拟状态：用户已经连续学习或工作较长时间。",
+        "tags": ["长时间学习", "久坐", "mock"],
+        "confidence": 0.83,
+        "need_response": True,
+        "suggestion": "提醒用户休息眼睛、起身活动一下。",
+    },
+}
+
+
+class MockUserStateProvider:
+    """Provider that returns UserStateDetector-compatible mock user states."""
+
+    def __init__(
+        self,
+        cycle_seconds: float = 10.0,
+        states: Optional[list[str]] = None,
+        now_func=time.time,
+    ):
+        self.cycle_seconds = max(1.0, float(cycle_seconds))
+        self.states = [
+            state for state in (states or DEFAULT_MOCK_USER_STATE_CYCLE)
+            if state in MOCK_USER_STATE_TEMPLATES
+        ] or list(DEFAULT_MOCK_USER_STATE_CYCLE)
+        self._now_func = now_func
+        self._last_state_code: Optional[str] = None
+        self._state_since = float(self._now_func())
+
+    def get_state(self) -> Dict[str, Any]:
+        now = float(self._now_func())
+        idx = int(now / self.cycle_seconds) % len(self.states)
+        state_code = self.states[idx]
+
+        if state_code != self._last_state_code:
+            self._last_state_code = state_code
+            self._state_since = now
+
+        template = MOCK_USER_STATE_TEMPLATES.get(state_code, MOCK_USER_STATE_TEMPLATES[STATE_NORMAL])
+        return {
+            "state_code": state_code,
+            "state_name": STATE_NAME_MAP.get(state_code, STATE_NAME_MAP[STATE_UNKNOWN]),
+            "description": str(template["description"]),
+            "tags": list(template["tags"]),
+            "confidence": float(template["confidence"]),
+            "duration": round(max(0.0, now - self._state_since), 2),
+            "need_response": bool(template["need_response"]),
+            "suggestion": str(template["suggestion"]),
+            "source": ["mock", "demo_mode"],
+        }
+
+
+_DEFAULT_MOCK_USER_STATE_PROVIDER = MockUserStateProvider()
+
+
+def get_mock_user_state() -> Dict[str, Any]:
+    """Return a mock state with exactly the same fields as UserStateDetector.get_state()."""
+    return _DEFAULT_MOCK_USER_STATE_PROVIDER.get_state()
 
 
 def mock_user_state(
@@ -29,49 +153,12 @@ def mock_user_state(
 
     :param cycle_seconds: duration (seconds) before the state changes
     :param custom_states: optional list of state codes to cycle through;
-                          defaults to [normal, focused, distracted, tired, return]
+                          defaults to normal/focused/distracted/tired/away/
+                          return/low_light/study_long
     :returns: user_state dict compatible with api_apply_user_state
     """
-    states = custom_states or [
-        STATE_NORMAL,
-        STATE_FOCUSED,
-        STATE_DISTRACTED,
-        STATE_TIRED,
-        STATE_RETURN,
-    ]
-    idx = int(time.time() / cycle_seconds) % len(states)
-    state_code = states[idx]
-
-    state_names = {
-        STATE_NORMAL: "正常状态",
-        STATE_FOCUSED: "专注学习",
-        STATE_DISTRACTED: "疑似分心",
-        STATE_TIRED: "疑似疲劳",
-        STATE_AWAY: "暂时离开",
-        STATE_RETURN: "回到座位",
-    }
-
-    need_response = state_code in (STATE_DISTRACTED, STATE_TIRED)
-
-    suggestions = {
-        STATE_NORMAL: "用户状态正常，可以轻松陪伴。",
-        STATE_FOCUSED: "用户正在专注，保持安静陪伴。",
-        STATE_DISTRACTED: "用户可能分心了，用轻松的方式提醒回到状态。",
-        STATE_TIRED: "用户看起来很疲惫，先关心一下。",
-        STATE_RETURN: "用户刚回来，可以温柔欢迎一下。",
-    }
-
-    return {
-        "state_code": state_code,
-        "state_name": state_names.get(state_code, "未知"),
-        "description": f"模拟状态: {state_code}",
-        "tags": [state_code, "mock"],
-        "confidence": round(random.uniform(0.75, 0.95), 2),
-        "duration": round(random.uniform(5.0, 15.0), 1),
-        "need_response": need_response,
-        "suggestion": suggestions.get(state_code, "根据当前状态做出合适的回应。"),
-        "source": ["mock"],
-    }
+    provider = MockUserStateProvider(cycle_seconds=cycle_seconds, states=custom_states)
+    return provider.get_state()
 
 
 def mock_cloud_event(
