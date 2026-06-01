@@ -2699,6 +2699,10 @@ class DesktopPet:
       MotionPriority.FORCE,
       onFinishMotionHandler=self._start_idle_motion,
     )
+    try:
+        self._model.SetExpression(motion_name)
+    except Exception:
+        pass
     print(f"[DesktopPet] 播放动作: {motion_name}")
     return True
 
