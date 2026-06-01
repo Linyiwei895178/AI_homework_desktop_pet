@@ -2628,6 +2628,7 @@ class ControlConsole(QMainWindow):
         current_tts_settings: dict[str, Any] | None = None,
         on_read_text: Callable[..., None] | None = None,
         on_stop_read_text: Callable[[], None] | None = None,
+        on_pet_settings_changed: Callable[[dict[str, dict[str, Any]]], None] | None = None,
     ) -> None:
         super().__init__()
         self._project_root = project_root
@@ -2640,6 +2641,7 @@ class ControlConsole(QMainWindow):
         self.on_tts_settings_changed = on_tts_settings_changed
         self.on_read_text = on_read_text
         self.on_stop_read_text = on_stop_read_text
+        self.on_pet_settings_changed = on_pet_settings_changed
         self.stats = {"mood": 85, "energy": 72, "affection": 90}
         self._page = "dashboard"
         self._pet_main_id: str | None = None
@@ -3150,6 +3152,8 @@ class ControlConsole(QMainWindow):
     def _save_pet_personalization_from_controls(self) -> None:
         self._pet_settings = self._collect_pet_personalization_controls()
         if self._save_pet_personalization_settings():
+            if self.on_pet_settings_changed:
+                self.on_pet_settings_changed(dict(self._pet_settings))
             if hasattr(self, "_pet_settings_status"):
                 self._pet_settings_status.setText("已保存")
             self._show_toast("桌宠设置已保存")
@@ -3159,6 +3163,8 @@ class ControlConsole(QMainWindow):
         self._pet_settings = self._default_pet_personalization_settings()
         self._apply_pet_personalization_controls()
         if self._save_pet_personalization_settings():
+            if self.on_pet_settings_changed:
+                self.on_pet_settings_changed(dict(self._pet_settings))
             if hasattr(self, "_pet_settings_status"):
                 self._pet_settings_status.setText("已恢复默认")
             self._show_toast("桌宠设置已恢复默认")
