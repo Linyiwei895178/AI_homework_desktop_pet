@@ -1,5 +1,7 @@
 import os
 import sys
+import time
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -34,7 +36,7 @@ def test_default_state_is_none_gesture():
 
 
 def test_start_and_stop_do_not_require_camera():
-    detector = GestureDetector()
+    detector = GestureDetector(enable_real=False)
 
     detector.start()
     assert detector.is_running() is True
@@ -77,3 +79,75 @@ def test_unknown_mock_gesture_falls_back_to_none():
 
     assert state["gesture_code"] == GESTURE_NONE
     assert state["need_response"] is False
+
+
+def test_classifies_ok_from_hand_landmarks_without_camera():
+    detector = GestureDetector(enable_real=False)
+    landmarks = _blank_hand()
+    landmarks[4] = _point(0.50, 0.50)
+    landmarks[8] = _point(0.53, 0.50)
+    _set_finger_up(landmarks, 12, 10)
+    _set_finger_up(landmarks, 16, 14)
+    _set_finger_up(landmarks, 20, 18)
+
+    code, confidence = detector._classify_hands([landmarks])
+
+    assert code == "ok"
+    assert confidence >= 0.8
+
+
+def test_classifies_raised_hand_from_open_palm_landmarks():
+    detector = GestureDetector(enable_real=False)
+    landmarks = _blank_hand()
+    landmarks[0] = _point(0.5, 0.9)
+    for tip_idx, pip_idx in ((8, 6), (12, 10), (16, 14), (20, 18)):
+        _set_finger_up(landmarks, tip_idx, pip_idx)
+
+    code, confidence = detector._classify_hands([landmarks])
+
+    assert code == "raised_hand"
+    assert confidence >= 0.8
+
+
+def test_classifies_two_hand_heart_landmarks():
+    detector = GestureDetector(enable_real=False)
+    left = _blank_hand()
+    right = _blank_hand()
+    left[0] = _point(0.40, 0.80)
+    right[0] = _point(0.60, 0.80)
+    left[4] = _point(0.48, 0.52)
+    right[4] = _point(0.55, 0.52)
+    left[8] = _point(0.48, 0.42)
+    right[8] = _point(0.55, 0.42)
+
+    code, confidence = detector._classify_hands([left, right])
+
+    assert code == "heart"
+    assert confidence >= 0.8
+
+
+def test_classifies_wave_from_recent_horizontal_motion():
+    detector = GestureDetector(enable_real=False)
+    now = time.time()
+    detector._hand_center_history.extend(
+        (now - 0.7 + i * 0.1, 0.35 + (i % 2) * 0.2, 0.5)
+        for i in range(8)
+    )
+    landmarks = _blank_hand()
+    for tip_idx, pip_idx in ((8, 6), (12, 10), (16, 14), (20, 18)):
+        _set_finger_up(landmarks, tip_idx, pip_idx)
+
+    assert detector._is_wave(landmarks) is True
+
+
+def _point(x: float, y: float):
+    return SimpleNamespace(x=x, y=y)
+
+
+def _blank_hand():
+    return [_point(0.5, 0.5) for _ in range(21)]
+
+
+def _set_finger_up(landmarks, tip_idx: int, pip_idx: int):
+    landmarks[tip_idx] = _point(0.5, 0.2)
+    landmarks[pip_idx] = _point(0.5, 0.5)

@@ -4,6 +4,7 @@ AI_Desktop_Pet - 程序入口
 """
 import sys
 import os
+import time
 
 # 将项目根目录加入 sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,6 +28,7 @@ from models.vision.user_state_detector import (
     STATE_AWAY, STATE_RETURN, STATE_STUDY_LONG, STATE_LOW_LIGHT,
     STATE_CAMERA_ERROR, STATE_UNKNOWN,
 )
+from models.vision.gesture_detector import GESTURE_NONE, GestureDetector
 from utils.logger import setup_logger
 
 
@@ -97,7 +99,71 @@ def main():
     # user_detector.start()
     # logger.info("[队员B] 用户状态检测器已启动，已绑定队员D")
 
-    # ====== 7. 启动定时状态检测 + 自动回应 ======
+    # ====== 7. 初始化手势检测器 (队员B，仅通过主入口接入，不改A/C/D核心逻辑) ======
+    GESTURE_ENABLED = os.getenv("DESKTOP_PET_GESTURE_ENABLED", "true").strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }
+    GESTURE_COOLDOWN_SECONDS = 3.0
+    GESTURE_RESPONSES = {
+        "wave": "我看到你啦！",
+        "ok": "收到，OK！",
+        "heart": "嘿嘿，我也喜欢你！",
+        "raised_hand": "我在呢，有什么事吗？",
+    }
+    gesture_detector = None
+    gesture_timer = None
+    gesture_last_response_at = {}
+
+    if GESTURE_ENABLED:
+        try:
+            gesture_detector = GestureDetector(enable_real=True)
+            gesture_detector.start()
+            pet._gesture_detector = gesture_detector
+            logger.info(f"[队员B] 手势检测器已启动(real={gesture_detector.is_real_active()})")
+        except Exception as exc:
+            gesture_detector = None
+            logger.exception(f"[队员B] 手势检测器启动失败，桌宠继续运行: {exc}")
+    else:
+        logger.info("[队员B] 手势检测器已通过 DESKTOP_PET_GESTURE_ENABLED 关闭")
+
+    def check_gesture_state():
+        """轮询手势状态；同一个手势 3 秒内只响应一次。"""
+        if gesture_detector is None:
+            return
+
+        try:
+            gesture_state = gesture_detector.get_state()
+            gesture_code = str(gesture_state.get("gesture_code") or GESTURE_NONE).strip()
+            if gesture_code == GESTURE_NONE or not gesture_state.get("need_response", False):
+                return
+
+            now = time.monotonic()
+            last_at = gesture_last_response_at.get(gesture_code, 0.0)
+            if now - last_at < GESTURE_COOLDOWN_SECONDS:
+                return
+            gesture_last_response_at[gesture_code] = now
+
+            logger.info(
+                f"[队员B→队员C] 手势事件: {gesture_code} "
+                f"(置信度: {gesture_state.get('confidence')})"
+            )
+            response = GESTURE_RESPONSES.get(gesture_code, "我看到你的手势啦！")
+            if hasattr(team_c, "api_play_system_voice"):
+                team_c.api_play_system_voice(response, state="happy", action="speak")
+            else:
+                speak(response, state="happy", action="speak")
+        except Exception as exc:
+            logger.exception(f"[队员B] 手势检测轮询失败，已忽略本次结果: {exc}")
+
+    if gesture_detector is not None:
+        gesture_timer = QTimer()
+        gesture_timer.setInterval(300)
+        gesture_timer.timeout.connect(check_gesture_state)
+        gesture_timer.start()
+        pet._gesture_timer = gesture_timer
+        logger.info("[主循环] 手势检测轮询已启动（每300ms一次，同手势3秒冷却）")
+
+    # ====== 8. 启动定时状态检测 + 自动回应 ======
     MOCK_ENABLED = os.getenv("DESKTOP_PET_MOCK_USER_STATE", "false").strip().lower() in {
         "1", "true", "yes", "y", "on"
     }  # demo阶段可通过环境变量开启模拟状态
@@ -182,7 +248,7 @@ def main():
     QTimer.singleShot(1000, check_user_state)
     logger.info(f"[主循环] 定时状态检测已启动（每3秒一次，mock={MOCK_ENABLED}）")
 
-    # ====== 8. 启动事件循环（Tkinter主事件循环） ======
+    # ====== 9. 启动事件循环（Qt主事件循环） ======
     logger.info("启动桌面宠物事件循环...")
     try:
         pet.run()
@@ -194,6 +260,10 @@ def main():
         # 停止用户状态检测器（如果已启动）
         # if "user_detector" in dir() and user_detector:
         #     user_detector.stop()
+        if gesture_timer is not None:
+            gesture_timer.stop()
+        if gesture_detector is not None:
+            gesture_detector.stop()
         if getattr(pet, "_running", False):
             pet.close()
         logger.info("AI_Desktop_Pet 已退出。")
