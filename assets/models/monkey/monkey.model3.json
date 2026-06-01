@@ -48,7 +48,37 @@
           "File": "motions/Sign.motion3.json"
         }
       ]
-    }
+    },
+    "Expressions": [
+      {
+        "Name": "BRA",
+        "File": "BRA.exp3.json"
+      },
+      {
+        "Name": "COAT",
+        "File": "COAT.exp3.json"
+      },
+      {
+        "Name": "GLASSES",
+        "File": "GLASSES.exp3.json"
+      },
+      {
+        "Name": "HairCustom",
+        "File": "HairCustom.exp3.json"
+      },
+      {
+        "Name": "SUNGLASSES",
+        "File": "SUNGLASSES.exp3.json"
+      },
+      {
+        "Name": "Sign",
+        "File": "Sign.exp3.json"
+      },
+      {
+        "Name": "WTF",
+        "File": "WTF.exp3.json"
+      }
+    ]
   },
   "Groups": [
     {

@@ -2607,14 +2607,23 @@ class DesktopPet:
     if group is None:
       print(f"[DesktopPet] 未找到动作: {motion_name}")
       return False
-    self._model.StartMotion(
-      group,
-      index,
-      MotionPriority.FORCE,
-      onFinishMotionHandler=self._start_idle_motion,
-    )
-    print(f"[DesktopPet] 播放动作: {motion_name}")
-    return True
+    # Try SetExpression first (works for .exp3.json files)
+    try:
+      self._model.SetExpression(motion_name)
+      self._model.Update()
+      print(f"[DesktopPet] 应用表情: {motion_name}")
+      return True
+    except Exception:
+      pass
+    # If expression fails, try StartMotion
+    try:
+      self._model.StartMotion(group, 0, MotionPriority.IDLE)
+      self._model.Update()
+      print(f"[DesktopPet] 播放动作: {motion_name}")
+      return True
+    except Exception as exc:
+      print(f"[DesktopPet] 播放失败: {exc}")
+      return False
 
   def set_expression(self, emotion: str) -> bool:
     if self._is_flat_mode():
