@@ -1,80 +1,29 @@
 """
-FeedbackBubble: light-weight non-blocking feedback for level-ups,
-feeding, sync success, etc.
-
-When the UI is simple, falls back to printing to console.
+Small helpers for streaming short feedback text into UI bubbles.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import QLabel, QWidget
+import time
+from typing import Callable
 
 
 def show_feedback_message(
-    parent: Optional[QWidget],
     text: str,
-    duration_ms: int = 3000,
-    position: Optional[str] = None,
-) -> None:
-    """
-    Display a floating feedback message near the parent widget.
-
-    Falls back to print() if no parent or if the parent is not visible.
-
-    :param parent:        parent QWidget (e.g. DesktopPet window)
-    :param text:          message text to display
-    :param duration_ms:   how long to show before auto-hide (ms)
-    :param position:      "top", "bottom", or None (centered)
-    """
-    if parent is None or not parent.isVisible():
-        print(f"[FeedbackBubble] {text}")
-        return
-
-    label = QLabel(text, parent)
-    label.setWindowFlags(
-        Qt.ToolTip | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
-    )
-    label.setAttribute(Qt.WA_ShowWithoutActivating)
-    label.setStyleSheet(
-        """
-        QLabel {
-            background-color: rgba(0, 0, 0, 180);
-            color: white;
-            padding: 8px 16px;
-            border-radius: 12px;
-            font-size: 14px;
-        }
-        """
-    )
-    label.adjustSize()
-
-    # Position relative to parent
-    pw = parent.width()
-    ph = parent.height()
-    lw = label.width()
-    lh = label.height()
-    if position == "top":
-        x = (pw - lw) // 2
-        y = 10
-    elif position == "bottom":
-        x = (pw - lw) // 2
-        y = ph - lh - 10
-    else:
-        x = (pw - lw) // 2
-        y = (ph - lh) // 2
-
-    label.move(x, y)
-    label.show()
-
-    # Auto-dismiss after duration_ms
-    def _dismiss() -> None:
-        try:
-            label.close()
-            label.deleteLater()
-        except RuntimeError:
-            pass
-
-    QTimer.singleShot(duration_ms, _dismiss)
+    ui_callback: Callable[[str], None] | None,
+    *,
+    stream: bool = True,
+    delay: float = 0.015,
+) -> str:
+    """Send text to a bubble callback and return the same text for TTS."""
+    message = str(text or "").strip()
+    if not message or ui_callback is None:
+        return message
+    if not stream:
+        ui_callback(message)
+        return message
+    for char in message:
+        ui_callback(char)
+        if delay > 0:
+            time.sleep(delay)
+    return message

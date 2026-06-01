@@ -1,111 +1,87 @@
 """
-ProactiveEventBuilder: converts external events into prompt-friendly dicts.
-
-Builds events for screen_time_reminder, cloud_pet_event, gesture_event,
-and chat_emotion_alert that can be fed into prompt_builder.build_proactive_prompt.
+Builders for Team C proactive speech events.
 """
 
 from __future__ import annotations
 
-import time
-from typing import Any, Dict, Optional
+from dataclasses import asdict, is_dataclass
+from typing import Any
 
 
 def build_screen_time_event(
-    daily_minutes: float,
-    activity_code: str = "working",
-    app_name: str = "",
-) -> Dict[str, Any]:
-    """
-    Build a screen-time reminder event for the prompt builder.
-
-    :param daily_minutes: total screen time today (minutes)
-    :param activity_code: current activity code
-    :param app_name:      current foreground app name
-    :returns: event dict with event_type="screen_time_reminder"
-    """
+    minutes: int | float,
+    activity_code: str = "",
+    activity_name: str = "",
+    is_focused: bool = False,
+    low_light: bool = False,
+    personalization_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "event_type": "screen_time_reminder",
-        "daily_minutes": daily_minutes,
-        "activity_code": activity_code,
-        "app_name": app_name,
-        "suggestion": "用户使用电脑已经有一段时间了，请像朋友一样自然提醒休息。",
-        "timestamp": time.time(),
+        "minutes": round(float(minutes or 0), 1),
+        "activity_code": str(activity_code or ""),
+        "activity_name": str(activity_name or ""),
+        "is_focused": bool(is_focused),
+        "low_light": bool(low_light),
+        "need_response": True,
+        "personalization_settings": personalization_settings or {},
     }
 
 
-def build_cloud_pet_event(
-    actor_name: str,
-    action_type: str = "pet",
-    message: str = "",
-    delta: Optional[Dict[str, float]] = None,
-) -> Dict[str, Any]:
-    """
-    Build a cloud pet interaction event for the prompt builder.
-
-    :param actor_name:  who interacted with the pet
-    :param action_type: e.g. "feed", "play", "pet", "wave"
-    :param message:     optional message from the remote user
-    :param delta:       state changes dict
-    :returns: event dict with event_type="cloud_pet_event"
-    """
+def build_chat_emotion_event(
+    emotion_result: dict[str, Any],
+    personalization_settings: dict[str, Any] | None = None,
+    user_profile: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
-        "event_type": "cloud_pet_event",
-        "actor": actor_name,
-        "action_type": action_type,
-        "message": message or f"{actor_name} 和你的桌宠互动了一下！",
-        "delta": delta or {},
-        "timestamp": time.time(),
+        "event_type": "chat_emotion_alert",
+        "emotion_result": dict(emotion_result or {}),
+        "need_response": bool((emotion_result or {}).get("need_care")),
+        "personalization_settings": personalization_settings or {},
+        "user_profile": user_profile or {},
     }
 
 
 def build_gesture_event(
-    gesture: str,
+    gesture_type: str,
     confidence: float = 0.0,
-) -> Dict[str, Any]:
-    """
-    Build a gesture recognition event for the prompt builder.
-
-    :param gesture:    recognized gesture name (e.g. "wave", "thumbs_up")
-    :param confidence: recognition confidence (0-1)
-    :returns: event dict with event_type="gesture_event"
-    """
-    gesture_descriptions = {
-        "wave": "用户挥手",
-        "thumbs_up": "用户点赞",
-        "peace": "用户比耶",
-        "point": "用户指向",
-        "none": "无手势",
-    }
+    duration: float = 0.0,
+    personalization_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "event_type": "gesture_event",
-        "gesture": gesture,
-        "confidence": round(confidence, 2),
-        "description": gesture_descriptions.get(gesture, f"检测到手势: {gesture}"),
-        "timestamp": time.time(),
+        "gesture_type": str(gesture_type or "unknown"),
+        "confidence": round(float(confidence or 0.0), 2),
+        "duration": round(float(duration or 0.0), 1),
+        "need_response": True,
+        "personalization_settings": personalization_settings or {},
     }
 
 
-def build_chat_emotion_alert(
-    emotion_label: str,
-    confidence: float,
-    need_care: bool,
-    suggestion: str,
-) -> Dict[str, Any]:
-    """
-    Build a chat emotion alert event for the prompt builder.
-
-    :param emotion_label: detected emotion (positive/neutral/stress/sad/etc.)
-    :param confidence:    emotion analysis confidence
-    :param need_care:     whether the user needs emotional care
-    :param suggestion:    care suggestion text
-    :returns: event dict with event_type="chat_emotion_alert"
-    """
+def build_cloud_pet_event(cloud_event: Any) -> dict[str, Any]:
+    data = _as_dict(cloud_event)
     return {
-        "event_type": "chat_emotion_alert",
-        "emotion": emotion_label,
-        "confidence": round(confidence, 2),
-        "need_care": need_care,
-        "suggestion": suggestion,
-        "timestamp": time.time(),
+        "event_type": "cloud_pet_event",
+        "actor_name": data.get("actor_name") or data.get("actor") or "队友",
+        "action_type": data.get("action_type") or data.get("action") or "update",
+        "pet_name": data.get("pet_name") or data.get("pet") or "小宠物",
+        "level": data.get("level"),
+        "exp_gain": data.get("exp_gain", data.get("exp")),
+        "coins_gain": data.get("coins_gain", data.get("coins")),
+        "bond_bonus": data.get("bond_bonus", data.get("bond")),
+        "need_response": True,
+        "personalization_settings": data.get("personalization_settings") or {},
+        "user_profile": data.get("user_profile") or {},
     }
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if is_dataclass(value):
+        return asdict(value)
+    raw: dict[str, Any] = {}
+    for key in ("actor_name", "action_type", "pet_name", "level", "exp_gain", "coins_gain", "bond_bonus"):
+        if hasattr(value, key):
+            raw[key] = getattr(value, key)
+    return raw

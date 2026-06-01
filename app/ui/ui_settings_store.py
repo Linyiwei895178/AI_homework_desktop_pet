@@ -1,83 +1,85 @@
 """
-UI settings persistence for pet personalization.
-
-Reads/writes data/pet_ui_settings.json with safe JSON helpers.
+Read-only helpers for UI personalization settings.
 """
 
 from __future__ import annotations
 
-import copy
-import os
+import json
 from pathlib import Path
-from typing import Any, Dict, Optional
-
-from utils.safe_json import safe_read_json, safe_write_json
+from typing import Any
 
 
-# Default personalization settings (deep-copied when read fails)
-DEFAULT_PET_PERSONALIZATION_SETTINGS: Dict[str, Any] = {
-    "theme": "default",
-    "scale": 1.0,
-    "opacity": 1.0,
-    "pin_to_top": True,
-    "auto_hide": False,
-    "mouse_follow": False,
-    "free_roam": True,
-    "show_status_bar": True,
-    "show_chat_bubble": True,
-    "show_cloud_panel": False,
-    "response_language": "zh-CN",
-    "voice_pack_id": "",
-    "tts_rate": "+8%",
-    "tts_pitch": "+12Hz",
-    "tts_volume": "+8%",
-    "chat_role": "可爱女孩",
-    "animation_enabled": True,
-    "motion_speed": "normal",
-    "interaction_sound": True,
-    "auto_feedback": True,
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = PROJECT_ROOT / "data"
+UI_SETTINGS_PATH = DATA_DIR / "pet_ui_settings.json"
+PERSONALIZATION_SETTINGS_PATH = DATA_DIR / "pet_personalization_settings.json"
+
+
+DEFAULT_PERSONALIZATION_SETTINGS: dict[str, dict[str, Any]] = {
+    "speech_style": {
+        "tone": "朋友感",
+        "nickname": "用户",
+        "catchphrase": "我在呢",
+        "use_emoji": True,
+    },
+    "interaction_frequency": {
+        "proactive_level": 45,
+        "quiet_when_busy": True,
+        "quiet_hours": "23:00-08:00",
+    },
+    "desktop_access": {
+        "foreground_observation_authorized": False,
+        "proactive_comment_enabled": True,
+        "include_window_title": True,
+        "comment_interval_seconds": 150,
+    },
+    "companion_mode": {
+        "mode": "学习陪伴",
+        "auto_switch": True,
+        "focus_silence": True,
+    },
+    "boundaries": {
+        "no_disturb_when_fullscreen": True,
+    },
 }
 
 
-_SETTINGS_PATH = Path(__file__).resolve().parents[2] / "data" / "pet_ui_settings.json"
-
-
-def load_ui_settings() -> Dict[str, Any]:
+def load_ui_settings(project_root: str | Path | None = None) -> dict[str, Any]:
     """
-    Load UI personalization settings from data/pet_ui_settings.json.
-
-    If the file is missing or corrupt, returns a deep copy of DEFAULT_PET_PERSONALIZATION_SETTINGS.
-
-    :returns: dict of settings
+    Load UI settings and personalization settings without importing Qt widgets.
     """
-    data = safe_read_json(_SETTINGS_PATH, default=None)
-    if data is None or not isinstance(data, dict):
-        return copy.deepcopy(DEFAULT_PET_PERSONALIZATION_SETTINGS)
-    merged = copy.deepcopy(DEFAULT_PET_PERSONALIZATION_SETTINGS)
-    merged.update(data)
+    root = Path(project_root) if project_root else PROJECT_ROOT
+    data_dir = root / "data"
+    ui_settings = _read_json(data_dir / "pet_ui_settings.json")
+    personalization = _merge_personalization(
+        _read_json(data_dir / "pet_personalization_settings.json")
+    )
+    return {
+        "ui_settings": ui_settings,
+        "personalization_settings": personalization,
+        "tts_settings": ui_settings.get("tts_settings", {}) if isinstance(ui_settings, dict) else {},
+        "voice_pack_id": ui_settings.get("voice_pack_id", "") if isinstance(ui_settings, dict) else "",
+    }
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _merge_personalization(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {
+        key: dict(value)
+        for key, value in DEFAULT_PERSONALIZATION_SETTINGS.items()
+    }
+    if not isinstance(raw, dict):
+        return merged
+    for section, values in raw.items():
+        if not isinstance(values, dict):
+            continue
+        target = merged.setdefault(str(section), {})
+        target.update(values)
     return merged
-
-
-def save_ui_settings(settings: Dict[str, Any]) -> bool:
-    """
-    Save UI personalization settings to data/pet_ui_settings.json.
-
-    :param settings: dict of settings (only known keys are saved)
-    :returns: True on success
-    """
-    existing = load_ui_settings()
-    existing.update(settings)
-    # Only keep keys that are in the default dict
-    clean = {k: v for k, v in existing.items() if k in DEFAULT_PET_PERSONALIZATION_SETTINGS}
-    return safe_write_json(str(_SETTINGS_PATH), clean)
-
-
-def reset_ui_settings() -> Dict[str, Any]:
-    """
-    Reset settings to defaults and persist.
-
-    :returns: default settings dict
-    """
-    defaults = copy.deepcopy(DEFAULT_PET_PERSONALIZATION_SETTINGS)
-    safe_write_json(str(_SETTINGS_PATH), defaults)
-    return defaults

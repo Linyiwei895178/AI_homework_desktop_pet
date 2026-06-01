@@ -35,7 +35,13 @@ ACTIVITY_WORKING = "working"
 ACTIVITY_IDLE = "idle"
 ACTIVITY_UNKNOWN = "unknown"
 
-COMMENTABLE_ACTIVITIES = {ACTIVITY_GAMING, ACTIVITY_WATCHING}
+COMMENTABLE_ACTIVITIES = {
+    ACTIVITY_GAMING,
+    ACTIVITY_WATCHING,
+    ACTIVITY_BROWSING,
+    ACTIVITY_CODING,
+    ACTIVITY_WORKING,
+}
 
 ACTIVITY_NAME_MAP = {
     ACTIVITY_GAMING: "游戏中",
@@ -515,6 +521,24 @@ def build_activity_suggestion(state: Dict[str, Any]) -> str:
             "请像一起看剧的朋友一样点评一句，轻松、短、不要剧透，"
             "可以说这个氛围、反转或角色有意思。"
         )
+    if activity_code == ACTIVITY_CODING:
+        return (
+            f"用户正在编程，前台内容是{target}。"
+            "请像坐在旁边陪写代码的朋友一样说一句短短的陪伴话，"
+            "可以鼓励、提醒别急，或者轻轻吐槽卡住的感觉，不要假装看到了具体代码。"
+        )
+    if activity_code == ACTIVITY_WORKING:
+        return (
+            f"用户正在处理工作或文档，前台内容是{target}。"
+            "请像可靠的小搭档一样说一句很短的陪伴话，温和、不催促，"
+            "可以提醒保存、喝水或把事情拆小一点。"
+        )
+    if activity_code == ACTIVITY_BROWSING:
+        return (
+            f"用户正在浏览网页，前台内容是{target}。"
+            "请像朋友一样轻轻搭一句话，短、自然，不追问隐私，"
+            "可以回应搜索/阅读的氛围或提醒慢慢看。"
+        )
     return "根据用户当前电脑状态，主动说一句自然、简短的话。"
 
 
@@ -535,6 +559,24 @@ def build_local_companion_comment(state: Dict[str, Any]) -> str:
             f"{target}这个氛围挺会抓人的，我也有点想知道后面怎么转。",
             f"这段感觉要出事了呀，我先安静陪你看，精彩了再小声说。",
             f"这剧情有点会钓人，先别划走，我们看看它怎么圆回来。",
+        ]
+    elif activity_code == ACTIVITY_CODING:
+        options = [
+            f"{target}这会儿像是在和代码掰手腕，别急，一小段一小段拆就好。",
+            "我在旁边陪你写，先把最小能跑起来的那一步拿下就很棒了。",
+            "这份专注劲儿可以的，记得偶尔保存一下，胜利通常藏在下一个小修里。",
+        ]
+    elif activity_code == ACTIVITY_WORKING:
+        options = [
+            f"{target}看起来是在认真推进，先抓最要紧的一项就好。",
+            "我不打断你啦，只小声提醒一句：处理到一个小节点就可以喘口气。",
+            "这会儿像工作模式启动了，稳稳来，别让一堆窗口把节奏带乱。",
+        ]
+    elif activity_code == ACTIVITY_BROWSING:
+        options = [
+            f"{target}像是在找资料或看内容，我陪你慢慢筛，别被标签页带跑太远。",
+            "这个网页先看重点就好，看到有用的记一笔，后面会轻松很多。",
+            "我在旁边看着节奏呢，别急着全看完，抓住有用的那几行就很赚。",
         ]
     else:
         options = ["我在旁边陪着你，当前节奏还挺舒服的。"]

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from models.nlp.deepseek_api import DeepSeekClient
+from models.nlp.emotion_analyzer import analyze_chat_emotion
 from models.tts.ai_voice_assistant import AIChatVoiceAssistant
 from models.tts.long_text_reader import split_text_for_tts
 from utils.config import config
@@ -61,6 +62,12 @@ class EchoTeamCInterface:
 
         def run() -> None:
             try:
+                history = getattr(self.assistant, "get_memory_messages", lambda: [])()
+            except Exception as exc:
+                print(f"[EchoTeamCInterface] 读取聊天历史失败: {exc}")
+                history = []
+            emotion_result = analyze_chat_emotion(value, history=history)
+            try:
                 reply = self.assistant.chat_with_context(
                     value,
                     current_state=current_state,
@@ -72,12 +79,27 @@ class EchoTeamCInterface:
                         "user_input": value,
                         "ai_reply": reply,
                         "word_count": len(reply),
+                        "emotion_result": emotion_result,
                     }
                 )
             except Exception as exc:
                 print(f"[EchoTeamCInterface] api_user_speak 异常: {exc}")
-                if ui_callback:
-                    ui_callback(f"喵...出错了：{exc}")
+                fallback = _friendly_error_reply()
+                _emit_ui_text(ui_callback, fallback)
+                try:
+                    self.assistant._play_voice(fallback, state="sad", action="speak")
+                except Exception as voice_exc:
+                    print(f"[EchoTeamCInterface] fallback TTS 异常: {voice_exc}")
+                self._notify_logic_callback(
+                    {
+                        "event_type": "user_chat",
+                        "user_input": value,
+                        "ai_reply": fallback,
+                        "word_count": len(fallback),
+                        "emotion_result": emotion_result,
+                        "fallback": True,
+                    }
+                )
 
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
@@ -197,7 +219,17 @@ class EchoTeamCInterface:
             setter(settings or {})
 
     def api_on_status_event(self, event_data: Dict[str, Any], ui_callback: Callable[[str], None] | None = None) -> str:
-        return self.assistant.respond_to_status_event(event_data, callback_ui=ui_callback)
+        try:
+            return self.assistant.respond_to_status_event(event_data, callback_ui=ui_callback)
+        except Exception as exc:
+            print(f"[EchoTeamCInterface] api_on_status_event 异常: {exc}")
+            fallback = _friendly_error_reply()
+            _emit_ui_text(ui_callback, fallback)
+            try:
+                self.assistant._play_voice(fallback, state="sad", action="speak")
+            except Exception as voice_exc:
+                print(f"[EchoTeamCInterface] status fallback TTS 异常: {voice_exc}")
+            return fallback
 
     def _sync_memory_for_pet(self, pet_id: str) -> None:
         setter = getattr(self.assistant, "set_memory_path", None)
@@ -245,3 +277,18 @@ class EchoTeamCInterface:
 def _safe_memory_pet_id(pet_id: str) -> str:
     value = re.sub(r'[\\/:*?"<>|\s]+', "_", str(pet_id or "").strip())
     return value.strip("._") or "cat"
+
+
+def _emit_ui_text(callback: Callable[[str], None] | None, text: str) -> None:
+    if callback is None:
+        return
+    for char in text:
+        try:
+            callback(char)
+        except Exception as exc:
+            print(f"[EchoTeamCInterface] UI 回调异常: {exc}")
+            return
+
+
+def _friendly_error_reply() -> str:
+    return "我刚刚有点走神啦，我们再试一次～"

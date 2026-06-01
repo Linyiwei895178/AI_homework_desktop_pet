@@ -35,23 +35,9 @@ Desktop.ini
 # Virtual Environment
 venv/
 .venv/
+.openvoice/
 env/
 
-# Data files (auto-generated settings, profiles)
-data/*.json
-data/__pycache__/
-
-# Temp
-_temp_script.py
-_temp_update_pet_state.py
-_test_write.txt
-temp_*.py
-
-# PyInstaller
-*.spec
-dist/
-build/
-
-# Demo/Testing
-demo/
-test_output/
+# Optional local model runtimes
+third_party/OpenVoice/
+assets/openvoice_work/

@@ -1,0 +1,149 @@
+{
+  "canvas": [
+    1024,
+    1536
+  ],
+  "source": "assets\\live2d_modeling\\base_front_template\\ai_chroma_front_reference_transparent.png",
+  "full_base": "full_base.png",
+  "layered_preview": "layered_preview.png",
+  "layer_order": [
+    "left_leg",
+    "right_leg",
+    "neck",
+    "left_arm",
+    "right_arm",
+    "torso",
+    "left_hand",
+    "right_hand",
+    "left_ear",
+    "right_ear",
+    "head",
+    "face_relief"
+  ],
+  "layers": [
+    {
+      "name": "left_leg",
+      "file": "left_leg.png",
+      "bbox": [
+        332,
+        848,
+        543,
+        1472
+      ]
+    },
+    {
+      "name": "right_leg",
+      "file": "right_leg.png",
+      "bbox": [
+        482,
+        848,
+        692,
+        1472
+      ]
+    },
+    {
+      "name": "neck",
+      "file": "neck.png",
+      "bbox": [
+        412,
+        470,
+        612,
+        620
+      ]
+    },
+    {
+      "name": "left_arm",
+      "file": "left_arm.png",
+      "bbox": [
+        265,
+        585,
+        399,
+        1012
+      ]
+    },
+    {
+      "name": "right_arm",
+      "file": "right_arm.png",
+      "bbox": [
+        626,
+        585,
+        758,
+        1012
+      ]
+    },
+    {
+      "name": "torso",
+      "file": "torso.png",
+      "bbox": [
+        307,
+        518,
+        716,
+        984
+      ]
+    },
+    {
+      "name": "left_hand",
+      "file": "left_hand.png",
+      "bbox": [
+        265,
+        932,
+        337,
+        1012
+      ]
+    },
+    {
+      "name": "right_hand",
+      "file": "right_hand.png",
+      "bbox": [
+        686,
+        932,
+        758,
+        1012
+      ]
+    },
+    {
+      "name": "left_ear",
+      "file": "left_ear.png",
+      "bbox": [
+        280,
+        337,
+        313,
+        424
+      ]
+    },
+    {
+      "name": "right_ear",
+      "file": "right_ear.png",
+      "bbox": [
+        712,
+        338,
+        743,
+        424
+      ]
+    },
+    {
+      "name": "head",
+      "file": "head.png",
+      "bbox": [
+        280,
+        92,
+        743,
+        591
+      ]
+    },
+    {
+      "name": "face_relief",
+      "file": "face_relief.png",
+      "bbox": [
+        343,
+        284,
+        682,
+        559
+      ]
+    }
+  ],
+  "notes": [
+    "High-fidelity raster base generated with an image model, then chroma-keyed and cut into Live2D-friendly front-view layers.",
+    "The layer cuts are a rigging base, not a finished Cubism .moc3 model."
+  ]
+}

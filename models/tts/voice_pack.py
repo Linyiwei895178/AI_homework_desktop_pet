@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import random
 import re
 import shutil
 import struct
 import subprocess
+import tempfile
 import time
 import wave
 from pathlib import Path
@@ -220,7 +222,6 @@ def create_imported_voice_pack(
         raise ValueError("请选择至少一个可用的音频文件")
 
     preset = voice_pack_language_preset(language_id)
-    display_name_with_language = f"{preset['label']}{name}"
     base_path = Path(base_dir)
     base_path.mkdir(parents=True, exist_ok=True)
     pack_id = _unique_pack_id(f"{preset['id']}_{name}", base_path)
@@ -264,21 +265,14 @@ def create_imported_voice_pack(
         copied_paths = [pack_dir / rel for rel in copied]
         analysis = analyze_audio_samples(copied_paths)
         noise_reduction = create_conservative_noise_reduced_samples(copied_paths, pack_dir)
-        profile = {
-            "edge_voice": preset["edge_voice"],
-            "edge_rate": preset["edge_rate"],
-            "edge_pitch": preset["edge_pitch"],
-            "edge_volume": preset["edge_volume"],
-            "voice_profile": preset["voice_profile"],
-            "cute_style": bool(preset["cute_style"]),
-        }
+        profile = _profile_from_audio_features(preset, analysis)
         manifest: dict[str, Any] = {
             "id": pack_id,
-            "display_name": display_name_with_language,
+            "display_name": name,
             "user_name": name,
             "icon": "🎙️",
             "description": (
-                f"本地导入的{preset['label']}语音样本；"
+                f"本地导入的语音样本（样本语言：{preset['label']}）；"
                 "系统已读取样本信息并生成近似 TTS 音色参数。"
             ),
             "sample_text": preset["sample_text"],
@@ -295,8 +289,8 @@ def create_imported_voice_pack(
             "analysis": analysis,
             "noise_reduction": noise_reduction,
             "simulation": {
-                "mode": "language_profile",
-                "note": "当前版本按所选语言和音频样本信息生成近似音色参数；原始样本优先保留，不克隆具体真人声纹。",
+                "mode": "audio_feature_profile",
+                "note": "当前版本会按样本音高、响度和语音密度微调底层 TTS 参数；如启用 OpenVoice，可再进行可选声纹后处理。",
             },
             "voice_profiles": {
                 "default": profile,
@@ -321,6 +315,29 @@ def create_imported_voice_pack(
         raise
 
 
+def delete_voice_pack(pack_id: str, base_dir: str | Path = "assets/voice_packs") -> bool:
+    """Delete one local voice pack directory after validating its boundary."""
+    pid = str(pack_id or "").strip()
+    if not pid:
+        raise ValueError("语音包 ID 不能为空")
+
+    base_path = Path(base_dir).resolve()
+    pack_dir = (base_path / pid).resolve()
+    try:
+        pack_dir.relative_to(base_path)
+    except ValueError as exc:
+        raise ValueError("语音包路径不在语音包目录内") from exc
+    if pack_dir == base_path:
+        raise ValueError("语音包路径无效")
+    if not pack_dir.exists():
+        return False
+    if not pack_dir.is_dir() or not (pack_dir / "voice_pack.json").is_file():
+        raise ValueError("目标不是有效的语音包目录")
+
+    shutil.rmtree(pack_dir)
+    return True
+
+
 def analyze_audio_samples(paths: list[str | Path]) -> dict[str, Any]:
     formats: set[str] = set()
     sample_rates: set[int] = set()
@@ -328,34 +345,44 @@ def analyze_audio_samples(paths: list[str | Path]) -> dict[str, Any]:
     total_size = 0
     total_duration = 0.0
     duration_count = 0
+    feature_rows: list[dict[str, Any]] = []
 
-    for raw in paths:
-        path = Path(raw)
-        if not path.exists() or not path.is_file():
-            continue
-        suffix = path.suffix.lower().lstrip(".")
-        if suffix:
-            formats.add(suffix)
-        try:
-            total_size += path.stat().st_size
-        except OSError:
-            pass
+    with tempfile.TemporaryDirectory(prefix="voice_pack_analysis_") as tmpdir:
+        tmp_root = Path(tmpdir)
+        for index, raw in enumerate(paths, start=1):
+            path = Path(raw)
+            if not path.exists() or not path.is_file():
+                continue
+            suffix = path.suffix.lower().lstrip(".")
+            if suffix:
+                formats.add(suffix)
+            try:
+                total_size += path.stat().st_size
+            except OSError:
+                pass
 
-        if path.suffix.lower() != ".wav":
-            continue
-        try:
-            with wave.open(str(path), "rb") as wav:
-                rate = int(wav.getframerate() or 0)
-                frame_count = int(wav.getnframes() or 0)
-                channel_count = int(wav.getnchannels() or 0)
-                if rate > 0 and frame_count > 0:
-                    total_duration += frame_count / rate
-                    duration_count += 1
-                    sample_rates.add(rate)
-                if channel_count > 0:
-                    channels.add(channel_count)
-        except (OSError, wave.Error):
-            continue
+            analysis_path = path
+            if path.suffix.lower() != ".wav":
+                converted = _convert_audio_to_analysis_wav(path, tmp_root / f"sample_{index:02d}.wav")
+                if converted is None:
+                    continue
+                analysis_path = converted
+
+            try:
+                features = _analyze_wav_features(analysis_path)
+            except (OSError, wave.Error, ValueError, struct.error):
+                continue
+            duration = float(features.get("duration_seconds") or 0.0)
+            rate = int(features.get("sample_rate") or 0)
+            channel_count = int(features.get("channels") or 0)
+            if duration > 0:
+                total_duration += duration
+                duration_count += 1
+            if rate > 0:
+                sample_rates.add(rate)
+            if channel_count > 0:
+                channels.add(channel_count)
+            feature_rows.append(features)
 
     analysis: dict[str, Any] = {
         "sample_count": len([Path(p) for p in paths if Path(p).exists()]),
@@ -369,7 +396,267 @@ def analyze_audio_samples(paths: list[str | Path]) -> dict[str, Any]:
         analysis["sample_rates"] = sorted(sample_rates)
     if channels:
         analysis["channels"] = sorted(channels)
+    if feature_rows:
+        analysis["voice_features"] = _summarize_voice_features(feature_rows)
     return analysis
+
+
+def _convert_audio_to_analysis_wav(src: Path, dest: Path) -> Path | None:
+    ffmpeg = _find_ffmpeg()
+    if not ffmpeg:
+        return None
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(src),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-sample_fmt",
+        "s16",
+        str(dest),
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0 or not dest.exists() or dest.stat().st_size <= 0:
+        return None
+    return dest
+
+
+def _analyze_wav_features(path: Path) -> dict[str, Any]:
+    with wave.open(str(path), "rb") as wav:
+        rate = int(wav.getframerate() or 0)
+        frame_count = int(wav.getnframes() or 0)
+        channel_count = int(wav.getnchannels() or 0)
+        sample_width = int(wav.getsampwidth() or 0)
+        if rate <= 0 or frame_count <= 0 or channel_count <= 0 or sample_width <= 0:
+            raise ValueError("invalid wav metadata")
+        read_frames = min(frame_count, rate * 45)
+        frames = wav.readframes(read_frames)
+
+    decoded = _decode_pcm_samples(frames, sample_width)
+    if channel_count > 1:
+        decoded = _downmix_interleaved_samples(decoded, channel_count)
+    if not decoded:
+        raise ValueError("empty wav samples")
+
+    limit = float(_pcm_peak_value(sample_width))
+    normalized = [max(-1.0, min(1.0, sample / limit)) for sample in decoded]
+    rms = math.sqrt(sum(sample * sample for sample in normalized) / len(normalized))
+    peak = max(abs(sample) for sample in normalized)
+    silence_threshold = max(0.012, min(0.05, rms * 0.55))
+    silence_ratio = sum(1 for sample in normalized if abs(sample) <= silence_threshold) / len(normalized)
+    pitch_hz = _estimate_pitch_hz(normalized, rate)
+
+    return {
+        "sample_rate": rate,
+        "channels": channel_count,
+        "duration_seconds": frame_count / rate,
+        "analyzed_seconds": len(decoded) / rate,
+        "rms": rms,
+        "peak": peak,
+        "silence_ratio": silence_ratio,
+        "estimated_pitch_hz": pitch_hz,
+    }
+
+
+def _summarize_voice_features(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    def average(key: str) -> float | None:
+        values = [float(row[key]) for row in rows if row.get(key) is not None]
+        if not values:
+            return None
+        return sum(values) / len(values)
+
+    def median(key: str) -> float | None:
+        values = sorted(float(row[key]) for row in rows if row.get(key) is not None)
+        if not values:
+            return None
+        mid = len(values) // 2
+        if len(values) % 2:
+            return values[mid]
+        return (values[mid - 1] + values[mid]) / 2
+
+    summary: dict[str, Any] = {
+        "duration_seconds": round(sum(float(row.get("duration_seconds") or 0.0) for row in rows), 2),
+        "average_rms": round(average("rms") or 0.0, 4),
+        "average_peak": round(average("peak") or 0.0, 4),
+        "silence_ratio": round(average("silence_ratio") or 0.0, 3),
+        "analyzed_sample_count": len(rows),
+    }
+    pitch = median("estimated_pitch_hz")
+    if pitch:
+        summary["estimated_pitch_hz"] = round(pitch, 1)
+    return summary
+
+
+def _profile_from_audio_features(preset: dict[str, Any], analysis: dict[str, Any]) -> dict[str, Any]:
+    profile = {
+        "edge_voice": preset["edge_voice"],
+        "edge_rate": preset["edge_rate"],
+        "edge_pitch": preset["edge_pitch"],
+        "edge_volume": preset["edge_volume"],
+        "voice_profile": preset["voice_profile"],
+        "cute_style": bool(preset["cute_style"]),
+    }
+    features = analysis.get("voice_features") if isinstance(analysis.get("voice_features"), dict) else {}
+    if not features:
+        return profile
+
+    language_id = str(preset.get("id") or "")
+    pitch = _float_or_none(features.get("estimated_pitch_hz"))
+    if pitch:
+        profile["edge_voice"] = _choose_edge_voice_for_pitch(language_id, pitch, str(profile["edge_voice"]))
+        profile["edge_pitch"] = _edge_pitch_for_pitch(pitch)
+        if pitch >= 185 and language_id.startswith("zh"):
+            profile["voice_profile"] = "cute"
+            profile["cute_style"] = True
+        elif pitch <= 145:
+            profile["voice_profile"] = "default"
+            profile["cute_style"] = False
+
+    silence_ratio = _float_or_none(features.get("silence_ratio"))
+    if silence_ratio is not None:
+        if silence_ratio >= 0.58:
+            profile["edge_rate"] = "-8%"
+        elif silence_ratio <= 0.22:
+            profile["edge_rate"] = "+8%"
+
+    rms = _float_or_none(features.get("average_rms"))
+    if rms is not None:
+        if rms < 0.035:
+            profile["edge_volume"] = "+12%"
+        elif rms > 0.18:
+            profile["edge_volume"] = "-2%"
+        else:
+            profile["edge_volume"] = "+4%"
+
+    profile["fit_source"] = "audio_features"
+    profile["fit_confidence"] = "medium" if pitch else "low"
+    return profile
+
+
+def _choose_edge_voice_for_pitch(language_id: str, pitch_hz: float, fallback: str) -> str:
+    language = str(language_id or "").strip()
+    low = pitch_hz < 155
+    mid = 155 <= pitch_hz < 195
+    voice_options: dict[str, tuple[str, str, str]] = {
+        "zh-CN": ("zh-CN-YunxiNeural", "zh-CN-XiaomoNeural", "zh-CN-XiaoyiNeural"),
+        "zh-HK": ("zh-HK-WanLungNeural", "zh-HK-HiuMaanNeural", "zh-HK-HiuGaaiNeural"),
+        "zh-TW": ("zh-TW-YunJheNeural", "zh-TW-HsiaoChenNeural", "zh-TW-HsiaoYuNeural"),
+        "en-US": ("en-US-GuyNeural", "en-US-AriaNeural", "en-US-JennyNeural"),
+        "en-GB": ("en-GB-RyanNeural", "en-GB-SoniaNeural", "en-GB-SoniaNeural"),
+        "ja-JP": ("ja-JP-KeitaNeural", "ja-JP-NanamiNeural", "ja-JP-NanamiNeural"),
+        "ko-KR": ("ko-KR-InJoonNeural", "ko-KR-SunHiNeural", "ko-KR-SunHiNeural"),
+    }
+    options = voice_options.get(language)
+    if not options:
+        family = language.split("-", 1)[0].lower()
+        options = next((value for key, value in voice_options.items() if key.lower().startswith(family)), None)
+    if not options:
+        return fallback
+    if low:
+        return options[0]
+    if mid:
+        return options[1]
+    return options[2]
+
+
+def _edge_pitch_for_pitch(pitch_hz: float) -> str:
+    if pitch_hz < 115:
+        value = -18
+    elif pitch_hz < 145:
+        value = -10
+    elif pitch_hz < 175:
+        value = -2
+    elif pitch_hz < 215:
+        value = +8
+    elif pitch_hz < 255:
+        value = +16
+    else:
+        value = +24
+    return f"{value:+d}Hz"
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _downmix_interleaved_samples(samples: list[int], channels: int) -> list[int]:
+    if channels <= 1:
+        return samples
+    frames: list[int] = []
+    usable = len(samples) - (len(samples) % channels)
+    for index in range(0, usable, channels):
+        frames.append(round(sum(samples[index : index + channels]) / channels))
+    return frames
+
+
+def _pcm_peak_value(sample_width: int) -> int:
+    if sample_width == 1:
+        return 128
+    return (1 << (sample_width * 8 - 1)) - 1
+
+
+def _estimate_pitch_hz(samples: list[float], sample_rate: int) -> float | None:
+    if sample_rate <= 0 or len(samples) < sample_rate // 5:
+        return None
+    max_samples = min(len(samples), sample_rate * 4)
+    data = samples[:max_samples]
+    frame_size = max(512, min(2048, int(sample_rate * 0.04)))
+    hop = max(256, int(sample_rate * 0.02))
+    min_lag = max(1, int(sample_rate / 420))
+    max_lag = min(frame_size - 1, int(sample_rate / 70))
+    if max_lag <= min_lag:
+        return None
+
+    pitches: list[float] = []
+    for start in range(0, len(data) - frame_size, hop):
+        frame = data[start : start + frame_size]
+        energy = sum(sample * sample for sample in frame) / len(frame)
+        if energy < 0.00035:
+            continue
+        mean = sum(frame) / len(frame)
+        centered = [sample - mean for sample in frame]
+        base = sum(sample * sample for sample in centered)
+        if base <= 0:
+            continue
+        best_lag = 0
+        best_score = 0.0
+        for lag in range(min_lag, max_lag + 1):
+            score = 0.0
+            limit = frame_size - lag
+            for index in range(limit):
+                score += centered[index] * centered[index + lag]
+            if score > best_score:
+                best_score = score
+                best_lag = lag
+        if not best_lag:
+            continue
+        confidence = best_score / base
+        if confidence >= 0.24:
+            pitches.append(sample_rate / best_lag)
+
+    if not pitches:
+        return None
+    pitches.sort()
+    mid = len(pitches) // 2
+    if len(pitches) % 2:
+        return pitches[mid]
+    return (pitches[mid - 1] + pitches[mid]) / 2
 
 
 def _convert_mp4_to_mp3(src: Path, dest: Path) -> None:
@@ -463,7 +750,7 @@ def create_conservative_noise_reduced_samples(paths: list[str | Path], pack_dir:
 def _write_light_denoised_wav(src: Path, dest: Path) -> bool:
     with wave.open(str(src), "rb") as reader:
         params = reader.getparams()
-        if params.comptype != "NONE" or params.sampwidth not in (1, 2, 4):
+        if params.comptype != "NONE" or params.sampwidth not in (1, 2, 3, 4):
             return False
         frames = reader.readframes(params.nframes)
 
@@ -508,6 +795,13 @@ def _decode_pcm_samples(frames: bytes, sample_width: int) -> list[int]:
         return [byte - 128 for byte in frames]
     if sample_width == 2:
         return [item[0] for item in struct.iter_unpack("<h", frames)]
+    if sample_width == 3:
+        samples: list[int] = []
+        for index in range(0, len(frames) - (len(frames) % 3), 3):
+            chunk = frames[index : index + 3]
+            sign = b"\xff" if chunk[2] & 0x80 else b"\x00"
+            samples.append(int.from_bytes(chunk + sign, byteorder="little", signed=True))
+        return samples
     if sample_width == 4:
         return [item[0] for item in struct.iter_unpack("<i", frames)]
     return []
@@ -518,6 +812,11 @@ def _encode_pcm_samples(samples: list[int], sample_width: int) -> bytes:
         return bytes(max(0, min(255, sample + 128)) for sample in samples)
     if sample_width == 2:
         return b"".join(struct.pack("<h", sample) for sample in samples)
+    if sample_width == 3:
+        return b"".join(
+            int(sample).to_bytes(4, byteorder="little", signed=True)[:3]
+            for sample in samples
+        )
     if sample_width == 4:
         return b"".join(struct.pack("<i", sample) for sample in samples)
     return b""
@@ -649,6 +948,28 @@ class VoicePackManager:
             if isinstance(profile, dict):
                 merged.update(profile)
         return merged
+
+    def sample_paths(self) -> list[Path]:
+        if not self.enabled or not self.pack_id:
+            return []
+        manifest = self._manifest()
+        pack_dir = self._pack_dir()
+        samples = manifest.get("samples", [])
+        if not isinstance(samples, list):
+            return []
+        paths = [pack_dir / str(name) for name in samples]
+        return [path for path in paths if path.exists() and path.is_file()]
+
+    def reference_sample(self) -> Path | None:
+        samples = self.sample_paths()
+        if not samples:
+            return None
+        preferred_suffixes = (".wav", ".mp3", ".flac", ".m4a", ".ogg", ".aac", ".wma")
+        for suffix in preferred_suffixes:
+            match = next((path for path in samples if path.suffix.lower() == suffix), None)
+            if match:
+                return match
+        return samples[0]
 
     @staticmethod
     def _pick_existing(pack_dir: Path, files) -> Path | None:

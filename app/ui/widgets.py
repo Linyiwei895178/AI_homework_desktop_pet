@@ -1,5 +1,5 @@
-"""
-PySide6 UI 控件：右键菜单、弧形动作菜单、气泡、输入框、控制台等。
+﻿"""
+PySide6 UI 鎺т欢锛氬彸閿彍鍗曘€佸姬褰㈠姩浣滆彍鍗曘€佹皵娉°€佽緭鍏ユ銆佹帶鍒跺彴绛夈€?
 """
 from __future__ import annotations
 
@@ -95,7 +95,7 @@ from utils.config import config
 from utils.logger import get_logger
 
 # ---------------------------------------------------------------------------
-# 样式常量
+# 鏍峰紡甯搁噺
 # ---------------------------------------------------------------------------
 
 GLASS_FRAME = """
@@ -108,11 +108,11 @@ QFrame#glass {{
 
 D_ACTION_CODES = ("happy", "sad", "hungry", "angry", "idle")
 D_ACTION_LABELS = {
-    "happy": "开心",
-    "sad": "伤心",
-    "hungry": "吃饭",
-    "angry": "生气",
-    "idle": "待机",
+    "happy": "寮€蹇?,
+    "sad": "浼ゅ績",
+    "hungry": "鍚冮キ",
+    "angry": "鐢熸皵",
+    "idle": "寰呮満",
 }
 
 
@@ -193,9 +193,9 @@ DEFAULT_TTS_UI_SETTINGS: dict[str, Any] = {
 
 DEFAULT_PET_PERSONALIZATION_SETTINGS: dict[str, dict[str, Any]] = {
     "speech_style": {
-        "tone": "朋友感",
-        "nickname": "用户",
-        "catchphrase": "我在呢",
+        "tone": "鏈嬪弸鎰?,
+        "nickname": "鐢ㄦ埛",
+        "catchphrase": "鎴戝湪鍛?,
         "use_emoji": True,
     },
     "interaction_frequency": {
@@ -204,12 +204,12 @@ DEFAULT_PET_PERSONALIZATION_SETTINGS: dict[str, dict[str, Any]] = {
         "quiet_hours": "23:00-08:00",
     },
     "appearance_actions": {
-        "theme_color": "樱花粉",
-        "idle_action": "轻轻晃动",
+        "theme_color": "妯辫姳绮?,
+        "idle_action": "杞昏交鏅冨姩",
         "transparency": 92,
     },
     "companion_mode": {
-        "mode": "学习陪伴",
+        "mode": "瀛︿範闄即",
         "auto_switch": True,
         "focus_silence": True,
     },
@@ -224,30 +224,30 @@ DEFAULT_PET_PERSONALIZATION_SETTINGS: dict[str, dict[str, Any]] = {
         "pomodoro": False,
         "meal": False,
         "sleep": True,
-        "style": "温柔提醒",
+        "style": "娓╂煍鎻愰啋",
     },
     "memory_relationship": {
-        "relationship": "朋友",
+        "relationship": "鏈嬪弸",
         "remember_preferences": True,
         "remember_projects": True,
-        "user_title": "用户",
+        "user_title": "鐢ㄦ埛",
     },
     "voice_expression": {
         "voice_enabled": True,
-        "voice_style": "自然可爱",
+        "voice_style": "鑷劧鍙埍",
         "speech_rate": 55,
         "bubble_density": 50,
     },
     "desktop_behavior": {
-        "activity_range": "屏幕边缘和空白处",
+        "activity_range": "灞忓箷杈圭紭鍜岀┖鐧藉",
         "avoid_windows": True,
         "follow_mouse": False,
         "multi_screen": True,
     },
     "boundaries": {
         "no_disturb_when_fullscreen": True,
-        "safe_topics": "不过度亲密、不讨论隐私",
-        "comfort_level": "轻度安慰",
+        "safe_topics": "涓嶈繃搴︿翰瀵嗐€佷笉璁ㄨ闅愮",
+        "comfort_level": "杞诲害瀹夋叞",
         "allow_close_expression": False,
     },
 }
@@ -255,120 +255,120 @@ DEFAULT_PET_PERSONALIZATION_SETTINGS: dict[str, dict[str, Any]] = {
 PET_PERSONALIZATION_SECTIONS: tuple[dict[str, Any], ...] = (
     {
         "key": "speech_style",
-        "icon": "💬",
-        "title": "说话风格",
-        "summary": "称呼、口头禅、语气和表情使用。",
+        "icon": "馃挰",
+        "title": "璇磋瘽椋庢牸",
+        "summary": "绉板懠銆佸彛澶寸銆佽姘斿拰琛ㄦ儏浣跨敤銆?,
         "fields": (
-            {"key": "tone", "label": "语气模板", "type": "combo", "options": ("朋友感", "温柔撒娇", "电子管家", "毒舌吐槽", "恋人陪伴")},
-            {"key": "nickname", "label": "怎么称呼你", "type": "line", "placeholder": "用户 / 主人 / 同学"},
-            {"key": "catchphrase", "label": "口头禅", "type": "line", "placeholder": "我在呢"},
-            {"key": "use_emoji", "label": "表情符号", "type": "check", "text": "允许使用"},
+            {"key": "tone", "label": "璇皵妯℃澘", "type": "combo", "options": ("鏈嬪弸鎰?, "娓╂煍鎾掑▏", "鐢靛瓙绠″", "姣掕垖鍚愭Ы", "鎭嬩汉闄即")},
+            {"key": "nickname", "label": "鎬庝箞绉板懠浣?, "type": "line", "placeholder": "鐢ㄦ埛 / 涓讳汉 / 鍚屽"},
+            {"key": "catchphrase", "label": "鍙ｅご绂?, "type": "line", "placeholder": "鎴戝湪鍛?},
+            {"key": "use_emoji", "label": "琛ㄦ儏绗﹀彿", "type": "check", "text": "鍏佽浣跨敤"},
         ),
     },
     {
         "key": "interaction_frequency",
-        "icon": "⏱️",
-        "title": "互动频率",
-        "summary": "主动打招呼、安静时段和忙碌时的打扰程度。",
+        "icon": "鈴憋笍",
+        "title": "浜掑姩棰戠巼",
+        "summary": "涓诲姩鎵撴嫑鍛笺€佸畨闈欐椂娈靛拰蹇欑鏃剁殑鎵撴壈绋嬪害銆?,
         "fields": (
-            {"key": "proactive_level", "label": "主动程度", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
-            {"key": "quiet_when_busy", "label": "忙碌识别", "type": "check", "text": "检测到忙碌时少打扰"},
-            {"key": "quiet_hours", "label": "安静时段", "type": "combo", "options": ("无", "22:00-07:00", "23:00-08:00", "00:00-09:00")},
+            {"key": "proactive_level", "label": "涓诲姩绋嬪害", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
+            {"key": "quiet_when_busy", "label": "蹇欑璇嗗埆", "type": "check", "text": "妫€娴嬪埌蹇欑鏃跺皯鎵撴壈"},
+            {"key": "quiet_hours", "label": "瀹夐潤鏃舵", "type": "combo", "options": ("鏃?, "22:00-07:00", "23:00-08:00", "00:00-09:00")},
         ),
     },
     {
         "key": "appearance_actions",
-        "icon": "🎀",
-        "title": "外观与动作",
-        "summary": "颜色主题、透明度、待机动作和被点击时的表现。",
+        "icon": "馃巰",
+        "title": "澶栬涓庡姩浣?,
+        "summary": "棰滆壊涓婚銆侀€忔槑搴︺€佸緟鏈哄姩浣滃拰琚偣鍑绘椂鐨勮〃鐜般€?,
         "fields": (
-            {"key": "theme_color", "label": "颜色主题", "type": "combo", "options": ("樱花粉", "薄荷绿", "天空蓝", "暖阳橙", "极简灰")},
-            {"key": "idle_action", "label": "待机动作", "type": "combo", "options": ("轻轻晃动", "原地眨眼", "小步走动", "贴边休息", "安静站立")},
-            {"key": "transparency", "label": "不透明度", "type": "slider", "min": 30, "max": 100, "suffix": "%"},
+            {"key": "theme_color", "label": "棰滆壊涓婚", "type": "combo", "options": ("妯辫姳绮?, "钖勮嵎缁?, "澶╃┖钃?, "鏆栭槼姗?, "鏋佺畝鐏?)},
+            {"key": "idle_action", "label": "寰呮満鍔ㄤ綔", "type": "combo", "options": ("杞昏交鏅冨姩", "鍘熷湴鐪ㄧ溂", "灏忔璧板姩", "璐磋竟浼戞伅", "瀹夐潤绔欑珛")},
+            {"key": "transparency", "label": "涓嶉€忔槑搴?, "type": "slider", "min": 30, "max": 100, "suffix": "%"},
         ),
     },
     {
         "key": "companion_mode",
-        "icon": "🧭",
-        "title": "陪伴模式",
-        "summary": "工作、学习、摸鱼、睡前和游戏陪伴的行为模式。",
+        "icon": "馃Л",
+        "title": "闄即妯″紡",
+        "summary": "宸ヤ綔銆佸涔犮€佹懜楸笺€佺潯鍓嶅拰娓告垙闄即鐨勮涓烘ā寮忋€?,
         "fields": (
-            {"key": "mode", "label": "默认模式", "type": "combo", "options": ("工作陪伴", "学习陪伴", "摸鱼搭子", "睡前陪伴", "游戏陪伴")},
-            {"key": "auto_switch", "label": "模式切换", "type": "check", "text": "允许自动切换"},
-            {"key": "focus_silence", "label": "专注保护", "type": "check", "text": "专注时减少气泡"},
+            {"key": "mode", "label": "榛樿妯″紡", "type": "combo", "options": ("宸ヤ綔闄即", "瀛︿範闄即", "鎽搁奔鎼瓙", "鐫″墠闄即", "娓告垙闄即")},
+            {"key": "auto_switch", "label": "妯″紡鍒囨崲", "type": "check", "text": "鍏佽鑷姩鍒囨崲"},
+            {"key": "focus_silence", "label": "涓撴敞淇濇姢", "type": "check", "text": "涓撴敞鏃跺噺灏戞皵娉?},
         ),
     },
     {
         "key": "emotion_system",
-        "icon": "💗",
-        "title": "情绪系统",
-        "summary": "心情、精力、亲密度的响应强度。",
+        "icon": "馃挆",
+        "title": "鎯呯华绯荤粺",
+        "summary": "蹇冩儏銆佺簿鍔涖€佷翰瀵嗗害鐨勫搷搴斿己搴︺€?,
         "fields": (
-            {"key": "enable_emotion", "label": "情绪状态", "type": "check", "text": "启用"},
-            {"key": "mood_sensitivity", "label": "心情敏感度", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
-            {"key": "intimacy_growth", "label": "亲密度成长", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
+            {"key": "enable_emotion", "label": "鎯呯华鐘舵€?, "type": "check", "text": "鍚敤"},
+            {"key": "mood_sensitivity", "label": "蹇冩儏鏁忔劅搴?, "type": "slider", "min": 0, "max": 100, "suffix": "%"},
+            {"key": "intimacy_growth", "label": "浜插瘑搴︽垚闀?, "type": "slider", "min": 0, "max": 100, "suffix": "%"},
         ),
     },
     {
         "key": "reminders",
-        "icon": "🔔",
-        "title": "提醒偏好",
-        "summary": "喝水、休息、番茄钟、吃饭和睡觉提醒。",
+        "icon": "馃敂",
+        "title": "鎻愰啋鍋忓ソ",
+        "summary": "鍠濇按銆佷紤鎭€佺暘鑼勯挓銆佸悆楗拰鐫¤鎻愰啋銆?,
         "fields": (
-            {"key": "water", "label": "喝水", "type": "check", "text": "开启"},
-            {"key": "rest", "label": "休息", "type": "check", "text": "开启"},
-            {"key": "pomodoro", "label": "番茄钟", "type": "check", "text": "开启"},
-            {"key": "meal", "label": "吃饭", "type": "check", "text": "开启"},
-            {"key": "sleep", "label": "睡觉", "type": "check", "text": "开启"},
-            {"key": "style", "label": "提醒语气", "type": "combo", "options": ("温柔提醒", "严格督促", "搞笑吐槽", "安静弹窗")},
+            {"key": "water", "label": "鍠濇按", "type": "check", "text": "寮€鍚?},
+            {"key": "rest", "label": "浼戞伅", "type": "check", "text": "寮€鍚?},
+            {"key": "pomodoro", "label": "鐣寗閽?, "type": "check", "text": "寮€鍚?},
+            {"key": "meal", "label": "鍚冮キ", "type": "check", "text": "寮€鍚?},
+            {"key": "sleep", "label": "鐫¤", "type": "check", "text": "寮€鍚?},
+            {"key": "style", "label": "鎻愰啋璇皵", "type": "combo", "options": ("娓╂煍鎻愰啋", "涓ユ牸鐫ｄ績", "鎼炵瑧鍚愭Ы", "瀹夐潤寮圭獥")},
         ),
     },
     {
         "key": "memory_relationship",
-        "icon": "🧠",
-        "title": "记忆与关系",
-        "summary": "关系定位、称呼、偏好和项目记忆。",
+        "icon": "馃",
+        "title": "璁板繂涓庡叧绯?,
+        "summary": "鍏崇郴瀹氫綅銆佺О鍛笺€佸亸濂藉拰椤圭洰璁板繂銆?,
         "fields": (
-            {"key": "relationship", "label": "关系定位", "type": "combo", "options": ("朋友", "搭档", "管家", "姐姐感", "妹妹感", "损友")},
-            {"key": "user_title", "label": "用户称呼", "type": "line", "placeholder": "用户"},
-            {"key": "remember_preferences", "label": "偏好记忆", "type": "check", "text": "记住"},
-            {"key": "remember_projects", "label": "项目记忆", "type": "check", "text": "记住"},
+            {"key": "relationship", "label": "鍏崇郴瀹氫綅", "type": "combo", "options": ("鏈嬪弸", "鎼。", "绠″", "濮愬鎰?, "濡瑰鎰?, "鎹熷弸")},
+            {"key": "user_title", "label": "鐢ㄦ埛绉板懠", "type": "line", "placeholder": "鐢ㄦ埛"},
+            {"key": "remember_preferences", "label": "鍋忓ソ璁板繂", "type": "check", "text": "璁颁綇"},
+            {"key": "remember_projects", "label": "椤圭洰璁板繂", "type": "check", "text": "璁颁綇"},
         ),
     },
     {
         "key": "voice_expression",
-        "icon": "🎙️",
-        "title": "声音与表达",
-        "summary": "语音开关、音色风格、语速和气泡密度。",
+        "icon": "馃帣锔?,
+        "title": "澹伴煶涓庤〃杈?,
+        "summary": "璇煶寮€鍏炽€侀煶鑹查鏍笺€佽閫熷拰姘旀场瀵嗗害銆?,
         "fields": (
-            {"key": "voice_enabled", "label": "语音播报", "type": "check", "text": "开启"},
-            {"key": "voice_style", "label": "声音风格", "type": "combo", "options": ("自然可爱", "温柔安静", "元气活泼", "冷静可靠", "轻微毒舌")},
-            {"key": "speech_rate", "label": "语速", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
-            {"key": "bubble_density", "label": "气泡密度", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
+            {"key": "voice_enabled", "label": "璇煶鎾姤", "type": "check", "text": "寮€鍚?},
+            {"key": "voice_style", "label": "澹伴煶椋庢牸", "type": "combo", "options": ("鑷劧鍙埍", "娓╂煍瀹夐潤", "鍏冩皵娲绘臣", "鍐烽潤鍙潬", "杞诲井姣掕垖")},
+            {"key": "speech_rate", "label": "璇€?, "type": "slider", "min": 0, "max": 100, "suffix": "%"},
+            {"key": "bubble_density", "label": "姘旀场瀵嗗害", "type": "slider", "min": 0, "max": 100, "suffix": "%"},
         ),
     },
     {
         "key": "desktop_behavior",
-        "icon": "🖥️",
-        "title": "桌面行为",
-        "summary": "活动范围、避让窗口、跟随鼠标和多屏移动。",
+        "icon": "馃枼锔?,
+        "title": "妗岄潰琛屼负",
+        "summary": "娲诲姩鑼冨洿銆侀伩璁╃獥鍙ｃ€佽窡闅忛紶鏍囧拰澶氬睆绉诲姩銆?,
         "fields": (
-            {"key": "activity_range", "label": "活动范围", "type": "combo", "options": ("屏幕边缘和空白处", "只在当前屏幕", "固定在角落", "跟随活跃窗口")},
-            {"key": "avoid_windows", "label": "窗口避让", "type": "check", "text": "开启"},
-            {"key": "follow_mouse", "label": "跟随鼠标", "type": "check", "text": "开启"},
-            {"key": "multi_screen", "label": "多屏移动", "type": "check", "text": "允许"},
+            {"key": "activity_range", "label": "娲诲姩鑼冨洿", "type": "combo", "options": ("灞忓箷杈圭紭鍜岀┖鐧藉", "鍙湪褰撳墠灞忓箷", "鍥哄畾鍦ㄨ钀?, "璺熼殢娲昏穬绐楀彛")},
+            {"key": "avoid_windows", "label": "绐楀彛閬胯", "type": "check", "text": "寮€鍚?},
+            {"key": "follow_mouse", "label": "璺熼殢榧犳爣", "type": "check", "text": "寮€鍚?},
+            {"key": "multi_screen", "label": "澶氬睆绉诲姩", "type": "check", "text": "鍏佽"},
         ),
     },
     {
         "key": "boundaries",
-        "icon": "🛡️",
-        "title": "边界设置",
-        "summary": "不打扰、话题边界、安慰尺度和亲密表达。",
+        "icon": "馃洝锔?,
+        "title": "杈圭晫璁剧疆",
+        "summary": "涓嶆墦鎵般€佽瘽棰樿竟鐣屻€佸畨鎱板昂搴﹀拰浜插瘑琛ㄨ揪銆?,
         "fields": (
-            {"key": "no_disturb_when_fullscreen", "label": "全屏不打扰", "type": "check", "text": "开启"},
-            {"key": "safe_topics", "label": "话题边界", "type": "line", "placeholder": "不过度亲密、不讨论隐私"},
-            {"key": "comfort_level", "label": "安慰尺度", "type": "combo", "options": ("只给建议", "轻度安慰", "明显关心", "高亲密陪伴")},
-            {"key": "allow_close_expression", "label": "亲密表达", "type": "check", "text": "允许更亲近的表达"},
+            {"key": "no_disturb_when_fullscreen", "label": "鍏ㄥ睆涓嶆墦鎵?, "type": "check", "text": "寮€鍚?},
+            {"key": "safe_topics", "label": "璇濋杈圭晫", "type": "line", "placeholder": "涓嶈繃搴︿翰瀵嗐€佷笉璁ㄨ闅愮"},
+            {"key": "comfort_level", "label": "瀹夋叞灏哄害", "type": "combo", "options": ("鍙粰寤鸿", "杞诲害瀹夋叞", "鏄庢樉鍏冲績", "楂樹翰瀵嗛櫔浼?)},
+            {"key": "allow_close_expression", "label": "浜插瘑琛ㄨ揪", "type": "check", "text": "鍏佽鏇翠翰杩戠殑琛ㄨ揪"},
         ),
     },
 )
@@ -376,66 +376,66 @@ PET_PERSONALIZATION_SECTIONS: tuple[dict[str, Any], ...] = (
 TTS_QUALITY_PRESETS: tuple[dict[str, Any], ...] = (
     {
         "id": "basic",
-        "label": "基础语音合成",
+        "label": "鍩虹璇煶鍚堟垚",
         "provider": "auto",
         "enabled": True,
     },
     {
         "id": "neural",
-        "label": "高拟真神经语音",
+        "label": "楂樻嫙鐪熺缁忚闊?,
         "provider": "edge",
         "enabled": True,
     },
     {
         "id": "offline",
-        "label": "离线语音",
+        "label": "绂荤嚎璇煶",
         "provider": "pyttsx3",
         "enabled": True,
     },
     {
         "id": "off",
-        "label": "关闭语音",
+        "label": "鍏抽棴璇煶",
         "provider": "off",
         "enabled": False,
     },
 )
 
 TTS_VOICE_PRESETS: tuple[tuple[str, str], ...] = (
-    ("跟随语音包 / 默认", ""),
-    ("中文女声 Xiaoyi", "zh-CN-XiaoyiNeural"),
-    ("中文女声 Xiaoxiao", "zh-CN-XiaoxiaoNeural"),
-    ("中文女声 Xiaomo", "zh-CN-XiaomoNeural"),
-    ("中文男声 Yunxi", "zh-CN-YunxiNeural"),
-    ("粤语女声 HiuGaai", "zh-HK-HiuGaaiNeural"),
-    ("英语女声 Jenny（美音）", "en-US-JennyNeural"),
-    ("英语男声 Guy（美音）", "en-US-GuyNeural"),
-    ("英语女声 Sonia（英音）", "en-GB-SoniaNeural"),
-    ("英语男声 Ryan（英音）", "en-GB-RyanNeural"),
-    ("法语女声 Denise", "fr-FR-DeniseNeural"),
-    ("法语男声 Henri", "fr-FR-HenriNeural"),
-    ("德语女声 Katja", "de-DE-KatjaNeural"),
-    ("德语男声 Conrad", "de-DE-ConradNeural"),
-    ("西班牙语女声 Elvira", "es-ES-ElviraNeural"),
-    ("西班牙语男声 Alvaro", "es-ES-AlvaroNeural"),
-    ("墨西哥西语女声 Dalia", "es-MX-DaliaNeural"),
-    ("意大利语女声 Elsa", "it-IT-ElsaNeural"),
-    ("葡萄牙语女声 Francisca", "pt-BR-FranciscaNeural"),
-    ("俄语女声 Svetlana", "ru-RU-SvetlanaNeural"),
-    ("荷兰语女声 Colette", "nl-NL-ColetteNeural"),
-    ("印地语女声 Swara", "hi-IN-SwaraNeural"),
-    ("阿拉伯语女声 Salma", "ar-EG-SalmaNeural"),
-    ("日文女声 Nanami", "ja-JP-NanamiNeural"),
-    ("韩文女声 SunHi", "ko-KR-SunHiNeural"),
+    ("璺熼殢璇煶鍖?/ 榛樿", ""),
+    ("涓枃濂冲０ Xiaoyi", "zh-CN-XiaoyiNeural"),
+    ("涓枃濂冲０ Xiaoxiao", "zh-CN-XiaoxiaoNeural"),
+    ("涓枃濂冲０ Xiaomo", "zh-CN-XiaomoNeural"),
+    ("涓枃鐢峰０ Yunxi", "zh-CN-YunxiNeural"),
+    ("绮よ濂冲０ HiuGaai", "zh-HK-HiuGaaiNeural"),
+    ("鑻辫濂冲０ Jenny锛堢編闊筹級", "en-US-JennyNeural"),
+    ("鑻辫鐢峰０ Guy锛堢編闊筹級", "en-US-GuyNeural"),
+    ("鑻辫濂冲０ Sonia锛堣嫳闊筹級", "en-GB-SoniaNeural"),
+    ("鑻辫鐢峰０ Ryan锛堣嫳闊筹級", "en-GB-RyanNeural"),
+    ("娉曡濂冲０ Denise", "fr-FR-DeniseNeural"),
+    ("娉曡鐢峰０ Henri", "fr-FR-HenriNeural"),
+    ("寰疯濂冲０ Katja", "de-DE-KatjaNeural"),
+    ("寰疯鐢峰０ Conrad", "de-DE-ConradNeural"),
+    ("瑗跨彮鐗欒濂冲０ Elvira", "es-ES-ElviraNeural"),
+    ("瑗跨彮鐗欒鐢峰０ Alvaro", "es-ES-AlvaroNeural"),
+    ("澧ㄨタ鍝ヨタ璇コ澹?Dalia", "es-MX-DaliaNeural"),
+    ("鎰忓ぇ鍒╄濂冲０ Elsa", "it-IT-ElsaNeural"),
+    ("钁¤悇鐗欒濂冲０ Francisca", "pt-BR-FranciscaNeural"),
+    ("淇勮濂冲０ Svetlana", "ru-RU-SvetlanaNeural"),
+    ("鑽峰叞璇コ澹?Colette", "nl-NL-ColetteNeural"),
+    ("鍗板湴璇コ澹?Swara", "hi-IN-SwaraNeural"),
+    ("闃挎媺浼濂冲０ Salma", "ar-EG-SalmaNeural"),
+    ("鏃ユ枃濂冲０ Nanami", "ja-JP-NanamiNeural"),
+    ("闊╂枃濂冲０ SunHi", "ko-KR-SunHiNeural"),
 )
 
 TTS_STYLE_PRESETS: tuple[dict[str, Any], ...] = (
-    {"id": "auto", "label": "自动跟随情绪", "voice_profile": "default", "cute_style": True},
-    {"id": "neutral", "label": "自然", "voice_profile": "default", "cute_style": False},
-    {"id": "cheerful", "label": "开心活泼", "voice_profile": "cute", "cute_style": True},
-    {"id": "comfort", "label": "温柔安抚", "voice_profile": "calm", "cute_style": False},
-    {"id": "serious", "label": "严肃专业", "voice_profile": "default", "cute_style": False},
-    {"id": "story", "label": "故事旁白", "voice_profile": "default", "cute_style": False},
-    {"id": "news", "label": "新闻播报", "voice_profile": "default", "cute_style": False},
+    {"id": "auto", "label": "鑷姩璺熼殢鎯呯华", "voice_profile": "default", "cute_style": True},
+    {"id": "neutral", "label": "鑷劧", "voice_profile": "default", "cute_style": False},
+    {"id": "cheerful", "label": "寮€蹇冩椿娉?, "voice_profile": "cute", "cute_style": True},
+    {"id": "comfort", "label": "娓╂煍瀹夋姎", "voice_profile": "calm", "cute_style": False},
+    {"id": "serious", "label": "涓ヨ們涓撲笟", "voice_profile": "default", "cute_style": False},
+    {"id": "story", "label": "鏁呬簨鏃佺櫧", "voice_profile": "default", "cute_style": False},
+    {"id": "news", "label": "鏂伴椈鎾姤", "voice_profile": "default", "cute_style": False},
 )
 
 
@@ -524,7 +524,7 @@ def _scaled_int(value: float, scale: float, minimum: int = 1) -> int:
 
 
 class ScalableOverlay:
-    """桌宠窗口缩小时，overlay 控件按比例缩放。"""
+    """妗屽疇绐楀彛缂╁皬鏃讹紝overlay 鎺т欢鎸夋瘮渚嬬缉鏀俱€?""
 
     _ui_scale: float = 1.0
 
@@ -555,21 +555,21 @@ def _load_pixmap(path: str, size: QSize | None = None) -> QPixmap:
 
 
 # ---------------------------------------------------------------------------
-# 右键菜单 & 二级菜单（自绘 overlay）
+# 鍙抽敭鑿滃崟 & 浜岀骇鑿滃崟锛堣嚜缁?overlay锛?
 # ---------------------------------------------------------------------------
 
 
 class RightClickMenu(QFrame, ScalableOverlay):
     ITEMS = (
-        "状态栏",
-        "AI对话",
-        "设置面板",
-        "动作展示",
-        "待机",
-        "置顶设置",
-        "悬停淡出",
-        "退出",
-        "关闭",
+        "鐘舵€佹爮",
+        "AI瀵硅瘽",
+        "璁剧疆闈㈡澘",
+        "鍔ㄤ綔灞曠ず",
+        "寰呮満",
+        "缃《璁剧疆",
+        "鎮仠娣″嚭",
+        "閫€鍑?,
+        "鍏抽棴",
     )
     _BASE_WIDTH = 200
     _BASE_ITEM_HEIGHT = 40
@@ -704,7 +704,7 @@ class SubMenu(QFrame, ScalableOverlay):
 
     def __init__(
         self,
-        items: tuple[str, ...] = ("开始置顶", "关闭置顶"),
+        items: tuple[str, ...] = ("寮€濮嬬疆椤?, "鍏抽棴缃《"),
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -823,7 +823,7 @@ class SubMenu(QFrame, ScalableOverlay):
 
 
 # ---------------------------------------------------------------------------
-# 弧形动作菜单
+# 寮у舰鍔ㄤ綔鑿滃崟
 # ---------------------------------------------------------------------------
 
 
@@ -966,7 +966,7 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
             p.fillPath(path, QColor(230, 240, 255, 220) if hovered else QColor(255, 255, 255, 180))
             label = str(item.get("label", ""))
             if len(label) > 5:
-                label = label[:4] + "…"
+                label = label[:4] + "鈥?
             p.setPen(QColor(30, 30, 40))
             p.drawText(r, Qt.AlignmentFlag.AlignCenter, label)
         p.end()
@@ -984,7 +984,7 @@ RadialMenu = ArcMotionMenu
 
 
 # ---------------------------------------------------------------------------
-# 气泡 & 输入框
+# 姘旀场 & 杈撳叆妗?
 # ---------------------------------------------------------------------------
 
 
@@ -1017,7 +1017,7 @@ class InfoBubble(QFrame, ScalableOverlay):
 
     def show(self, x: int, y: int) -> None:
         self._lbl.setText(
-            f"心情❤️{self.mood}\n好感度⭐{self.affection}\n能量⚡{self.energy}"
+            f"蹇冩儏鉂わ笍{self.mood}\n濂芥劅搴︹瓙{self.affection}\n鑳介噺鈿self.energy}"
         )
         self.adjustSize()
         self.move(x, y)
@@ -1113,14 +1113,14 @@ _VOICE_LOGGER = get_logger("VoiceInput")
 
 def _voice_error_summary(message: str) -> str:
     if any(keyword in message for keyword in ("SpeechRecognition", "speech_recognition", "PyAudio", "pyaudio")):
-        return "语音输入缺少依赖，请安装 SpeechRecognition 和 PyAudio 后重启。"
-    if any(keyword in message for keyword in ("麦克风", "Microphone", "Input Device", "输入设备")):
-        return "无法打开麦克风，请检查系统权限和默认输入设备。"
-    if "在线语音识别不可用" in message:
-        return "在线语音识别不可用，请检查网络或稍后再试。"
-    if "没有识别" in message or "没有听清" in message:
-        return "没有识别到语音，请再试一次。"
-    return message or "语音识别失败，请再试一次。"
+        return "璇煶杈撳叆缂哄皯渚濊禆锛岃瀹夎 SpeechRecognition 鍜?PyAudio 鍚庨噸鍚€?
+    if any(keyword in message for keyword in ("楹﹀厠椋?, "Microphone", "Input Device", "杈撳叆璁惧")):
+        return "鏃犳硶鎵撳紑楹﹀厠椋庯紝璇锋鏌ョ郴缁熸潈闄愬拰榛樿杈撳叆璁惧銆?
+    if "鍦ㄧ嚎璇煶璇嗗埆涓嶅彲鐢? in message:
+        return "鍦ㄧ嚎璇煶璇嗗埆涓嶅彲鐢紝璇锋鏌ョ綉缁滄垨绋嶅悗鍐嶈瘯銆?
+    if "娌℃湁璇嗗埆" in message or "娌℃湁鍚竻" in message:
+        return "娌℃湁璇嗗埆鍒拌闊筹紝璇峰啀璇曚竴娆°€?
+    return message or "璇煶璇嗗埆澶辫触锛岃鍐嶈瘯涓€娆°€?
 
 
 def _recognize_with_speech_recognition(timeout_sec: float, phrase_time_limit: float) -> str:
@@ -1129,8 +1129,8 @@ def _recognize_with_speech_recognition(timeout_sec: float, phrase_time_limit: fl
     except ImportError as exc:
         missing = getattr(exc, "name", "") or str(exc)
         if missing and missing != "speech_recognition":
-            raise RuntimeError(f"SpeechRecognition 依赖缺失：{missing}。请重新安装语音输入依赖。") from exc
-        raise RuntimeError("未安装 SpeechRecognition，无法启用语音输入。") from exc
+            raise RuntimeError(f"SpeechRecognition 渚濊禆缂哄け锛歿missing}銆傝閲嶆柊瀹夎璇煶杈撳叆渚濊禆銆?) from exc
+        raise RuntimeError("鏈畨瑁?SpeechRecognition锛屾棤娉曞惎鐢ㄨ闊宠緭鍏ャ€?) from exc
 
     recognizer = sr.Recognizer()
     try:
@@ -1143,31 +1143,31 @@ def _recognize_with_speech_recognition(timeout_sec: float, phrase_time_limit: fl
             )
     except AttributeError as exc:
         if "PyAudio" in str(exc):
-            raise RuntimeError("未安装 PyAudio，无法读取麦克风音频。") from exc
+            raise RuntimeError("鏈畨瑁?PyAudio锛屾棤娉曡鍙栭害鍏嬮闊抽銆?) from exc
         raise
     except OSError as exc:
-        raise RuntimeError(f"无法打开麦克风设备：{exc}") from exc
+        raise RuntimeError(f"鏃犳硶鎵撳紑楹﹀厠椋庤澶囷細{exc}") from exc
     try:
         text = recognizer.recognize_google(audio, language="zh-CN")
     except sr.UnknownValueError as exc:
-        raise RuntimeError("没有听清，请再试一次。") from exc
+        raise RuntimeError("娌℃湁鍚竻锛岃鍐嶈瘯涓€娆°€?) from exc
     except sr.RequestError as exc:
-        raise RuntimeError(f"在线语音识别不可用：{exc}") from exc
+        raise RuntimeError(f"鍦ㄧ嚎璇煶璇嗗埆涓嶅彲鐢細{exc}") from exc
     cleaned = _clean_voice_text(text)
     if not cleaned:
-        raise RuntimeError("没有识别到文字，请再试一次。")
+        raise RuntimeError("娌℃湁璇嗗埆鍒版枃瀛楋紝璇峰啀璇曚竴娆°€?)
     return cleaned
 
 
 def _recognize_with_windows_sapi(timeout_sec: float) -> str:
     if sys.platform != "win32":
-        raise RuntimeError("当前系统没有可用的本地语音识别后端。")
+        raise RuntimeError("褰撳墠绯荤粺娌℃湁鍙敤鐨勬湰鍦拌闊宠瘑鍒悗绔€?)
 
     try:
         import pythoncom  # type: ignore
         import win32com.client  # type: ignore
     except ImportError as exc:
-        raise RuntimeError("缺少 pywin32，无法调用 Windows 语音识别。") from exc
+        raise RuntimeError("缂哄皯 pywin32锛屾棤娉曡皟鐢?Windows 璇煶璇嗗埆銆?) from exc
 
     result: dict[str, str] = {"text": ""}
     done = threading.Event()
@@ -1205,7 +1205,7 @@ def _recognize_with_windows_sapi(timeout_sec: float) -> str:
         text = _clean_voice_text(result["text"])
         if text:
             return text
-        raise RuntimeError("没有识别到语音，请确认麦克风权限和 Windows 语音识别语言已启用。")
+        raise RuntimeError("娌℃湁璇嗗埆鍒拌闊筹紝璇风‘璁ら害鍏嬮鏉冮檺鍜?Windows 璇煶璇嗗埆璇█宸插惎鐢ㄣ€?)
     finally:
         if grammar is not None:
             try:
@@ -1220,7 +1220,7 @@ def _recognize_speech_once(timeout_sec: float = 7.0, phrase_time_limit: float = 
     try:
         return _recognize_with_speech_recognition(timeout_sec, phrase_time_limit)
     except ImportError:
-        errors.append("未安装 speech_recognition/pyaudio")
+        errors.append("鏈畨瑁?speech_recognition/pyaudio")
     except Exception as exc:
         errors.append(str(exc))
 
@@ -1229,8 +1229,8 @@ def _recognize_speech_once(timeout_sec: float = 7.0, phrase_time_limit: float = 
     except Exception as exc:
         errors.append(str(exc))
 
-    detail = "；".join(error for error in errors if error)
-    raise RuntimeError(detail or "语音识别不可用。")
+    detail = "锛?.join(error for error in errors if error)
+    raise RuntimeError(detail or "璇煶璇嗗埆涓嶅彲鐢ㄣ€?)
 
 
 class InputBox(QFrame, ScalableOverlay):
@@ -1265,16 +1265,16 @@ class InputBox(QFrame, ScalableOverlay):
         self._voice_btn.setIconSize(QSize(20, 20))
         self._voice_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._voice_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._voice_btn.setAccessibleName("语音输入")
-        self._voice_btn.setToolTip("语音输入")
+        self._voice_btn.setAccessibleName("璇煶杈撳叆")
+        self._voice_btn.setToolTip("璇煶杈撳叆")
         self._voice_btn.setStyleSheet(BTN_ICON)
         self._voice_btn.clicked.connect(self.start_voice_input)
         self._field = QLineEdit()
-        self._field.setPlaceholderText("输入消息…")
+        self._field.setPlaceholderText("杈撳叆娑堟伅鈥?)
         self._field.setFrame(False)
         self._field.setFont(_app_font(15))
         self._field.returnPressed.connect(self._submit)
-        self._btn = QPushButton("发送")
+        self._btn = QPushButton("鍙戦€?)
         self._btn.setStyleSheet(BTN_PRIMARY)
         self._btn.clicked.connect(self._submit)
         self._lay.addWidget(self._voice_btn)
@@ -1336,22 +1336,22 @@ class InputBox(QFrame, ScalableOverlay):
     def start_voice_input(self) -> None:
         if self._voice_listening:
             return
-        _VOICE_LOGGER.info("开始语音输入")
+        _VOICE_LOGGER.info("寮€濮嬭闊宠緭鍏?)
         self._voice_listening = True
         self._voice_btn.setIcon(_make_mic_icon("#ef476f"))
-        self._voice_btn.setToolTip("正在听，请说话…")
+        self._voice_btn.setToolTip("姝ｅ湪鍚紝璇疯璇濃€?)
         if not self._field.text().strip():
-            self._field.setPlaceholderText("正在听，请说话…")
+            self._field.setPlaceholderText("姝ｅ湪鍚紝璇疯璇濃€?)
         self._voice_thread = threading.Thread(target=self._run_voice_input, daemon=True)
         self._voice_thread.start()
 
     def _run_voice_input(self) -> None:
         try:
             text = _recognize_speech_once()
-            _VOICE_LOGGER.info("语音识别成功，文本长度=%s", len(text))
+            _VOICE_LOGGER.info("璇煶璇嗗埆鎴愬姛锛屾枃鏈暱搴?%s", len(text))
             self._voice_text_ready.emit(text)
         except Exception as exc:
-            _VOICE_LOGGER.warning("语音识别失败: %s", exc)
+            _VOICE_LOGGER.warning("璇煶璇嗗埆澶辫触: %s", exc)
             self._voice_error.emit(str(exc))
         finally:
             self._voice_done.emit()
@@ -1365,7 +1365,7 @@ class InputBox(QFrame, ScalableOverlay):
         prefix = current[:cursor_pos]
         suffix = current[cursor_pos:]
         spacer = ""
-        if prefix and not prefix.endswith((" ", "\n")) and text[:1] not in "，。！？,.!?":
+        if prefix and not prefix.endswith((" ", "\n")) and text[:1] not in "锛屻€傦紒锛?.!?":
             spacer = "" if re.search(r"[\u4e00-\u9fff]$", prefix) else " "
         merged = f"{prefix}{spacer}{text}{suffix}"
         self.set_text(merged)
@@ -1373,7 +1373,7 @@ class InputBox(QFrame, ScalableOverlay):
         self._field.setCursorPosition(len(prefix) + len(spacer) + len(text))
 
     def _show_voice_error(self, message: str) -> None:
-        message = message.strip() or "语音识别失败，请再试一次。"
+        message = message.strip() or "璇煶璇嗗埆澶辫触锛岃鍐嶈瘯涓€娆°€?
         summary = _voice_error_summary(message)
         self._field.setPlaceholderText(summary)
         self._voice_btn.setToolTip(message)
@@ -1389,16 +1389,16 @@ class InputBox(QFrame, ScalableOverlay):
     def _finish_voice_input(self) -> None:
         self._voice_listening = False
         self._voice_btn.setIcon(_make_mic_icon())
-        if self._voice_btn.toolTip().startswith("正在听"):
-            self._voice_btn.setToolTip("语音输入")
-        if self._field.placeholderText().startswith("正在听"):
-            self._field.setPlaceholderText("输入消息…")
+        if self._voice_btn.toolTip().startswith("姝ｅ湪鍚?):
+            self._voice_btn.setToolTip("璇煶杈撳叆")
+        if self._field.placeholderText().startswith("姝ｅ湪鍚?):
+            self._field.setPlaceholderText("杈撳叆娑堟伅鈥?)
 
     def _restore_voice_hint(self) -> None:
         if self._voice_listening:
             return
-        self._voice_btn.setToolTip("语音输入")
-        self._field.setPlaceholderText("输入消息…")
+        self._voice_btn.setToolTip("璇煶杈撳叆")
+        self._field.setPlaceholderText("杈撳叆娑堟伅鈥?)
 
     def is_voice_click(self, mouse_pos: tuple[int, int]) -> bool:
         return self._voice_btn.geometry().contains(self.mapFromGlobal(QPoint(*mouse_pos)))
@@ -1414,12 +1414,12 @@ class InputBox(QFrame, ScalableOverlay):
 
 
 # ---------------------------------------------------------------------------
-# 控制台
+# 鎺у埗鍙?
 # ---------------------------------------------------------------------------
 
 
 class _PetCellButton(QFrame):
-    """角色卡片：图片在上、名称在下；单击详情，双击切换；右键管理。"""
+    """瑙掕壊鍗＄墖锛氬浘鐗囧湪涓娿€佸悕绉板湪涓嬶紱鍗曞嚮璇︽儏锛屽弻鍑诲垏鎹紱鍙抽敭绠＄悊銆?""
 
     single_clicked_pet = Signal(dict)
     double_clicked_pet = Signal(dict)
@@ -1457,11 +1457,11 @@ class _PetCellButton(QFrame):
     def _on_context_menu(self, pos: QPoint) -> None:
         menu = QMenu(self)
         for label, action in (
-            ("设置动作映射", "action_map"),
-            ("管理动作", "actions"),
-            ("编辑性格简介", "personality"),
-            ("重命名角色", "rename"),
-            ("删除角色", "delete"),
+            ("璁剧疆鍔ㄤ綔鏄犲皠", "action_map"),
+            ("绠＄悊鍔ㄤ綔", "actions"),
+            ("缂栬緫鎬ф牸绠€浠?, "personality"),
+            ("閲嶅懡鍚嶈鑹?, "rename"),
+            ("鍒犻櫎瑙掕壊", "delete"),
         ):
             menu.addAction(label, lambda _=False, a=action: self.pet_context_action.emit(a, self._pet))
         menu.exec(self.mapToGlobal(pos))
@@ -1486,12 +1486,12 @@ class _PetCellButton(QFrame):
 
 
 # ---------------------------------------------------------------------------
-# 聊天记录 / 上传 / Live2D 预览
+# 鑱婂ぉ璁板綍 / 涓婁紶 / Live2D 棰勮
 # ---------------------------------------------------------------------------
 
 
 class ChatHistoryStore:
-    """按角色名持久化聊天记录到 assets/chat_history/角色名.json"""
+    """鎸夎鑹插悕鎸佷箙鍖栬亰澶╄褰曞埌 assets/chat_history/瑙掕壊鍚?json"""
 
     def __init__(self, project_root: str) -> None:
         self._dir = os.path.join(project_root, "assets", "chat_history")
@@ -1499,7 +1499,7 @@ class ChatHistoryStore:
 
     @staticmethod
     def _safe_name(name: str) -> str:
-        return re.sub(r'[\\/:*?"<>|]', "_", name.strip()) or "未命名"
+        return re.sub(r'[\\/:*?"<>|]', "_", name.strip()) or "鏈懡鍚?
 
     def path_for(self, name: str) -> str:
         return os.path.join(self._dir, f"{self._safe_name(name)}.json")
@@ -1537,16 +1537,16 @@ class ChatHistoryStore:
 
 
 def scan_voice_packs(project_root: str) -> list[dict]:
-    """扫描 assets/voice_packs 下的 TTS 音色包清单。"""
+    """鎵弿 assets/voice_packs 涓嬬殑 TTS 闊宠壊鍖呮竻鍗曘€?""
     default_language = language_from_edge_voice(config.EDGE_TTS_VOICE)
     packs: list[dict] = [
         {
             "id": "",
-            "name": "跟随语音包 / 默认",
-            "display_name": "默认",
-            "icon": "🎙️",
-            "description": "跟随当前角色或 .env 默认音色。",
-            "sample_text": "你好呀，今天也一起加油。",
+            "name": "璺熼殢璇煶鍖?/ 榛樿",
+            "display_name": "榛樿",
+            "icon": "馃帣锔?,
+            "description": "璺熼殢褰撳墠瑙掕壊鎴?.env 榛樿闊宠壊銆?,
+            "sample_text": "浣犲ソ鍛€锛屼粖澶╀篃涓€璧峰姞娌广€?,
             "edge_voice": config.EDGE_TTS_VOICE,
             "language": (
                 {"id": default_language, "label": language_label(default_language)}
@@ -1587,9 +1587,9 @@ def scan_voice_packs(project_root: str) -> list[dict]:
                 "id": pack_id,
                 "name": name,
                 "display_name": name,
-                "icon": str(data.get("icon") or "🎙️"),
-                "description": str(data.get("description") or "TTS 音色参数包。"),
-                "sample_text": str(data.get("sample_text") or "你好呀，今天也一起加油。"),
+                "icon": str(data.get("icon") or "馃帣锔?),
+                "description": str(data.get("description") or "TTS 闊宠壊鍙傛暟鍖呫€?),
+                "sample_text": str(data.get("sample_text") or "浣犲ソ鍛€锛屼粖澶╀篃涓€璧峰姞娌广€?),
                 "language": language,
                 "edge_voice": profile_edge_voice,
                 "is_custom": bool(data.get("is_custom", False)),
@@ -1604,7 +1604,7 @@ def scan_voice_packs(project_root: str) -> list[dict]:
 
 
 def tts_voice_preset_choices(current_edge_voice: str = "") -> list[dict]:
-    """把固定 Edge 音色也作为语音包列表里的同级选项。"""
+    """鎶婂浐瀹?Edge 闊宠壊涔熶綔涓鸿闊冲寘鍒楄〃閲岀殑鍚岀骇閫夐」銆?""
     preset_values = {voice_id for _label, voice_id in TTS_VOICE_PRESETS if voice_id}
     choices: list[dict] = []
     for label, voice_id in TTS_VOICE_PRESETS:
@@ -1616,9 +1616,9 @@ def tts_voice_preset_choices(current_edge_voice: str = "") -> list[dict]:
                 "id": "",
                 "name": label,
                 "display_name": label,
-                "icon": "🔊",
-                "description": f"固定 Edge TTS 音色：{voice_id}。选择后会覆盖语音包内置音色。",
-                "sample_text": "你好呀，今天也一起加油。",
+                "icon": "馃攰",
+                "description": f"鍥哄畾 Edge TTS 闊宠壊锛歿voice_id}銆傞€夋嫨鍚庝細瑕嗙洊璇煶鍖呭唴缃煶鑹层€?,
+                "sample_text": "浣犲ソ鍛€锛屼粖澶╀篃涓€璧峰姞娌广€?,
                 "kind": "edge_voice",
                 "edge_voice": voice_id,
                 "language": (
@@ -1635,9 +1635,9 @@ def tts_voice_preset_choices(current_edge_voice: str = "") -> list[dict]:
                 "id": "",
                 "name": current_edge_voice,
                 "display_name": current_edge_voice,
-                "icon": "🔊",
-                "description": "当前自定义 Edge TTS 音色。",
-                "sample_text": "你好呀，今天也一起加油。",
+                "icon": "馃攰",
+                "description": "褰撳墠鑷畾涔?Edge TTS 闊宠壊銆?,
+                "sample_text": "浣犲ソ鍛€锛屼粖澶╀篃涓€璧峰姞娌广€?,
                 "kind": "edge_voice",
                 "edge_voice": current_edge_voice,
                 "language": (
@@ -1660,38 +1660,38 @@ class VoicePackImportDialog(QDialog):
         self._files: list[str] = []
         self._result_pack: dict[str, Any] | None = None
 
-        self.setWindowTitle("导入语音包")
+        self.setWindowTitle("瀵煎叆璇煶鍖?)
         self.resize(460, 360)
         lay = QVBoxLayout(self)
 
-        lay.addWidget(QLabel("语音包名称"))
+        lay.addWidget(QLabel("璇煶鍖呭悕绉?))
         self._name = QLineEdit()
-        self._name.setPlaceholderText("例如：我的中文语音")
+        self._name.setPlaceholderText("渚嬪锛氭垜鐨勪腑鏂囪闊?)
         lay.addWidget(self._name)
 
-        lay.addWidget(QLabel("语言"))
+        lay.addWidget(QLabel("璇█"))
         self._language = QComboBox()
         for preset in VOICE_PACK_LANGUAGE_PRESETS:
             self._language.addItem(str(preset["label"]), str(preset["id"]))
         lay.addWidget(self._language)
 
         row = QHBoxLayout()
-        file_btn = QPushButton("选择音频或 MP4")
+        file_btn = QPushButton("閫夋嫨闊抽鎴?MP4")
         file_btn.setStyleSheet(BTN_GLASS)
         file_btn.clicked.connect(self._choose_files)
-        folder_btn = QPushButton("导入文件夹")
+        folder_btn = QPushButton("瀵煎叆鏂囦欢澶?)
         folder_btn.setStyleSheet(BTN_GLASS)
         folder_btn.clicked.connect(self._choose_folder)
         row.addWidget(file_btn)
         row.addWidget(folder_btn)
         lay.addLayout(row)
 
-        self._file_summary = QLabel("尚未选择音频或 MP4 样本，可一次选择一个或多个文件")
+        self._file_summary = QLabel("灏氭湭閫夋嫨闊抽鎴?MP4 鏍锋湰锛屽彲涓€娆￠€夋嫨涓€涓垨澶氫釜鏂囦欢")
         self._file_summary.setWordWrap(True)
         self._file_summary.setStyleSheet("color:#64748b;font-size:12px;")
         lay.addWidget(self._file_summary, 1)
 
-        hint = QLabel("导入后会保存到 assets/voice_packs；MP4 会先抽取音轨转成 MP3。WAV 样本会生成轻度降噪副本，原始文件不覆盖、不改写。")
+        hint = QLabel("瀵煎叆鍚庝細淇濆瓨鍒?assets/voice_packs锛汳P4 浼氬厛鎶藉彇闊宠建杞垚 MP3銆俉AV 鏍锋湰浼氱敓鎴愯交搴﹂檷鍣壇鏈紝鍘熷鏂囦欢涓嶈鐩栥€佷笉鏀瑰啓銆?)
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#94a3b8;font-size:12px;")
         lay.addWidget(hint)
@@ -1708,14 +1708,14 @@ class VoicePackImportDialog(QDialog):
         exts = " ".join(f"*{ext}" for ext in IMPORT_SAMPLE_EXTENSIONS)
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "选择语音样本",
+            "閫夋嫨璇煶鏍锋湰",
             self._project_root,
-            f"音频/视频文件 ({exts});;音频文件 ({' '.join(f'*{ext}' for ext in AUDIO_SAMPLE_EXTENSIONS)});;MP4 视频 (*.mp4);;所有文件 (*.*)",
+            f"闊抽/瑙嗛鏂囦欢 ({exts});;闊抽鏂囦欢 ({' '.join(f'*{ext}' for ext in AUDIO_SAMPLE_EXTENSIONS)});;MP4 瑙嗛 (*.mp4);;鎵€鏈夋枃浠?(*.*)",
         )
         self._add_files(paths)
 
     def _choose_folder(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "选择语音包文件夹", self._project_root)
+        folder = QFileDialog.getExistingDirectory(self, "閫夋嫨璇煶鍖呮枃浠跺す", self._project_root)
         if not folder:
             return
         found: list[str] = []
@@ -1724,7 +1724,7 @@ class VoicePackImportDialog(QDialog):
                 if os.path.splitext(fname)[1].lower() in IMPORT_SAMPLE_EXTENSIONS:
                     found.append(os.path.join(root, fname))
         if not found:
-            QMessageBox.warning(self, "未找到音频", "这个文件夹里没有可导入的音频或 MP4 文件。")
+            QMessageBox.warning(self, "鏈壘鍒伴煶棰?, "杩欎釜鏂囦欢澶归噷娌℃湁鍙鍏ョ殑闊抽鎴?MP4 鏂囦欢銆?)
             return
         self._add_files(found)
 
@@ -1744,22 +1744,22 @@ class VoicePackImportDialog(QDialog):
 
     def _refresh_file_summary(self) -> None:
         if not self._files:
-            self._file_summary.setText("尚未选择音频或 MP4 样本")
+            self._file_summary.setText("灏氭湭閫夋嫨闊抽鎴?MP4 鏍锋湰")
             return
         names = [os.path.basename(path) for path in self._files[:6]]
         more = len(self._files) - len(names)
-        text = f"已选择 {len(self._files)} 个音频样本\n" + "\n".join(names)
+        text = f"宸查€夋嫨 {len(self._files)} 涓煶棰戞牱鏈琝n" + "\n".join(names)
         if more > 0:
-            text += f"\n... 还有 {more} 个"
+            text += f"\n... 杩樻湁 {more} 涓?
         self._file_summary.setText(text)
 
     def _accept_import(self) -> None:
         name = self._name.text().strip()
         if not name:
-            QMessageBox.warning(self, "缺少名称", "请填写语音包名称。")
+            QMessageBox.warning(self, "缂哄皯鍚嶇О", "璇峰～鍐欒闊冲寘鍚嶇О銆?)
             return
         if not self._files:
-            QMessageBox.warning(self, "缺少音频", "请至少选择一个本地音频或 MP4 样本，也可以一次选择多个。")
+            QMessageBox.warning(self, "缂哄皯闊抽", "璇疯嚦灏戦€夋嫨涓€涓湰鍦伴煶棰戞垨 MP4 鏍锋湰锛屼篃鍙互涓€娆￠€夋嫨澶氫釜銆?)
             return
         base_dir = os.path.join(self._project_root, "assets", "voice_packs")
         try:
@@ -1770,7 +1770,7 @@ class VoicePackImportDialog(QDialog):
                 base_dir=base_dir,
             )
         except Exception as exc:
-            QMessageBox.critical(self, "导入失败", f"语音包导入失败：{exc}")
+            QMessageBox.critical(self, "瀵煎叆澶辫触", f"璇煶鍖呭鍏ュけ璐ワ細{exc}")
             return
         self.accept()
 
@@ -1782,7 +1782,7 @@ def _stem_no_ext(path: str) -> str:
     return os.path.splitext(base)[0]
 
 
-MAO_PRO_ZH_DISPLAY = "小魔女"
+MAO_PRO_ZH_DISPLAY = "灏忛瓟濂?
 
 
 def is_mao_pro_zh_model(model_path: str) -> bool:
@@ -1790,7 +1790,7 @@ def is_mao_pro_zh_model(model_path: str) -> bool:
 
 
 def motion_label_from_filename(filename: str) -> str:
-    """从文件名提取 anim_ 后面的动作名，如 这狗_anim_爱你.gif → 爱你。"""
+    """浠庢枃浠跺悕鎻愬彇 anim_ 鍚庨潰鐨勫姩浣滃悕锛屽 杩欑嫍_anim_鐖变綘.gif 鈫?鐖变綘銆?""
     base = os.path.splitext(os.path.basename(filename))[0]
     m = re.search(r"anim_(.+)$", base, re.IGNORECASE)
     if m:
@@ -1799,7 +1799,7 @@ def motion_label_from_filename(filename: str) -> str:
 
 
 def resolve_mao_pro_motion_preview(model_path: str) -> str:
-    """mao_pro_zh：优先使用 runtime 下缓存的首帧预览图。"""
+    """mao_pro_zh锛氫紭鍏堜娇鐢?runtime 涓嬬紦瀛樼殑棣栧抚棰勮鍥俱€?""
     if not model_path or not os.path.isfile(model_path):
         return ""
     runtime = os.path.dirname(os.path.abspath(model_path))
@@ -1828,7 +1828,7 @@ def build_mao_pro_pet_record(model_path: str, available_motions: list[str]) -> d
         "id": "mao_pro_zh",
         "name": MAO_PRO_ZH_DISPLAY,
         "thumb": preview,
-        "personality": "活泼可爱的小魔女，喜欢陪伴你学习与工作。",
+        "personality": "娲绘臣鍙埍鐨勫皬榄斿コ锛屽枩娆㈤櫔浼翠綘瀛︿範涓庡伐浣溿€?,
         "motions": motions,
         "model_path": model_path,
         "is_flat": False,
@@ -1869,12 +1869,12 @@ def _gif_first_frame_to_png(gif_path: str, png_path: str) -> bool:
             img.convert("RGBA").save(png_path, "PNG")
         return os.path.isfile(png_path)
     except Exception as exc:
-        print(f"[FlatUpload] 提取 GIF 首帧失败: {exc}")
+        print(f"[FlatUpload] 鎻愬彇 GIF 棣栧抚澶辫触: {exc}")
         return False
 
 
 def find_flat_idle_gif(project_root: str, pet_id: str) -> str:
-    """查找 idle GIF；若无 idle 则返回该角色第一个 GIF。"""
+    """鏌ユ壘 idle GIF锛涜嫢鏃?idle 鍒欒繑鍥炶瑙掕壊绗竴涓?GIF銆?""
     idle_path = ""
     first_path = ""
     scan: list[tuple[str, str]] = []
@@ -1906,18 +1906,18 @@ def find_flat_idle_gif(project_root: str, pet_id: str) -> str:
 
 
 def apply_zhegou_idle_thumb(project_root: str, pet: dict) -> dict:
-    """这狗：贴图使用 idle 动作首帧，无 idle 则用第一个动作首帧。"""
-    if pet.get("id") != "这狗":
+    """杩欑嫍锛氳创鍥句娇鐢?idle 鍔ㄤ綔棣栧抚锛屾棤 idle 鍒欑敤绗竴涓姩浣滈甯с€?""
+    if pet.get("id") != "杩欑嫍":
         return pet
     pet = dict(pet)
     gif = pet.get("idle_gif") or ""
     if not gif or not os.path.isfile(gif):
-        gif = find_flat_idle_gif(project_root, "这狗")
+        gif = find_flat_idle_gif(project_root, "杩欑嫍")
     if not gif or not os.path.isfile(gif):
         return pet
     images_dir = os.path.join(project_root, "assets", "images")
     os.makedirs(images_dir, exist_ok=True)
-    out = os.path.join(images_dir, "这狗_idle_frame.png")
+    out = os.path.join(images_dir, "杩欑嫍_idle_frame.png")
     if _gif_first_frame_to_png(gif, out):
         pet["thumb"] = out
         pet["idle_image"] = out
@@ -1926,7 +1926,7 @@ def apply_zhegou_idle_thumb(project_root: str, pet: dict) -> dict:
 
 
 def scan_flat_pets(project_root: str) -> list[dict]:
-    """扫描 assets 下 GIF/PNG 与静态图，生成平面角色列表。"""
+    """鎵弿 assets 涓?GIF/PNG 涓庨潤鎬佸浘锛岀敓鎴愬钩闈㈣鑹插垪琛ㄣ€?""
     assets_dir = os.path.join(project_root, "assets")
     images_dir = os.path.join(assets_dir, "images")
     anims_dir = os.path.join(assets_dir, "animations")
@@ -2026,7 +2026,7 @@ def scan_flat_pets(project_root: str) -> list[dict]:
                 "thumb": thumb,
                 "idle_image": thumb,
                 "idle_gif": idle_gif,
-                "personality": f"平面素材角色 · {pet_id}",
+                "personality": f"骞抽潰绱犳潗瑙掕壊 路 {pet_id}",
                 "motions": motions,
                 "is_flat": True,
             }
@@ -2104,22 +2104,22 @@ def rename_pet_in_action_mapping(project_root: str, old_id: str, new_id: str) ->
 
 
 class ManageActionsDialog(QDialog):
-    """管理角色动作：查看 / 添加 / 删除 / 重新映射。"""
+    """绠＄悊瑙掕壊鍔ㄤ綔锛氭煡鐪?/ 娣诲姞 / 鍒犻櫎 / 閲嶆柊鏄犲皠銆?""
 
     def __init__(self, pet: dict, project_root: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._pet = pet
         self._root = project_root
-        self.setWindowTitle(f"管理动作 - {pet.get('name', '')}")
+        self.setWindowTitle(f"绠＄悊鍔ㄤ綔 - {pet.get('name', '')}")
         self.resize(520, 460)
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel(f"<h3>{pet.get('name', '')} 的动作列表</h3>"))
+        lay.addWidget(QLabel(f"<h3>{pet.get('name', '')} 鐨勫姩浣滃垪琛?/h3>"))
         self._list = QListWidget()
         lay.addWidget(self._list, 1)
         row = QHBoxLayout()
-        add_btn = QPushButton("添加动作")
-        del_btn = QPushButton("删除选中")
-        map_btn = QPushButton("重新映射")
+        add_btn = QPushButton("娣诲姞鍔ㄤ綔")
+        del_btn = QPushButton("鍒犻櫎閫変腑")
+        map_btn = QPushButton("閲嶆柊鏄犲皠")
         add_btn.clicked.connect(self._add_action)
         del_btn.clicked.connect(self._delete_action)
         map_btn.clicked.connect(self._remap_actions)
@@ -2127,7 +2127,7 @@ class ManageActionsDialog(QDialog):
         row.addWidget(del_btn)
         row.addWidget(map_btn)
         lay.addLayout(row)
-        close_btn = QPushButton("关闭")
+        close_btn = QPushButton("鍏抽棴")
         close_btn.clicked.connect(self.accept)
         lay.addWidget(close_btn)
         self._refresh_list()
@@ -2151,7 +2151,7 @@ class ManageActionsDialog(QDialog):
 
     def _add_action(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "添加动作", self._root, "动画 (*.gif *.png)"
+            self, "娣诲姞鍔ㄤ綔", self._root, "鍔ㄧ敾 (*.gif *.png)"
         )
         if not path:
             return
@@ -2164,7 +2164,7 @@ class ManageActionsDialog(QDialog):
         if not item:
             return
         fp = os.path.join(self._anim_dir(), item.text())
-        if os.path.isfile(fp) and QMessageBox.question(self, "确认", f"删除 {item.text()}？") == QMessageBox.StandardButton.Yes:
+        if os.path.isfile(fp) and QMessageBox.question(self, "纭", f"鍒犻櫎 {item.text()}锛?) == QMessageBox.StandardButton.Yes:
             os.remove(fp)
             self._refresh_list()
 
@@ -2181,13 +2181,13 @@ class ManageActionsDialog(QDialog):
 
 
 class PetCharacterOps:
-    """角色卡片右键：删除 / 重命名 / 改简介。"""
+    """瑙掕壊鍗＄墖鍙抽敭锛氬垹闄?/ 閲嶅懡鍚?/ 鏀圭畝浠嬨€?""
 
     @staticmethod
     def delete_pet(console: "ControlConsole", pet: dict) -> None:
         name = pet.get("name", pet.get("id", ""))
         if QMessageBox.question(
-            console, "删除角色", f"确定删除「{name}」及其所有素材与配置？"
+            console, "鍒犻櫎瑙掕壊", f"纭畾鍒犻櫎銆寋name}銆嶅強鍏舵墍鏈夌礌鏉愪笌閰嶇疆锛?
         ) != QMessageBox.StandardButton.Yes:
             return
         root = console._project_root
@@ -2216,12 +2216,12 @@ class PetCharacterOps:
         console._rescan_flat_pets()
         console._custom_ids = load_custom_pet_ids(root)
         console._reload_character_tabs()
-        console._show_toast(f"已删除角色: {name}")
+        console._show_toast(f"宸插垹闄よ鑹? {name}")
 
     @staticmethod
     def rename_pet(console: "ControlConsole", pet: dict) -> None:
         old_name = pet.get("name", pet.get("id", ""))
-        new_name, ok = QInputDialog.getText(console, "重命名角色", "新名称：", text=old_name)
+        new_name, ok = QInputDialog.getText(console, "閲嶅懡鍚嶈鑹?, "鏂板悕绉帮細", text=old_name)
         if not ok or not new_name.strip() or new_name.strip() == old_name:
             return
         new_name = new_name.strip()
@@ -2249,16 +2249,16 @@ class PetCharacterOps:
         console._rescan_flat_pets()
         console._custom_ids = load_custom_pet_ids(root)
         console._reload_character_tabs()
-        console._show_toast(f"已重命名为: {new_name}")
+        console._show_toast(f"宸查噸鍛藉悕涓? {new_name}")
 
     @staticmethod
     def edit_personality(console: "ControlConsole", pet: dict) -> None:
         text, ok = QInputDialog.getMultiLineText(
-            console, "编辑性格简介", "性格描述：", pet.get("personality", "")
+            console, "缂栬緫鎬ф牸绠€浠?, "鎬ф牸鎻忚堪锛?, pet.get("personality", "")
         )
         if ok:
             pet["personality"] = text.strip()
-            console._show_toast("性格简介已更新")
+            console._show_toast("鎬ф牸绠€浠嬪凡鏇存柊")
 
     @staticmethod
     def manage_actions(console: "ControlConsole", pet: dict) -> None:
@@ -2286,7 +2286,7 @@ class PetCharacterOps:
         if desk is not None:
             desk.reload_action_mapping()
             desk.refresh_pet_motions_after_mapping_change()
-        console._show_toast("动作映射已保存")
+        console._show_toast("鍔ㄤ綔鏄犲皠宸蹭繚瀛?)
 
     @staticmethod
     def _list_motion_files(project_root: str, pet: dict) -> list[str]:
@@ -2315,7 +2315,7 @@ class PetCharacterOps:
 
 
 def resolve_live2d_thumb(model_path: str) -> str:
-    """解析 Live2D 预览图；无 textures 时尝试 motions 目录或模型目录内 PNG。"""
+    """瑙ｆ瀽 Live2D 棰勮鍥撅紱鏃?textures 鏃跺皾璇?motions 鐩綍鎴栨ā鍨嬬洰褰曞唴 PNG銆?""
     if not model_path or not os.path.isfile(model_path):
         return ""
     runtime = os.path.dirname(os.path.abspath(model_path))
@@ -2356,29 +2356,29 @@ def list_live2d_motion_stems(model_path: str) -> list[str]:
 
 def validate_live2d_model(model_path: str) -> tuple[bool, str]:
     if not model_path or not os.path.isfile(model_path):
-        return False, "请选择有效的 .model3.json 文件"
+        return False, "璇烽€夋嫨鏈夋晥鐨?.model3.json 鏂囦欢"
     runtime = os.path.dirname(model_path)
     try:
         with open(model_path, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
-        return False, f"无法读取模型 JSON: {exc}"
+        return False, f"鏃犳硶璇诲彇妯″瀷 JSON: {exc}"
     refs = data.get("FileReferences", {})
     moc = refs.get("Moc") or ""
     moc_path = os.path.join(runtime, moc) if moc else ""
     if not moc_path or not os.path.isfile(moc_path):
-        return False, "缺少 .moc3 文件"
+        return False, "缂哄皯 .moc3 鏂囦欢"
     textures = refs.get("Textures") or []
     has_tex = any(os.path.isfile(os.path.join(runtime, t)) for t in textures)
     if not has_tex:
         preview = resolve_live2d_thumb(model_path)
         if not preview:
-            return False, "缺少贴图文件夹，且无法找到备用预览图"
-    return True, "验证通过"
+            return False, "缂哄皯璐村浘鏂囦欢澶癸紝涓旀棤娉曟壘鍒板鐢ㄩ瑙堝浘"
+    return True, "楠岃瘉閫氳繃"
 
 
 class ActionMappingDialog(QDialog):
-    """为 D 动作类型选择对应素材文件（支持多选）。"""
+    """涓?D 鍔ㄤ綔绫诲瀷閫夋嫨瀵瑰簲绱犳潗鏂囦欢锛堟敮鎸佸閫夛級銆?""
 
     def __init__(
         self,
@@ -2389,13 +2389,13 @@ class ActionMappingDialog(QDialog):
         initial: dict[str, list[str]] | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"动作映射 - {pet_name}")
+        self.setWindowTitle(f"鍔ㄤ綔鏄犲皠 - {pet_name}")
         self.resize(560, 480)
         self._mapping: dict[str, list[str]] = {}
         initial = initial or {}
         outer = QVBoxLayout(self)
-        outer.addWidget(QLabel(f"<h3>为「{pet_name}」配置动作映射</h3>"))
-        outer.addWidget(QLabel("为 happy / sad / hungry / angry / idle 选择动作文件；未映射将播放待机。"))
+        outer.addWidget(QLabel(f"<h3>涓恒€寋pet_name}銆嶉厤缃姩浣滄槧灏?/h3>"))
+        outer.addWidget(QLabel("涓?happy / sad / hungry / angry / idle 閫夋嫨鍔ㄤ綔鏂囦欢锛涙湭鏄犲皠灏嗘挱鏀惧緟鏈恒€?))
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         inner = QWidget()
@@ -2439,20 +2439,20 @@ class Live2dUploadDialog(QDialog):
         super().__init__(parent)
         self._root = project_root
         self._model_path = ""
-        self.setWindowTitle("上传 Live2D 模型")
+        self.setWindowTitle("涓婁紶 Live2D 妯″瀷")
         self.resize(480, 320)
         lay = QVBoxLayout(self)
         self._name = QLineEdit()
-        self._name.setPlaceholderText("角色姓名（必填）")
-        lay.addWidget(QLabel("角色姓名"))
+        self._name.setPlaceholderText("瑙掕壊濮撳悕锛堝繀濉級")
+        lay.addWidget(QLabel("瑙掕壊濮撳悕"))
         lay.addWidget(self._name)
         self._personality = QLineEdit()
-        self._personality.setPlaceholderText("性格描述（可选）")
-        lay.addWidget(QLabel("性格描述"))
+        self._personality.setPlaceholderText("鎬ф牸鎻忚堪锛堝彲閫夛級")
+        lay.addWidget(QLabel("鎬ф牸鎻忚堪"))
         lay.addWidget(self._personality)
         pick_row = QHBoxLayout()
-        self._path_lbl = QLabel("未选择文件")
-        pick_btn = QPushButton("选择 .model3.json")
+        self._path_lbl = QLabel("鏈€夋嫨鏂囦欢")
+        pick_btn = QPushButton("閫夋嫨 .model3.json")
         pick_btn.clicked.connect(self._pick_model)
         pick_row.addWidget(self._path_lbl, 1)
         pick_row.addWidget(pick_btn)
@@ -2464,7 +2464,7 @@ class Live2dUploadDialog(QDialog):
         self._result_pet: dict | None = None
 
     def _pick_model(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "选择模型", self._root, "Live2D Model (*.model3.json)")
+        path, _ = QFileDialog.getOpenFileName(self, "閫夋嫨妯″瀷", self._root, "Live2D Model (*.model3.json)")
         if path:
             self._model_path = path
             self._path_lbl.setText(os.path.basename(path))
@@ -2472,11 +2472,11 @@ class Live2dUploadDialog(QDialog):
     def _on_ok(self) -> None:
         name = self._name.text().strip()
         if not name:
-            QMessageBox.warning(self, "提示", "请填写角色姓名")
+            QMessageBox.warning(self, "鎻愮ず", "璇峰～鍐欒鑹插鍚?)
             return
         ok, msg = validate_live2d_model(self._model_path)
         if not ok:
-            QMessageBox.warning(self, "验证失败", msg)
+            QMessageBox.warning(self, "楠岃瘉澶辫触", msg)
             return
         pet_id = re.sub(r"\s+", "_", name)
         dest_root = os.path.join(self._root, "assets", "models", pet_id)
@@ -2521,18 +2521,18 @@ class FlatUploadDialog(QDialog):
         super().__init__(parent)
         self._root = project_root
         self._uploaded_files: list[str] = []
-        self.setWindowTitle("上传平面素材")
+        self.setWindowTitle("涓婁紶骞抽潰绱犳潗")
         self.resize(480, 280)
         lay = QVBoxLayout(self)
         self._name = QLineEdit()
-        lay.addWidget(QLabel("角色姓名（必填）"))
+        lay.addWidget(QLabel("瑙掕壊濮撳悕锛堝繀濉級"))
         lay.addWidget(self._name)
         self._personality = QLineEdit()
-        lay.addWidget(QLabel("性格描述（可选）"))
+        lay.addWidget(QLabel("鎬ф牸鎻忚堪锛堝彲閫夛級"))
         lay.addWidget(self._personality)
-        self._hint = QLabel("准备上传动作…")
+        self._hint = QLabel("鍑嗗涓婁紶鍔ㄤ綔鈥?)
         lay.addWidget(self._hint)
-        upload_btn = QPushButton("上传当前动作")
+        upload_btn = QPushButton("涓婁紶褰撳墠鍔ㄤ綔")
         upload_btn.clicked.connect(self._upload_one)
         lay.addWidget(upload_btn)
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -2545,10 +2545,10 @@ class FlatUploadDialog(QDialog):
     def _upload_one(self) -> None:
         name = self._name.text().strip()
         if not name:
-            QMessageBox.warning(self, "提示", "请先填写角色姓名")
+            QMessageBox.warning(self, "鎻愮ず", "璇峰厛濉啓瑙掕壊濮撳悕")
             return
-        self._hint.setText(f"这是动作{self._action_index}，请选择 GIF 或多张 PNG 序列帧")
-        gif_path, _ = QFileDialog.getOpenFileName(self, "选择 GIF", self._root, "GIF (*.gif)")
+        self._hint.setText(f"杩欐槸鍔ㄤ綔{self._action_index}锛岃閫夋嫨 GIF 鎴栧寮?PNG 搴忓垪甯?)
+        gif_path, _ = QFileDialog.getOpenFileName(self, "閫夋嫨 GIF", self._root, "GIF (*.gif)")
         dest_dir = os.path.join(self._root, "assets", "animations", name)
         os.makedirs(dest_dir, exist_ok=True)
         if gif_path:
@@ -2556,11 +2556,11 @@ class FlatUploadDialog(QDialog):
             shutil.copy2(gif_path, dest)
             self._uploaded_files.append(os.path.basename(dest))
             self._action_index += 1
-            cont = QMessageBox.question(self, "继续", "是否继续添加动作？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            cont = QMessageBox.question(self, "缁х画", "鏄惁缁х画娣诲姞鍔ㄤ綔锛?, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if cont == QMessageBox.StandardButton.No:
                 self._finish()
             return
-        png_paths, _ = QFileDialog.getOpenFileNames(self, "选择 PNG 序列帧", self._root, "PNG (*.png)")
+        png_paths, _ = QFileDialog.getOpenFileNames(self, "閫夋嫨 PNG 搴忓垪甯?, self._root, "PNG (*.png)")
         if not png_paths:
             return
         png_paths.sort()
@@ -2570,17 +2570,17 @@ class FlatUploadDialog(QDialog):
             shutil.copy2(src, dest)
             self._uploaded_files.append(os.path.basename(dest))
         self._action_index += 1
-        cont = QMessageBox.question(self, "继续", "是否继续添加动作？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        cont = QMessageBox.question(self, "缁х画", "鏄惁缁х画娣诲姞鍔ㄤ綔锛?, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if cont == QMessageBox.StandardButton.No:
             self._finish()
 
     def _finish(self) -> None:
         name = self._name.text().strip()
         if not name:
-            QMessageBox.warning(self, "提示", "请填写角色姓名")
+            QMessageBox.warning(self, "鎻愮ず", "璇峰～鍐欒鑹插鍚?)
             return
         if not self._uploaded_files:
-            QMessageBox.warning(self, "提示", "请至少上传一个动作")
+            QMessageBox.warning(self, "鎻愮ず", "璇疯嚦灏戜笂浼犱竴涓姩浣?)
             return
         pet_id = re.sub(r"\s+", "_", name)
         map_dlg = ActionMappingDialog(name, self._uploaded_files, self)
@@ -2669,13 +2669,13 @@ class ControlConsole(QMainWindow):
         self._toast: QLabel | None = None
         self._chat_store = ChatHistoryStore(project_root)
         self._custom_ids = load_custom_pet_ids(project_root)
-        # 自动扫描 assets/models/ 下所有 Live2D 模型
+        # 鑷姩鎵弿 assets/models/ 涓嬫墍鏈?Live2D 妯″瀷
         from app.live2d_scanner import scan_live2d_models
         models_dir = os.path.join(project_root, "assets", "models")
         scanned = scan_live2d_models(models_dir)
         if scanned:
             self._live2d = scanned
-            # 修正 mao_pro_zh 的显示名和缩略图
+            # 淇 mao_pro_zh 鐨勬樉绀哄悕鍜岀缉鐣ュ浘
             for i, pet in enumerate(self._live2d):
                 if pet["id"] == "mao_pro_zh" and is_mao_pro_zh_model(model_path):
                     self._live2d[i] = build_mao_pro_pet_record(model_path, available_motions)
@@ -2691,9 +2691,9 @@ class ControlConsole(QMainWindow):
             self._live2d = [
                 {
                     "id": "mao",
-                    "name": "小黑",
+                    "name": "灏忛粦",
                     "thumb": tex,
-                    "personality": "活泼可爱的 AI 桌宠，喜欢陪伴你学习与工作。",
+                    "personality": "娲绘臣鍙埍鐨?AI 妗屽疇锛屽枩娆㈤櫔浼翠綘瀛︿範涓庡伐浣溿€?,
                     "motions": motions,
                     "model_path": model_path,
                     "is_flat": False,
@@ -2725,7 +2725,7 @@ class ControlConsole(QMainWindow):
         return pets
 
     def _flat_library_pets(self) -> list[dict]:
-        """平面素材库：不含自定义标签页上传的角色。"""
+        """骞抽潰绱犳潗搴擄細涓嶅惈鑷畾涔夋爣绛鹃〉涓婁紶鐨勮鑹层€?""
         return [p for p in self._flat if p.get("id") not in self._custom_ids]
 
     def _enrich_pet_motions(self, pet: dict) -> dict:
@@ -2772,7 +2772,7 @@ class ControlConsole(QMainWindow):
             if msgs:
                 self._chats.append({"name": name, "color": "#ec4899", "msgs": msgs})
         if not self._chats:
-            self._chats.append({"name": "默认", "color": "#3b82f6", "msgs": []})
+            self._chats.append({"name": "榛樿", "color": "#3b82f6", "msgs": []})
 
     def _save_current_chat(self) -> None:
         if self._ai_i < 0 or self._ai_i >= len(self._chats):
@@ -2781,7 +2781,7 @@ class ControlConsole(QMainWindow):
         self._chat_store.save(chat["name"], chat["msgs"])
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("桌面宠物控制台")
+        self.setWindowTitle("妗岄潰瀹犵墿鎺у埗鍙?)
         self.resize(800, 600)
         self.setMinimumSize(720, 540)
         central = QWidget()
@@ -2798,16 +2798,16 @@ class ControlConsole(QMainWindow):
         title = QLabel("Pet Console")
         title.setFont(_app_font(20, True))
         sb_lay.addWidget(title)
-        sb_lay.addWidget(QLabel("桌面宠物"))
+        sb_lay.addWidget(QLabel("妗岄潰瀹犵墿"))
         self._menu_btns: dict[str, QPushButton] = {}
         for pid, icon, label in (
-            ("pet_settings", "⚙️", "桌宠设置"),
-            ("dashboard", "📊", "仪表盘"),
-            ("characters", "👤", "角色选择"),
-            ("ai_settings", "💬", "AI对话"),
-            ("permissions", "🔒", "权限设置"),
-            ("theme", "🎨", "主题"),
-            ("exit", "🚪", "退出"),
+            ("pet_settings", "鈿欙笍", "妗屽疇璁剧疆"),
+            ("dashboard", "馃搳", "浠〃鐩?),
+            ("characters", "馃懁", "瑙掕壊閫夋嫨"),
+            ("ai_settings", "馃挰", "AI瀵硅瘽"),
+            ("permissions", "馃敀", "鏉冮檺璁剧疆"),
+            ("theme", "馃帹", "涓婚"),
+            ("exit", "馃毆", "閫€鍑?),
         ):
             btn = QPushButton(f"{icon}  {label}")
             btn.setStyleSheet(BTN_GLASS)
@@ -2821,7 +2821,7 @@ class ControlConsole(QMainWindow):
         right = QVBoxLayout()
         chrome = QHBoxLayout()
         chrome.addStretch()
-        for label, slot in (("—", self.showMinimized), ("□", self._toggle_max), ("×", self.close)):
+        for label, slot in (("鈥?, self.showMinimized), ("鈻?, self._toggle_max), ("脳", self.close)):
             b = QPushButton(label)
             b.setFixedSize(28, 28)
             b.clicked.connect(slot)
@@ -2832,8 +2832,8 @@ class ControlConsole(QMainWindow):
         self._stack.addWidget(self._page_dashboard())
         self._stack.addWidget(self._page_characters())
         self._stack.addWidget(self._page_ai())
-        self._stack.addWidget(self._page_placeholder("权限设置"))
-        self._stack.addWidget(self._page_placeholder("主题"))
+        self._stack.addWidget(self._page_placeholder("鏉冮檺璁剧疆"))
+        self._stack.addWidget(self._page_placeholder("涓婚"))
         self._stack.addWidget(self._page_pet_main())
         right.addWidget(self._stack, 1)
         root.addLayout(right, 1)
@@ -2863,7 +2863,7 @@ class ControlConsole(QMainWindow):
             self._refresh_pet_main()
         if page == "dashboard":
             self._refresh_dashboard()
-        self._log(f"切换: {page}")
+        self._log(f"鍒囨崲: {page}")
 
     def _get_pet(self, pet_id: str | None) -> dict | None:
         if not pet_id:
@@ -2966,7 +2966,7 @@ class ControlConsole(QMainWindow):
     def _open_pet_main(self, pet: dict) -> None:
         self._pet_main_id = pet["id"]
         self._nav("pet_main")
-        self._log(f"查看角色: {pet['name']}")
+        self._log(f"鏌ョ湅瑙掕壊: {pet['name']}")
 
     def _apply_pet_switch(self, pet: dict) -> None:
         self._rescan_flat_pets()
@@ -2975,9 +2975,9 @@ class ControlConsole(QMainWindow):
         self._sel_pet = pet["id"]
         self._pet_main_id = pet["id"]
         self._stop_animation()
-        self._show_toast(f"已切换到 {pet['name']}")
+        self._show_toast(f"宸插垏鎹㈠埌 {pet['name']}")
         self._nav("dashboard")
-        self._log(f"切换角色: {pet['name']} ({pet['id']})")
+        self._log(f"鍒囨崲瑙掕壊: {pet['name']} ({pet['id']})")
         if self.on_pet_changed:
             self.on_pet_changed(pet)
 
@@ -3005,7 +3005,7 @@ class ControlConsole(QMainWindow):
     @staticmethod
     def _setting_bool(value: Any) -> bool:
         if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "y", "on", "开启", "允许", "记住"}
+            return value.strip().lower() in {"1", "true", "yes", "y", "on", "寮€鍚?, "鍏佽", "璁颁綇"}
         return bool(value)
 
     def _load_pet_personalization_settings(self) -> dict[str, dict[str, Any]]:
@@ -3016,7 +3016,7 @@ class ControlConsole(QMainWindow):
             with open(self._pet_settings_path, encoding="utf-8") as f:
                 loaded = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
-            self._log(f"读取桌宠设置失败，使用默认值: {exc}")
+            self._log(f"璇诲彇妗屽疇璁剧疆澶辫触锛屼娇鐢ㄩ粯璁ゅ€? {exc}")
             return data
         if not isinstance(loaded, dict):
             return data
@@ -3038,7 +3038,7 @@ class ControlConsole(QMainWindow):
                 json.dump(self._pet_settings, f, ensure_ascii=False, indent=2)
             return True
         except OSError as exc:
-            QMessageBox.warning(self, "保存失败", f"无法保存桌宠设置：{exc}")
+            QMessageBox.warning(self, "淇濆瓨澶辫触", f"鏃犳硶淇濆瓨妗屽疇璁剧疆锛歿exc}")
             return False
 
     def _pet_setting_value(self, section_key: str, field_key: str) -> Any:
@@ -3065,7 +3065,7 @@ class ControlConsole(QMainWindow):
             self._set_combo_text(combo, value)
             return combo, combo
         if control_type == "check":
-            check = QCheckBox(str(field.get("text") or "开启"))
+            check = QCheckBox(str(field.get("text") or "寮€鍚?))
             check.setChecked(self._setting_bool(value))
             return check, check
         if control_type == "slider":
@@ -3151,18 +3151,18 @@ class ControlConsole(QMainWindow):
         self._pet_settings = self._collect_pet_personalization_controls()
         if self._save_pet_personalization_settings():
             if hasattr(self, "_pet_settings_status"):
-                self._pet_settings_status.setText("已保存")
-            self._show_toast("桌宠设置已保存")
-            self._log("桌宠设置已保存")
+                self._pet_settings_status.setText("宸蹭繚瀛?)
+            self._show_toast("妗屽疇璁剧疆宸蹭繚瀛?)
+            self._log("妗屽疇璁剧疆宸蹭繚瀛?)
 
     def _reset_pet_personalization_settings(self) -> None:
         self._pet_settings = self._default_pet_personalization_settings()
         self._apply_pet_personalization_controls()
         if self._save_pet_personalization_settings():
             if hasattr(self, "_pet_settings_status"):
-                self._pet_settings_status.setText("已恢复默认")
-            self._show_toast("桌宠设置已恢复默认")
-            self._log("桌宠设置已恢复默认")
+                self._pet_settings_status.setText("宸叉仮澶嶉粯璁?)
+            self._show_toast("妗屽疇璁剧疆宸叉仮澶嶉粯璁?)
+            self._log("妗屽疇璁剧疆宸叉仮澶嶉粯璁?)
 
     def _build_pet_setting_section(self, index: int, section: dict[str, Any]) -> QFrame:
         section_key = str(section["key"])
@@ -3208,15 +3208,15 @@ class ControlConsole(QMainWindow):
         lay.setSpacing(12)
 
         header = QHBoxLayout()
-        header.addWidget(QLabel("<h2>桌宠设置</h2>"))
+        header.addWidget(QLabel("<h2>妗屽疇璁剧疆</h2>"))
         header.addStretch()
         self._pet_settings_status = QLabel("")
         self._pet_settings_status.setStyleSheet("color:#64748b;")
         header.addWidget(self._pet_settings_status)
-        reset_btn = QPushButton("恢复默认")
+        reset_btn = QPushButton("鎭㈠榛樿")
         reset_btn.setStyleSheet(BTN_GLASS)
         reset_btn.clicked.connect(self._reset_pet_personalization_settings)
-        save_btn = QPushButton("保存设置")
+        save_btn = QPushButton("淇濆瓨璁剧疆")
         save_btn.setStyleSheet(BTN_PRIMARY)
         save_btn.clicked.connect(self._save_pet_personalization_from_controls)
         header.addWidget(reset_btn)
@@ -3266,13 +3266,13 @@ class ControlConsole(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(24, 16, 24, 24)
         now = datetime.datetime.now()
-        wd = "一二三四五六日"[now.weekday()]
-        lay.addWidget(QLabel(f"<h2>欢迎回来，用户</h2><p>{now.year}年{now.month}月{now.day}日 星期{wd}</p>"))
+        wd = "涓€浜屼笁鍥涗簲鍏棩"[now.weekday()]
+        lay.addWidget(QLabel(f"<h2>娆㈣繋鍥炴潵锛岀敤鎴?/h2><p>{now.year}骞磠now.month}鏈坽now.day}鏃?鏄熸湡{wd}</p>"))
         cards = QHBoxLayout()
-        for icon, title, key, col in (("🐾", "宠物心情", "mood", "#3b82f6"), ("🔥", "能量值", "energy", "#fb923c"), ("❤️", "好感度", "affection", "#ec4899")):
+        for icon, title, key, col in (("馃惥", "瀹犵墿蹇冩儏", "mood", "#3b82f6"), ("馃敟", "鑳介噺鍊?, "energy", "#fb923c"), ("鉂わ笍", "濂芥劅搴?, "affection", "#ec4899")):
             cards.addWidget(self._stat_card(icon, title, self.stats[key], col))
         lay.addLayout(cards)
-        lay.addWidget(QLabel("<h3>当前宠物简介</h3>"))
+        lay.addWidget(QLabel("<h3>褰撳墠瀹犵墿绠€浠?/h3>"))
         intro = QFrame()
         intro.setStyleSheet(_glass_style(14))
         il = QHBoxLayout(intro)
@@ -3293,8 +3293,8 @@ class ControlConsole(QMainWindow):
     def _page_synonyms_placeholder(self) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
-        lay.addWidget(QLabel("<h2>同义词管理</h2>"))
-        ph = QLabel("请从桌宠设置面板打开以管理同义词。")
+        lay.addWidget(QLabel("<h2>鍚屼箟璇嶇鐞?/h2>"))
+        ph = QLabel("璇蜂粠妗屽疇璁剧疆闈㈡澘鎵撳紑浠ョ鐞嗗悓涔夎瘝銆?)
         ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ph.setStyleSheet("color:#94a3b8;font-size:16px;")
         lay.addWidget(ph, 1)
@@ -3304,23 +3304,23 @@ class ControlConsole(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.setContentsMargins(24, 16, 24, 24)
-        lay.addWidget(QLabel("<h2>角色选择</h2>"))
+        lay.addWidget(QLabel("<h2>瑙掕壊閫夋嫨</h2>"))
         outer = QHBoxLayout()
         self._tabs = QTabWidget()
-        self._tabs.addTab(self._char_grid(self._live2d, add_plus=True, on_plus=self._upload_live2d), "Live2D库")
-        self._tabs.addTab(self._char_grid(self._flat_library_pets(), add_plus=False), "平面素材库")
+        self._tabs.addTab(self._char_grid(self._live2d, add_plus=True, on_plus=self._upload_live2d), "Live2D搴?)
+        self._tabs.addTab(self._char_grid(self._flat_library_pets(), add_plus=False), "骞抽潰绱犳潗搴?)
         custom_wrap = QWidget()
         custom_lay = QVBoxLayout(custom_wrap)
         custom_lay.addWidget(self._char_grid(self._custom_pets, add_plus=False), 1)
         up_row = QHBoxLayout()
         up_row.addStretch()
-        up = QPushButton("上传平面素材")
+        up = QPushButton("涓婁紶骞抽潰绱犳潗")
         up.setStyleSheet(BTN_PRIMARY)
         up.clicked.connect(self._upload_flat)
         up_row.addWidget(up)
         up_row.addStretch()
         custom_lay.addLayout(up_row)
-        self._tabs.addTab(custom_wrap, "自定义")
+        self._tabs.addTab(custom_wrap, "鑷畾涔?)
         outer.addWidget(self._tabs, 1)
         self._detail = QFrame()
         self._detail.setFixedWidth(300)
@@ -3342,7 +3342,7 @@ class ControlConsole(QMainWindow):
         inner = QWidget()
         grid = QGridLayout(inner)
         if not pets and not add_plus:
-            hint = QLabel("暂无平面素材\n请将 {pet_id}_image.png 放入 assets/images/\n动图放入 assets/animations/")
+            hint = QLabel("鏆傛棤骞抽潰绱犳潗\n璇峰皢 {pet_id}_image.png 鏀惧叆 assets/images/\n鍔ㄥ浘鏀惧叆 assets/animations/")
             hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
             hint.setStyleSheet("color:#94a3b8;padding:32px;")
             grid.addWidget(hint, 0, 0, 1, 4)
@@ -3352,7 +3352,7 @@ class ControlConsole(QMainWindow):
         if add_plus:
             plus = QPushButton("+")
             plus.setFixedSize(128, 128)
-            plus.clicked.connect(on_plus or (lambda: self._log("上传")))
+            plus.clicked.connect(on_plus or (lambda: self._log("涓婁紶")))
             grid.addWidget(plus, len(pets) // 4, len(pets) % 4)
         scroll.setWidget(inner)
         return scroll
@@ -3364,7 +3364,7 @@ class ControlConsole(QMainWindow):
             if pet:
                 self._live2d.append(pet)
                 self._reload_character_tabs()
-                self._show_toast(f"已添加 Live2D 角色: {pet['name']}")
+                self._show_toast(f"宸叉坊鍔?Live2D 瑙掕壊: {pet['name']}")
 
     def _upload_flat(self) -> None:
         dlg = FlatUploadDialog(self._project_root, self)
@@ -3381,7 +3381,7 @@ class ControlConsole(QMainWindow):
                 self._custom_pets = self._build_custom_pet_list()
                 self._reload_character_tabs()
                 self._tabs.setCurrentIndex(2)
-                self._show_toast(f"已添加自定义角色: {pet['name']}")
+                self._show_toast(f"宸叉坊鍔犺嚜瀹氫箟瑙掕壊: {pet['name']}")
 
     def _on_pet_context_action(self, action: str, pet: dict) -> None:
         if action == "delete":
@@ -3404,21 +3404,21 @@ class ControlConsole(QMainWindow):
             self._tabs.removeTab(0)
         self._tabs.addTab(
             self._char_grid(self._live2d, add_plus=True, on_plus=self._upload_live2d),
-            "Live2D库",
+            "Live2D搴?,
         )
-        self._tabs.addTab(self._char_grid(self._flat_library_pets(), add_plus=False), "平面素材库")
+        self._tabs.addTab(self._char_grid(self._flat_library_pets(), add_plus=False), "骞抽潰绱犳潗搴?)
         custom_wrap = QWidget()
         custom_lay = QVBoxLayout(custom_wrap)
         custom_lay.addWidget(self._char_grid(self._custom_pets, add_plus=False), 1)
         up_row = QHBoxLayout()
         up_row.addStretch()
-        up = QPushButton("上传平面素材")
+        up = QPushButton("涓婁紶骞抽潰绱犳潗")
         up.setStyleSheet(BTN_PRIMARY)
         up.clicked.connect(self._upload_flat)
         up_row.addWidget(up)
         up_row.addStretch()
         custom_lay.addLayout(up_row)
-        self._tabs.addTab(custom_wrap, "自定义")
+        self._tabs.addTab(custom_wrap, "鑷畾涔?)
         self._tabs.setCurrentIndex(min(idx, self._tabs.count() - 1))
 
     def _pet_cell(self, pet: dict) -> _PetCellButton:
@@ -3433,7 +3433,7 @@ class ControlConsole(QMainWindow):
             pet = self._enrich_pet_motions(pet)
         self._sel_pet = pet["id"]
         self._show_detail(pet)
-        self._log(f"选中: {pet['name']}")
+        self._log(f"閫変腑: {pet['name']}")
 
     def _open_pet_main(self, pet: dict) -> None:
         if pet.get("is_flat") or pet.get("is_custom"):
@@ -3442,7 +3442,7 @@ class ControlConsole(QMainWindow):
             return
         self._pet_main_id = pet["id"]
         self._nav("pet_main")
-        self._log(f"查看角色: {pet['name']}")
+        self._log(f"鏌ョ湅瑙掕壊: {pet['name']}")
 
     def _show_detail(self, pet: dict) -> None:
         self._stop_animation()
@@ -3458,11 +3458,11 @@ class ControlConsole(QMainWindow):
         self._detail_lay.addWidget(pic)
         self._detail_lay.addWidget(QLabel(f"<b>{pet['name']}</b>"))
         self._detail_lay.addWidget(QLabel(pet["personality"]))
-        self._detail_lay.addWidget(QLabel("动作展示"))
+        self._detail_lay.addWidget(QLabel("鍔ㄤ綔灞曠ず"))
         row = QHBoxLayout()
         motions = [m for m in pet.get("motions", []) if self._motion_playable(m) or not pet.get("is_flat")]
         if not motions:
-            b = QPushButton("暂无动作")
+            b = QPushButton("鏆傛棤鍔ㄤ綔")
             b.setEnabled(False)
             b.setStyleSheet(BTN_GLASS)
             row.addWidget(b)
@@ -3488,7 +3488,7 @@ class ControlConsole(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(24, 16, 24, 24)
         top = QHBoxLayout()
-        back = QPushButton("← 返回")
+        back = QPushButton("鈫?杩斿洖")
         back.clicked.connect(lambda: self._nav("dashboard"))
         top.addStretch()
         top.addWidget(back)
@@ -3499,7 +3499,7 @@ class ControlConsole(QMainWindow):
         ll = QVBoxLayout(left)
         self._pet_main_name = QLabel()
         ll.addWidget(self._pet_main_name)
-        self._pet_main_switch_btn = QPushButton("切换该角色")
+        self._pet_main_switch_btn = QPushButton("鍒囨崲璇ヨ鑹?)
         self._pet_main_switch_btn.setObjectName("switchPetBtn")
         self._pet_main_switch_btn.setStyleSheet(BTN_SWITCH)
         self._pet_main_switch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -3510,15 +3510,15 @@ class ControlConsole(QMainWindow):
         self._pet_main_pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
         row.addWidget(self._pet_main_pic)
         tx = QVBoxLayout()
-        self._pet_main_desc = QLabel("AI小助手·你的桌面陪伴")
+        self._pet_main_desc = QLabel("AI灏忓姪鎵嬄蜂綘鐨勬闈㈤櫔浼?)
         tx.addWidget(self._pet_main_desc)
-        for ln in ("轻量陪伴", "贴心助手", "治愈每一天"):
+        for ln in ("杞婚噺闄即", "璐村績鍔╂墜", "娌绘剤姣忎竴澶?):
             tx.addWidget(QLabel(ln))
         row.addLayout(tx)
         ll.addLayout(row)
         body.addWidget(left, 1)
         right = QVBoxLayout()
-        right.addWidget(QLabel("<h3>动作展示</h3>"))
+        right.addWidget(QLabel("<h3>鍔ㄤ綔灞曠ず</h3>"))
         self._pet_main_motions_widget = QWidget()
         self._pet_main_motions_lay = QVBoxLayout(self._pet_main_motions_widget)
         self._pet_main_motions_lay.setContentsMargins(0, 0, 0, 0)
@@ -3526,9 +3526,9 @@ class ControlConsole(QMainWindow):
         right.addStretch()
         body.addLayout(right, 1)
         lay.addLayout(body)
-        lay.addWidget(QLabel("<h3>宠物状态</h3>"))
+        lay.addWidget(QLabel("<h3>瀹犵墿鐘舵€?/h3>"))
         stats = QHBoxLayout()
-        for icon, title, key, col in (("😊", "心情", "mood", "#3b82f6"), ("⚡", "能量", "energy", "#fb923c"), ("❤️", "好感度", "affection", "#ec4899")):
+        for icon, title, key, col in (("馃槉", "蹇冩儏", "mood", "#3b82f6"), ("鈿?, "鑳介噺", "energy", "#fb923c"), ("鉂わ笍", "濂芥劅搴?, "affection", "#ec4899")):
             stats.addWidget(self._stat_card(icon, title, self.stats[key], col))
         lay.addLayout(stats)
         lay.addStretch()
@@ -3548,7 +3548,7 @@ class ControlConsole(QMainWindow):
                 item.widget().deleteLater()
         motions = [m for m in pet.get("motions", []) if self._motion_playable(m) or not pet.get("is_flat")]
         if not motions:
-            b = QPushButton("暂无动作")
+            b = QPushButton("鏆傛棤鍔ㄤ綔")
             b.setEnabled(False)
             b.setStyleSheet(BTN_GLASS)
             self._pet_main_motions_lay.addWidget(b)
@@ -3576,13 +3576,13 @@ class ControlConsole(QMainWindow):
         menu_panel.setFixedWidth(190)
         menu_panel.setStyleSheet(_glass_style(14))
         menu_lay = QVBoxLayout(menu_panel)
-        menu_lay.addWidget(QLabel("<b>AI 对话</b>"))
+        menu_lay.addWidget(QLabel("<b>AI 瀵硅瘽</b>"))
         self._ai_tool_btns: dict[str, QPushButton] = {}
         for key, icon, label in (
-            ("voice_pack", "🎙️", "语音包选择"),
-            ("text_reader", "📖", "文本朗读"),
-            ("history", "💬", "聊天记录"),
-            ("voice_settings", "🔊", "语音设置"),
+            ("voice_pack", "馃帣锔?, "璇煶鍖呴€夋嫨"),
+            ("text_reader", "馃摉", "鏂囨湰鏈楄"),
+            ("history", "馃挰", "鑱婂ぉ璁板綍"),
+            ("voice_settings", "馃攰", "璇煶璁剧疆"),
         ):
             btn = QPushButton(f"{icon}  {label}")
             btn.setCheckable(True)
@@ -3612,9 +3612,9 @@ class ControlConsole(QMainWindow):
         page.setStyleSheet(_glass_style(14))
         lay = QVBoxLayout(page)
         header = QHBoxLayout()
-        header.addWidget(QLabel("<b>语音包选择</b>"))
+        header.addWidget(QLabel("<b>璇煶鍖呴€夋嫨</b>"))
         header.addStretch()
-        import_btn = QPushButton("导入语音包")
+        import_btn = QPushButton("瀵煎叆璇煶鍖?)
         import_btn.setStyleSheet(BTN_PRIMARY)
         import_btn.clicked.connect(self._import_voice_pack)
         header.addWidget(import_btn)
@@ -3641,7 +3641,7 @@ class ControlConsole(QMainWindow):
             (p for p in self._voice_packs if str(p.get("id", "")).strip() == self._voice_pack_id),
             pack,
         )
-        self._select_voice_pack(selected, toast_prefix="已导入并切换语音包")
+        self._select_voice_pack(selected, toast_prefix="宸插鍏ュ苟鍒囨崲璇煶鍖?)
 
     def _ai_text_reader_page(self) -> QWidget:
         page = QFrame()
@@ -3649,9 +3649,9 @@ class ControlConsole(QMainWindow):
         lay = QVBoxLayout(page)
 
         header = QHBoxLayout()
-        header.addWidget(QLabel("<b>文本朗读</b>"))
+        header.addWidget(QLabel("<b>鏂囨湰鏈楄</b>"))
         header.addStretch()
-        import_btn = QPushButton("导入文本")
+        import_btn = QPushButton("瀵煎叆鏂囨湰")
         import_btn.setStyleSheet(BTN_GLASS)
         import_btn.clicked.connect(self._import_text_for_reading)
         header.addWidget(import_btn)
@@ -3659,22 +3659,22 @@ class ControlConsole(QMainWindow):
 
         self._read_text_edit = QTextEdit()
         self._read_text_edit.setAcceptRichText(False)
-        self._read_text_edit.setPlaceholderText("在这里粘贴或导入要朗读的文本…")
+        self._read_text_edit.setPlaceholderText("鍦ㄨ繖閲岀矘璐存垨瀵煎叆瑕佹湕璇荤殑鏂囨湰鈥?)
         self._read_text_edit.textChanged.connect(self._update_text_reader_state)
         lay.addWidget(self._read_text_edit, 1)
 
-        self._read_text_hint = QLabel("导入或输入文本后会按当前语音音色朗读。")
+        self._read_text_hint = QLabel("瀵煎叆鎴栬緭鍏ユ枃鏈悗浼氭寜褰撳墠璇煶闊宠壊鏈楄銆?)
         self._read_text_hint.setWordWrap(True)
         self._read_text_hint.setStyleSheet("color:#64748b;font-size:12px;")
         lay.addWidget(self._read_text_hint)
 
         bottom = QHBoxLayout()
         bottom.addStretch()
-        self._stop_read_text_btn = QPushButton("停止")
+        self._stop_read_text_btn = QPushButton("鍋滄")
         self._stop_read_text_btn.setStyleSheet(BTN_GLASS)
         self._stop_read_text_btn.clicked.connect(self._stop_text_reading)
         bottom.addWidget(self._stop_read_text_btn)
-        self._read_text_btn = QPushButton("朗读")
+        self._read_text_btn = QPushButton("鏈楄")
         self._read_text_btn.setStyleSheet(BTN_PRIMARY)
         self._read_text_btn.clicked.connect(self._read_text_aloud)
         bottom.addWidget(self._read_text_btn)
@@ -3686,7 +3686,7 @@ class ControlConsole(QMainWindow):
     def _import_text_for_reading(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "导入文本",
+            "瀵煎叆鏂囨湰",
             self._project_root,
             BOOK_FILE_DIALOG_FILTER,
         )
@@ -3696,15 +3696,15 @@ class ControlConsole(QMainWindow):
             documents = read_book_files(paths)
             text = combine_documents(documents)
         except Exception as exc:
-            QMessageBox.warning(self, "导入失败", f"文本导入失败：{exc}")
+            QMessageBox.warning(self, "瀵煎叆澶辫触", f"鏂囨湰瀵煎叆澶辫触锛歿exc}")
             return
         self._read_documents = documents
         self._read_text_edit.setPlainText(text)
-        names = "、".join(doc.title for doc in documents[:3])
+        names = "銆?.join(doc.title for doc in documents[:3])
         more = len(documents) - min(3, len(documents))
         if more > 0:
-            names += f" 等 {len(documents)} 本"
-        self._show_toast(f"已导入：{names}")
+            names += f" 绛?{len(documents)} 鏈?
+        self._show_toast(f"宸插鍏ワ細{names}")
 
     def _read_text_aloud(self) -> None:
         if not hasattr(self, "_read_text_edit"):
@@ -3716,15 +3716,15 @@ class ControlConsole(QMainWindow):
             self._update_text_reader_state()
             return
         if not self.on_read_text:
-            self._show_toast("朗读功能未连接桌宠")
+            self._show_toast("鏈楄鍔熻兘鏈繛鎺ユ瀹?)
             return
         title = self._current_read_text_title()
         try:
             self.on_read_text(text, title=title)
         except Exception as exc:
-            self._show_toast(f"朗读失败：{exc}")
+            self._show_toast(f"鏈楄澶辫触锛歿exc}")
             return
-        self._show_toast("已开始朗读文本")
+        self._show_toast("宸插紑濮嬫湕璇绘枃鏈?)
 
     def _stop_text_reading(self) -> None:
         if not self.on_stop_read_text:
@@ -3732,17 +3732,17 @@ class ControlConsole(QMainWindow):
         try:
             self.on_stop_read_text()
         except Exception as exc:
-            self._show_toast(f"停止失败：{exc}")
+            self._show_toast(f"鍋滄澶辫触锛歿exc}")
             return
-        self._show_toast("已请求停止朗读")
+        self._show_toast("宸茶姹傚仠姝㈡湕璇?)
 
     def _current_read_text_title(self) -> str:
         docs = list(getattr(self, "_read_documents", []) or [])
         if not docs:
-            return "文本"
+            return "鏂囨湰"
         if len(docs) == 1:
             return docs[0].title
-        return f"{docs[0].title} 等 {len(docs)} 本"
+        return f"{docs[0].title} 绛?{len(docs)} 鏈?
 
     def _update_text_reader_state(self) -> None:
         if not hasattr(self, "_read_text_hint") or not hasattr(self, "_read_text_btn"):
@@ -3750,28 +3750,28 @@ class ControlConsole(QMainWindow):
         text = self._read_text_edit.toPlainText().strip() if hasattr(self, "_read_text_edit") else ""
         settings = normalize_tts_settings(self._tts_settings)
         if not text:
-            self._set_text_reader_hint("导入或输入文本后会按当前语音音色朗读。", enabled=False)
+            self._set_text_reader_hint("瀵煎叆鎴栬緭鍏ユ枃鏈悗浼氭寜褰撳墠璇煶闊宠壊鏈楄銆?, enabled=False)
             return
         if not settings.get("enabled"):
-            self._set_text_reader_hint("语音已关闭，启用语音后才能朗读。", enabled=False)
+            self._set_text_reader_hint("璇煶宸插叧闂紝鍚敤璇煶鍚庢墠鑳芥湕璇汇€?, enabled=False)
             return
         expected = self._current_voice_language()
         detected = detect_text_language(text)
         if not expected:
-            self._set_text_reader_hint("当前音色语言未知，无法校验朗读语言。", enabled=False)
+            self._set_text_reader_hint("褰撳墠闊宠壊璇█鏈煡锛屾棤娉曟牎楠屾湕璇昏瑷€銆?, enabled=False)
             return
         if not detected:
-            self._set_text_reader_hint("无法识别输入语言，无法朗读。", enabled=False)
+            self._set_text_reader_hint("鏃犳硶璇嗗埆杈撳叆璇█锛屾棤娉曟湕璇汇€?, enabled=False)
             return
         if languages_match(expected, detected):
             self._set_text_reader_hint(
-                f"语言匹配：当前音色 {language_label(expected)}，输入 {language_label(detected)}。",
+                f"璇█鍖归厤锛氬綋鍓嶉煶鑹?{language_label(expected)}锛岃緭鍏?{language_label(detected)}銆?,
                 enabled=True,
                 ok=True,
             )
             return
         self._set_text_reader_hint(
-            f"语言不匹配无法朗读（当前音色：{language_label(expected)}，输入：{language_label(detected)}）。",
+            f"璇█涓嶅尮閰嶆棤娉曟湕璇伙紙褰撳墠闊宠壊锛歿language_label(expected)}锛岃緭鍏ワ細{language_label(detected)}锛夈€?,
             enabled=False,
             ok=False,
         )
@@ -3823,15 +3823,15 @@ class ControlConsole(QMainWindow):
         page.setStyleSheet(_glass_style(14))
         lay = QVBoxLayout(page)
         top = QHBoxLayout()
-        top.addWidget(QLabel("<b>聊天记录</b>"))
+        top.addWidget(QLabel("<b>鑱婂ぉ璁板綍</b>"))
         self._chat_search = QLineEdit()
-        self._chat_search.setPlaceholderText("搜索聊天内容…")
+        self._chat_search.setPlaceholderText("鎼滅储鑱婂ぉ鍐呭鈥?)
         self._chat_search.textChanged.connect(self._filter_chat_view)
         top.addWidget(self._chat_search, 1)
         lay.addLayout(top)
         self._chat_view = QTextEdit()
         self._chat_view.setReadOnly(True)
-        self._chat_empty = QLabel("暂无聊天记录")
+        self._chat_empty = QLabel("鏆傛棤鑱婂ぉ璁板綍")
         self._chat_empty.setStyleSheet("color:#94a3b8;")
         self._chat_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._chat_empty, 1)
@@ -3839,8 +3839,8 @@ class ControlConsole(QMainWindow):
         self._chat_view.hide()
         bottom = QHBoxLayout()
         self._ai_in = QLineEdit()
-        self._ai_in.setPlaceholderText("输入消息…")
-        send = QPushButton("发送")
+        self._ai_in.setPlaceholderText("杈撳叆娑堟伅鈥?)
+        send = QPushButton("鍙戦€?)
         send.setStyleSheet(BTN_PRIMARY)
         send.clicked.connect(self._send_chat)
         bottom.addWidget(self._ai_in, 1)
@@ -3852,38 +3852,38 @@ class ControlConsole(QMainWindow):
         page = QFrame()
         page.setStyleSheet(_glass_style(14))
         lay = QVBoxLayout(page)
-        lay.addWidget(QLabel("<b>语音设置</b>"))
-        self._tts_enabled_check = QCheckBox("启用语音")
+        lay.addWidget(QLabel("<b>璇煶璁剧疆</b>"))
+        self._tts_enabled_check = QCheckBox("鍚敤璇煶")
         self._tts_enabled_check.stateChanged.connect(self._on_tts_controls_changed)
         lay.addWidget(self._tts_enabled_check)
-        lay.addWidget(QLabel("合成模式"))
+        lay.addWidget(QLabel("鍚堟垚妯″紡"))
         self._tts_quality_combo = QComboBox()
         for preset in TTS_QUALITY_PRESETS:
             self._tts_quality_combo.addItem(str(preset["label"]), str(preset["id"]))
         self._tts_quality_combo.currentIndexChanged.connect(self._on_tts_controls_changed)
         lay.addWidget(self._tts_quality_combo)
-        lay.addWidget(QLabel("情感 / 风格"))
+        lay.addWidget(QLabel("鎯呮劅 / 椋庢牸"))
         self._tts_style_combo = QComboBox()
         for preset in TTS_STYLE_PRESETS:
             self._tts_style_combo.addItem(str(preset["label"]), str(preset["id"]))
         self._tts_style_combo.currentIndexChanged.connect(self._on_tts_controls_changed)
         lay.addWidget(self._tts_style_combo)
-        lay.addWidget(QLabel("精细参数"))
+        lay.addWidget(QLabel("绮剧粏鍙傛暟"))
         controls = QGridLayout()
         self._tts_edge_rate_slider, self._tts_edge_rate_value = self._add_tts_slider(
-            controls, 0, "神经语速", -50, 50
+            controls, 0, "绁炵粡璇€?, -50, 50
         )
         self._tts_edge_pitch_slider, self._tts_edge_pitch_value = self._add_tts_slider(
-            controls, 1, "神经音调", -50, 50
+            controls, 1, "绁炵粡闊宠皟", -50, 50
         )
         self._tts_edge_volume_slider, self._tts_edge_volume_value = self._add_tts_slider(
-            controls, 2, "神经音量", -50, 50
+            controls, 2, "绁炵粡闊抽噺", -50, 50
         )
         self._tts_rate_slider, self._tts_rate_value = self._add_tts_slider(
-            controls, 3, "离线语速", 80, 260
+            controls, 3, "绂荤嚎璇€?, 80, 260
         )
         self._tts_volume_slider, self._tts_volume_value = self._add_tts_slider(
-            controls, 4, "离线音量", 0, 100
+            controls, 4, "绂荤嚎闊抽噺", 0, 100
         )
         lay.addLayout(controls)
         self._tts_detail = QLabel()
@@ -4020,30 +4020,30 @@ class ControlConsole(QMainWindow):
         settings = normalize_tts_settings(self._tts_settings)
         mode = next(
             (str(p["label"]) for p in TTS_QUALITY_PRESETS if str(p["id"]) == settings.get("quality")),
-            "基础语音合成",
+            "鍩虹璇煶鍚堟垚",
         )
         style = next(
             (str(p["label"]) for p in TTS_STYLE_PRESETS if str(p["id"]) == settings.get("emotion_style")),
-            "自动跟随情绪",
+            "鑷姩璺熼殢鎯呯华",
         )
-        enabled = "已启用" if settings.get("enabled") else "已关闭"
+        enabled = "宸插惎鐢? if settings.get("enabled") else "宸插叧闂?
         edge_rate = settings.get("edge_rate") or os.getenv("EDGE_TTS_RATE", "+8%")
         edge_pitch = settings.get("edge_pitch") or os.getenv("EDGE_TTS_PITCH", "+12Hz")
         edge_volume = settings.get("edge_volume") or os.getenv("EDGE_TTS_VOLUME", "+8%")
         tts_rate = settings.get("tts_rate") or os.getenv("TTS_RATE", "168")
         tts_volume = settings.get("tts_volume") or os.getenv("TTS_VOLUME", "0.95")
         self._tts_detail.setText(
-            f"{enabled} · {mode}\n"
-            f"情感 / 风格: {style}\n"
-            f"神经语音: 语速 {edge_rate}，音调 {edge_pitch}，音量 {edge_volume}\n"
-            f"离线回退: 语速 {tts_rate}，音量 {tts_volume}"
+            f"{enabled} 路 {mode}\n"
+            f"鎯呮劅 / 椋庢牸: {style}\n"
+            f"绁炵粡璇煶: 璇€?{edge_rate}锛岄煶璋?{edge_pitch}锛岄煶閲?{edge_volume}\n"
+            f"绂荤嚎鍥為€€: 璇€?{tts_rate}锛岄煶閲?{tts_volume}"
         )
 
     def _current_tts_voice_label(self) -> str:
         settings = normalize_tts_settings(self._tts_settings)
         return next(
             (label for label, value in TTS_VOICE_PRESETS if value == settings.get("edge_voice")),
-            str(settings.get("edge_voice") or "跟随语音包 / 默认"),
+            str(settings.get("edge_voice") or "璺熼殢璇煶鍖?/ 榛樿"),
         )
 
     def _refresh_voice_pack_list(self) -> None:
@@ -4056,7 +4056,7 @@ class ControlConsole(QMainWindow):
         selected_row = 0
         found_current = False
         for i, pack in enumerate(self._voice_packs):
-            item = QListWidgetItem(f"{pack.get('icon', '🎙️')}  {pack.get('name', pack.get('id', ''))}")
+            item = QListWidgetItem(f"{pack.get('icon', '馃帣锔?)}  {pack.get('name', pack.get('id', ''))}")
             item.setData(Qt.ItemDataRole.UserRole, self._voice_choice_key(pack))
             item.setToolTip(str(pack.get("description", "")))
             self._voice_pack_list.addItem(item)
@@ -4105,9 +4105,9 @@ class ControlConsole(QMainWindow):
         pack = next((p for p in self._voice_packs if self._voice_choice_key(p) == choice_key), None)
         if pack is None:
             return
-        self._select_voice_pack(pack, toast_prefix="已切换语音包")
+        self._select_voice_pack(pack, toast_prefix="宸插垏鎹㈣闊冲寘")
 
-    def _select_voice_pack(self, pack: dict, toast_prefix: str = "已切换语音包") -> None:
+    def _select_voice_pack(self, pack: dict, toast_prefix: str = "宸插垏鎹㈣闊冲寘") -> None:
         if str(pack.get("kind") or "") == "edge_voice":
             voice_id = str(pack.get("edge_voice") or "").strip()
             self._voice_pack_id = ""
@@ -4115,14 +4115,14 @@ class ControlConsole(QMainWindow):
             settings["edge_voice"] = voice_id
             self._tts_settings = normalize_tts_settings(settings)
             if self.on_voice_pack_changed:
-                self.on_voice_pack_changed({"id": "", "name": pack.get("name") or "默认"})
+                self.on_voice_pack_changed({"id": "", "name": pack.get("name") or "榛樿"})
             if self.on_tts_settings_changed:
                 self.on_tts_settings_changed(dict(self._tts_settings))
             self._render_tts_detail()
             self._set_current_voice_choice_row()
             self._render_voice_pack_detail(pack)
             self._update_text_reader_state()
-            self._show_toast(f"{toast_prefix}: {pack.get('name') or pack.get('display_name') or '默认'}")
+            self._show_toast(f"{toast_prefix}: {pack.get('name') or pack.get('display_name') or '榛樿'}")
             return
 
         pack_id = str(pack.get("id", "")).strip()
@@ -4139,7 +4139,7 @@ class ControlConsole(QMainWindow):
         self._update_text_reader_state()
         if self.on_voice_pack_changed:
             self.on_voice_pack_changed(pack)
-        self._show_toast(f"{toast_prefix}: {pack.get('name') or pack.get('display_name') or '默认'}")
+        self._show_toast(f"{toast_prefix}: {pack.get('name') or pack.get('display_name') or '榛樿'}")
 
     def _render_voice_pack_detail(self, pack: dict) -> None:
         if not hasattr(self, "_voice_pack_detail"):
@@ -4149,18 +4149,18 @@ class ControlConsole(QMainWindow):
         lines = [desc] if desc else []
         language = pack.get("language")
         if isinstance(language, dict) and language.get("label"):
-            lines.append(f"语言: {language.get('label')}")
+            lines.append(f"璇█: {language.get('label')}")
         if pack.get("is_custom"):
             sample_count = int(pack.get("sample_count") or 0)
-            lines.append(f"本地样本: {sample_count} 个")
+            lines.append(f"鏈湴鏍锋湰: {sample_count} 涓?)
             converted_count = int(pack.get("converted_count") or 0)
             if converted_count:
-                lines.append(f"MP4 转 MP3: {converted_count} 个")
+                lines.append(f"MP4 杞?MP3: {converted_count} 涓?)
             denoised_count = int(pack.get("denoised_count") or 0)
-            lines.append(f"轻度降噪副本: {denoised_count} 个，原始音频已保留")
-        lines.append(f"音色: {self._current_tts_voice_label()}")
+            lines.append(f"杞诲害闄嶅櫔鍓湰: {denoised_count} 涓紝鍘熷闊抽宸蹭繚鐣?)
+        lines.append(f"闊宠壊: {self._current_tts_voice_label()}")
         if sample:
-            lines.append(f"试听: {sample}")
+            lines.append(f"璇曞惉: {sample}")
         self._voice_pack_detail.setText("\n".join(lines))
 
     def _pick_chat(self, idx: int) -> None:
@@ -4201,14 +4201,14 @@ class ControlConsole(QMainWindow):
             return
         name = self._chats[self._ai_i]["name"]
         self.append_chat_message(name, "user", t)
-        self.append_chat_message(name, "ai", f"收到：{t}")
+        self.append_chat_message(name, "ai", f"鏀跺埌锛歿t}")
         self._ai_in.clear()
 
     def _page_placeholder(self, title: str) -> QWidget:
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.addWidget(QLabel(f"<h2>{title}</h2>"))
-        ph = QLabel("功能开发中...")
+        ph = QLabel("鍔熻兘寮€鍙戜腑...")
         ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ph.setStyleSheet("color:#94a3b8;font-size:18px;")
         lay.addWidget(ph, 1)
@@ -4221,3 +4221,5 @@ class ControlConsole(QMainWindow):
         loop = QEventLoop()
         self.destroyed.connect(loop.quit)
         loop.exec()
+
+

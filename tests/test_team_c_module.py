@@ -3,6 +3,7 @@ Tests for Team C NLP/TTS integration.
 """
 
 import json
+import math
 import os
 import sys
 import tempfile
@@ -12,16 +13,21 @@ import wave
 import zipfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.nlp.chat_memory import ChatMemory
 from models.nlp.deepseek_api import DeepSeekClient
-from models.nlp.prompt_builder import build_system_prompt, response_language_from_edge_voice
+from models.cloud.cloud_models import CloudPetEvent
+from models.nlp.emotion_analyzer import analyze_chat_emotion
+from models.nlp.proactive_event_builder import build_cloud_pet_event, build_screen_time_event
+from models.nlp.prompt_builder import build_proactive_prompt, build_system_prompt, response_language_from_edge_voice
 from models.tts import voice_pack as voice_pack_module
 from models.tts.ai_voice_assistant import AIChatVoiceAssistant
 from models.tts.echo_team_c_interface import EchoTeamCInterface
 from models.tts.long_text_reader import combine_documents, read_book_file, split_text_for_tts
-from models.tts.tts_manager import TTSManager
+from models.tts.tts_manager import TTSManager, _edge_synthesis_text
 from models.tts.language_match import (
     detect_text_language,
     language_from_edge_voice,
@@ -29,8 +35,10 @@ from models.tts.language_match import (
     languages_match,
 )
 from models.tts.voice_pack import VoicePackManager, create_imported_voice_pack
+from models.tts.voice_style_pack import resolve_voice_style_pack_settings
 from models.state.echo_team_d_interface import EchoTeamDInterface
 from models.state.pet_state import PetState
+from models.state.user_profile import UserProfile
 
 
 class FakeLLM:
@@ -90,6 +98,182 @@ def test_ai_chat_voice_assistant_streams_and_remembers():
     messages = assistant.get_memory_messages()
     assert messages[-2]["role"] == "user"
     assert messages[-1]["role"] == "assistant"
+
+
+def test_analyze_chat_emotion_returns_required_fields():
+    result = analyze_chat_emotion("我压力好大，真的有点撑不住了")
+
+    assert result["emotion_label"] == "stress"
+    assert result["confidence"] > 0.5
+    assert result["reason"]
+    assert result["suggestion"]
+    assert result["need_care"] is True
+
+
+def test_response_language_override_is_separate_from_edge_voice():
+    captured = {}
+
+    class CapturingLLM:
+        def generate(self, text_prompt, user_state=None, history=None):
+            captured["text_prompt"] = text_prompt
+            captured["user_state"] = dict(user_state or {})
+            return "I am here."
+
+    assistant = AIChatVoiceAssistant(
+        llm_client=CapturingLLM(),
+        tts_manager=TTSManager(enabled=False),
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=False,
+        stream_delay=0,
+    )
+    assistant.set_tts_settings(
+        {
+            "response_language": "en-US",
+            "edge_voice": "zh-CN-XiaoyiNeural",
+        }
+    )
+
+    assistant.chat_with_context("你好", current_state={"state_code": "normal"})
+
+    assert captured["user_state"]["response_language"] == "en-US"
+
+
+def test_voice_style_pack_resolves_voice_by_reply_language():
+    manager = TTSManager(enabled=False, voice_pack_enabled=False)
+    manager.apply_runtime_settings(
+        {
+            "voice_style_pack": "sweet_girl",
+            "response_language": "en-US",
+            "edge_voice": "zh-CN-XiaoyiNeural",
+        }
+    )
+
+    settings = manager._voice_settings(pet_id="cat", state="normal", action="speak")
+
+    assert settings["edge_voice"] == "en-US-JennyNeural"
+    assert settings["cute_style"] is True
+
+
+def test_boss_style_uses_low_steady_locked_prosody():
+    settings = resolve_voice_style_pack_settings("boss", "zh-CN")
+
+    assert settings["edge_voice"] == "zh-CN-YunxiNeural"
+    assert settings["edge_rate"] == "-14%"
+    assert settings["edge_pitch"] == "-20Hz"
+    assert settings["edge_volume"] == "+7%"
+    assert settings["prosody_style"] == "boss"
+    assert settings["voice_style_pack_locks_prosody"] is True
+
+
+def test_voice_style_pack_prosody_overrides_stale_saved_sliders():
+    manager = TTSManager(enabled=False, voice_pack_enabled=False)
+    manager.apply_runtime_settings(
+        {
+            "voice_style_pack": "boss",
+            "voice_style_pack_enabled": True,
+            "edge_rate": "+20%",
+            "edge_pitch": "+24Hz",
+            "edge_volume": "-4%",
+        }
+    )
+
+    settings = manager._voice_settings(pet_id="cat", state="normal", action="speak")
+
+    assert settings["edge_rate"] == "-14%"
+    assert settings["edge_pitch"] == "-20Hz"
+    assert settings["edge_volume"] == "+7%"
+
+
+def test_runtime_edge_voice_without_style_pack_is_not_overridden_by_default_style():
+    manager = TTSManager(enabled=False, voice_pack_enabled=False)
+    manager.apply_runtime_settings({"edge_voice": "en-US-JennyNeural"})
+
+    settings = manager._voice_settings(pet_id="cat", state="normal", action="speak")
+
+    assert settings["edge_voice"] == "en-US-JennyNeural"
+
+
+def test_boss_style_adds_steady_synthesis_pauses_without_changing_words():
+    settings = resolve_voice_style_pack_settings("boss", "zh-CN")
+
+    text = _edge_synthesis_text("别急，这件事我来处理！", settings)
+
+    assert text == ", 别急， 这件事我来处理！"
+
+
+def test_taiwan_style_uses_taiwan_voice_for_chinese_reply_language():
+    settings = resolve_voice_style_pack_settings("taiwan", "zh-CN")
+
+    assert settings["edge_voice"] == "zh-TW-HsiaoYuNeural"
+    assert settings["edge_pitch"] == "+0Hz"
+    assert settings["edge_playback_guard"] is False
+
+
+def test_taiwan_style_avoids_edge_comma_guard_and_normalizes_cjk_spacing():
+    settings = resolve_voice_style_pack_settings("taiwan", "zh-CN")
+
+    text = _edge_synthesis_text("我 在 这边陪你  ，  慢慢说就好。", settings)
+
+    assert text == "我在这边陪你，慢慢说就好。"
+
+
+def test_taiwan_style_ignores_stale_saved_pitch_overrides():
+    manager = TTSManager(enabled=False, voice_pack_enabled=False)
+    manager.apply_runtime_settings(
+        {
+            "voice_style_pack": "taiwan",
+            "response_language": "zh-CN",
+            "edge_rate": "+2%",
+            "edge_pitch": "+6Hz",
+            "edge_volume": "+4%",
+            "edge_playback_guard": True,
+        }
+    )
+
+    settings = manager._voice_settings(pet_id="cat", state="normal", action="speak")
+
+    assert settings["edge_rate"] == "-2%"
+    assert settings["edge_pitch"] == "+0Hz"
+    assert settings["edge_volume"] == "+2%"
+    assert settings["edge_playback_guard"] is False
+
+
+def test_disabled_voice_style_pack_keeps_local_voice_pack_profile():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_dir = Path(tmpdir) / "packs"
+        pack_dir = base_dir / "local"
+        pack_dir.mkdir(parents=True)
+        (pack_dir / "voice_pack.json").write_text(
+            json.dumps(
+                {
+                    "voice_profiles": {
+                        "default": {
+                            "edge_voice": "zh-CN-XiaomoNeural",
+                            "edge_rate": "-4%",
+                        }
+                    }
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        manager = TTSManager(
+            enabled=False,
+            voice_pack_id="local",
+            voice_pack_dir=base_dir,
+            voice_pack_enabled=True,
+        )
+        manager.apply_runtime_settings(
+            {
+                "voice_style_pack": "sweet_girl",
+                "voice_style_pack_enabled": False,
+            }
+        )
+
+        settings = manager._voice_settings(pet_id="cat", state="normal", action="speak")
+
+        assert settings["edge_voice"] == "zh-CN-XiaomoNeural"
+        assert settings["edge_rate"] == "-4%"
 
 
 def test_tts_cute_profile_softens_short_spoken_text():
@@ -239,6 +423,49 @@ def test_tts_edge_adds_playback_guard_before_synthesis(monkeypatch, tmp_path):
     assert Path(output).exists()
 
 
+def test_tts_edge_can_play_openvoice_converted_audio(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeCommunicate:
+        def __init__(self, text, **_kwargs):
+            captured["text"] = text
+
+        async def save(self, output_path):
+            Path(output_path).write_bytes(b"fake-mp3")
+
+    class FakeOpenVoice:
+        def convert_if_enabled(self, source_path, _voice_pack, settings):
+            assert settings["openvoice_enabled"] is True
+            converted = Path(source_path).with_suffix(".openvoice.wav")
+            converted.write_bytes(b"fake-wav")
+            return converted
+
+    monkeypatch.setitem(sys.modules, "edge_tts", types.SimpleNamespace(Communicate=FakeCommunicate))
+    played = []
+    manager = TTSManager(provider="edge", enabled=True, voice_pack_enabled=False)
+    manager.sounds_dir = tmp_path
+    manager.openvoice = FakeOpenVoice()
+    manager._play_media = lambda path: played.append(Path(path))
+
+    output = manager._speak_edge(
+        "Hello world.",
+        pet_id="cat",
+        state="neutral",
+        action="read",
+        settings={
+            "edge_voice": "en-US-JennyNeural",
+            "edge_rate": "+0%",
+            "edge_volume": "+0%",
+            "edge_pitch": "+0Hz",
+            "openvoice_enabled": True,
+        },
+    )
+
+    assert captured["text"] == ", Hello world."
+    assert output.endswith(".openvoice.wav")
+    assert played == [Path(output)]
+
+
 def test_tts_manager_reads_voice_profile_without_audio_files():
     with tempfile.TemporaryDirectory() as tmpdir:
         base_dir = Path(tmpdir) / "packs"
@@ -353,6 +580,58 @@ def test_create_imported_voice_pack_generates_simulated_profile(tmp_path: Path):
     assert manager.pick_clip("任意一句话", state="neutral", action="speak") is None
 
 
+def test_delete_voice_pack_removes_valid_pack_dir(tmp_path: Path):
+    base_dir = tmp_path / "packs"
+    pack_dir = base_dir / "custom"
+    sample_dir = pack_dir / "samples"
+    sample_dir.mkdir(parents=True)
+    (pack_dir / "voice_pack.json").write_text("{}", encoding="utf-8")
+    (sample_dir / "voice.wav").write_bytes(b"voice")
+
+    assert voice_pack_module.delete_voice_pack("custom", base_dir=base_dir) is True
+    assert not pack_dir.exists()
+
+
+def test_delete_voice_pack_rejects_path_traversal(tmp_path: Path):
+    base_dir = tmp_path / "packs"
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+    (outside_dir / "voice_pack.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        voice_pack_module.delete_voice_pack("../outside", base_dir=base_dir)
+
+    assert outside_dir.exists()
+
+
+def test_imported_voice_pack_fits_edge_profile_from_pitch(tmp_path: Path):
+    sample = tmp_path / "bright.wav"
+    rate = 16000
+    with wave.open(str(sample), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(rate)
+        frames = []
+        for i in range(rate):
+            value = int(12000 * math.sin(2 * math.pi * 230 * (i / rate)))
+            frames.append(value.to_bytes(2, byteorder="little", signed=True))
+        wav.writeframes(b"".join(frames))
+
+    manifest = create_imported_voice_pack(
+        display_name="明亮音色",
+        language_id="zh-CN",
+        sample_paths=[sample],
+        base_dir=tmp_path / "packs",
+    )
+    profile = manifest["voice_profiles"]["default"]
+    features = manifest["analysis"]["voice_features"]
+
+    assert features["estimated_pitch_hz"] > 200
+    assert profile["fit_source"] == "audio_features"
+    assert profile["edge_voice"] == "zh-CN-XiaoyiNeural"
+    assert profile["edge_pitch"] in {"+16Hz", "+24Hz"}
+
+
 def test_voice_pack_language_preset_supports_common_european_languages():
     french = voice_pack_module.voice_pack_language_preset("fr-FR")
     german = voice_pack_module.voice_pack_language_preset("de-DE")
@@ -389,6 +668,29 @@ def test_create_imported_voice_pack_converts_mp4_to_mp3(tmp_path: Path, monkeypa
     assert original.suffix == ".mp4"
     assert original.read_bytes() == b"fake-video"
     assert manifest["analysis"]["formats"] == ["mp3"]
+
+
+def test_voice_pack_reference_sample_prefers_imported_audio(tmp_path: Path):
+    base_dir = tmp_path / "packs"
+    pack_dir = base_dir / "custom"
+    sample_dir = pack_dir / "samples"
+    sample_dir.mkdir(parents=True)
+    wav_sample = sample_dir / "voice.wav"
+    wav_sample.write_bytes(b"fake-wav")
+    (pack_dir / "voice_pack.json").write_text(
+        json.dumps(
+            {
+                "id": "custom",
+                "samples": ["samples/voice.wav"],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    manager = VoicePackManager(pack_id="custom", base_dir=base_dir, enabled=True)
+
+    assert manager.reference_sample() == wav_sample
 
 
 def test_voice_profile_event_settings_inherit_default_profile():
@@ -818,6 +1120,29 @@ def test_team_c_speaks_translated_reply_when_chinese_voice_gets_japanese_text():
     assert assistant.get_memory_messages()[-1]["content"] == "你好呀，我在你身边。"
 
 
+def test_ai_chat_voice_assistant_uses_friendly_fallback_on_llm_error():
+    class BrokenLLM:
+        def generate(self, text_prompt, user_state=None, history=None):
+            raise RuntimeError("secret api failure")
+
+    tts = RecordingTTS()
+    chunks = []
+    assistant = AIChatVoiceAssistant(
+        llm_client=BrokenLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+    )
+
+    display = assistant.chat_with_context("你好", current_state={"state_code": "normal"}, callback_ui=chunks.append)
+
+    assert "走神" in display
+    assert "secret" not in display
+    assert "".join(chunks) == display
+    assert tts.calls[-1]["text"] == display
+
+
 def test_team_c_filters_mismatched_history_for_selected_voice_language():
     class CapturingLLM:
         def __init__(self):
@@ -897,6 +1222,68 @@ def test_prompt_builder_uses_common_language_from_edge_voice():
 
     assert "natural French conversation" in prompt
     assert "Always answer in natural French" in prompt
+
+
+def test_prompt_builder_uses_personalization_without_exposing_field_names():
+    prompt = build_system_prompt(
+        {
+            "state_code": "normal",
+            "personalization_settings": {
+                "speech_style": {
+                    "tone": "毒舌吐槽",
+                    "nickname": "小夏",
+                    "catchphrase": "我在呢",
+                },
+                "interaction_frequency": {"proactive_level": 20, "quiet_when_busy": True},
+            },
+            "user_profile": {
+                "relationship": "并肩搭子",
+                "comfort_level": 30,
+                "recent_emotions": [{"emotion_label": "stress"}],
+                "activity_stats": {"chat_count": 3, "care_needed_count": 2},
+            },
+        }
+    )
+
+    assert "小夏" in prompt
+    assert "轻微吐槽" in prompt
+    assert "我在呢" in prompt
+    assert "压力" in prompt
+    assert "nickname" not in prompt
+    assert "comfort_level" not in prompt
+
+
+def test_build_proactive_prompt_supports_screen_time_and_cloud_events():
+    screen_event = build_screen_time_event(
+        95,
+        activity_name="长时间工作",
+        is_focused=True,
+        personalization_settings={
+            "interaction_frequency": {"proactive_level": 15, "quiet_when_busy": True},
+            "companion_mode": {"focus_silence": True},
+        },
+    )
+    screen_prompt = build_proactive_prompt(screen_event)
+    assert "95" in screen_prompt
+    assert "极轻" in screen_prompt
+    assert "只输出一句话" in screen_prompt
+
+    cloud_prompt = build_proactive_prompt(
+        build_cloud_pet_event(
+            CloudPetEvent(
+                actor_name="阿梨",
+                action_type="feed",
+                pet_name="小猫",
+                level=4,
+                exp_gain=12,
+                coins_gain=3,
+                bond_bonus=2,
+            )
+        )
+    )
+    assert "阿梨刚刚喂了小猫" in cloud_prompt
+    assert "等级 4" in cloud_prompt
+    assert "宠物口吻中文短句" in cloud_prompt
 
 
 def test_response_language_detects_common_edge_voice_locales():
@@ -1015,6 +1402,31 @@ def test_team_c_interface_sends_event_dict_callback():
     assert done.wait(0.2)
     assert received["event_type"] == "user_chat"
     assert received["word_count"] == len("收到：继续学习")
+    assert received["emotion_result"]["emotion_label"] in {"neutral", "positive", "confused"}
+    assert set(received["emotion_result"]) >= {"confidence", "reason", "suggestion", "need_care"}
+
+
+def test_team_c_emotion_event_can_update_team_d_profile(monkeypatch):
+    monkeypatch.setattr(UserProfile, "load", classmethod(lambda cls, filepath=None: cls()))
+    monkeypatch.setattr(UserProfile, "save", lambda self, filepath=None: None)
+    assistant = build_test_assistant()
+    interface = EchoTeamCInterface(assistant)
+    pet_state = PetState(mood="neutral", energy=80, intimacy=50)
+    team_d = EchoTeamDInterface(pet_state)
+    done = threading.Event()
+
+    def callback(event_dict):
+        team_d.api_update_from_chat_emotion(event_dict)
+        done.set()
+
+    interface.api_register_logic_callback(callback)
+    thread = interface.api_user_speak("我压力好大，真的有点撑不住", {"state_code": "normal"}, lambda chunk: None)
+    thread.join(timeout=3)
+
+    assert done.wait(0.2)
+    assert team_d.user_profile.recent_emotions[-1]["emotion_label"] == "stress"
+    assert pet_state.mood == "sad"
+    assert pet_state.energy < 80
 
 
 def test_team_c_interface_compat_word_count_callback():

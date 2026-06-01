@@ -69,9 +69,13 @@ from app.ui.widgets import (
 )
 from models.vision.computer_activity_detector import (
     ComputerActivityDetector,
+    build_activity_suggestion,
     build_companion_event,
     build_local_companion_comment,
 )
+from app.ui.ui_settings_store import load_ui_settings
+from app.ui.feedback_bubble import show_feedback_message
+from models.state.user_profile import UserProfile
 from utils.config import config
 
 try:
@@ -207,6 +211,26 @@ def _config_int(key: str, default: int) -> int:
     return int(float(config.get(key, default)))
   except (TypeError, ValueError):
     return int(default)
+
+
+def _setting_bool(value: Any, default: bool = False) -> bool:
+  if value is None:
+    return default
+  if isinstance(value, str):
+    text = value.strip().lower()
+    if text in {"1", "true", "yes", "y", "on", "开启", "允许", "记住"}:
+      return True
+    if text in {"0", "false", "no", "n", "off", "关闭", "禁止"}:
+      return False
+    return default
+  return bool(value)
+
+
+def _setting_float(value: Any, default: float) -> float:
+  try:
+    return float(value)
+  except (TypeError, ValueError):
+    return float(default)
 
 
 # ---------------------------------------------------------------------------
@@ -884,6 +908,7 @@ class PetControlConsole(ControlConsole):
       current_tts_settings=desktop_pet.current_tts_settings(),
       on_read_text=desktop_pet.read_text_aloud,
       on_stop_read_text=desktop_pet.stop_text_reading,
+      on_pet_settings_changed=desktop_pet.update_pet_personalization_settings,
     )
     self._flat = desktop_pet.list_flat_pets_enriched()
     self._history_viewer: StatusHistoryViewer | None = None
@@ -1527,14 +1552,14 @@ def _btn_glass_qss(radius: int = 24) -> str:
   """
 
 
-def _btn_primary_qss(radius: int = 24) -> str:
+def _btn_primary_qss(radius: int = 24, padding: str = "10px 22px") -> str:
   return f"""
     QPushButton {{
       background-color: {_THEME_PINK};
       color: white;
       border: none;
       border-radius: {radius}px;
-      padding: 10px 22px;
+      padding: {padding};
       font-family: {_FONT_STACK};
       font-size: 14px;
       font-weight: 600;
@@ -1727,13 +1752,15 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
     _patch_arc_menu_paint(pet.arc_menu)
     _soft_shadow(pet.arc_menu, blur=20, offset_y=4, alpha=40)
   if pet.input_box and hasattr(pet.input_box, "_btn"):
-    pet.input_box._btn.setStyleSheet(_btn_primary_qss(20))
+    pet.input_box._btn.setStyleSheet(_btn_primary_qss(18, "0px 18px"))
+    pet.input_box._btn.setMinimumHeight(30)
   for bubble in (pet.info_bubble, pet.chat_bubble):
     if bubble and hasattr(bubble, "_lbl"):
       bubble._lbl.setFont(_pet_font(15))
   if pet.input_box and hasattr(pet.input_box, "_field"):
     pet.input_box._field.setFont(_pet_font(15))
-    pet.input_box._field.setStyleSheet("background: transparent; border: none;")
+    if hasattr(pet.input_box, "_apply_field_style"):
+      pet.input_box._apply_field_style()
 
 
 def _apply_control_console_theme(console: ControlConsole) -> None:
@@ -2137,9 +2164,13 @@ class DesktopPet:
     self._companion_bubble_active = False
     self._companion_bubble_token = 0
 
-    self._computer_companion_enabled = _config_bool("COMPUTER_ACTIVITY_ENABLED", True)
+    self._computer_activity_config_enabled = _config_bool("COMPUTER_ACTIVITY_ENABLED", True)
+    self._computer_companion_enabled = False
+    self._desktop_observation_authorized = False
+    self._computer_include_window_title = True
+    self._computer_no_disturb_fullscreen = True
     self._computer_activity_detector: ComputerActivityDetector | None = None
-    if self._computer_companion_enabled:
+    if self._computer_activity_config_enabled:
       self._computer_activity_detector = ComputerActivityDetector(
         min_comment_duration=_config_float("COMPUTER_ACTIVITY_MIN_DURATION", 0.0)
       )
@@ -2149,6 +2180,7 @@ class DesktopPet:
     self._last_computer_comment_signature = ""
     self._computer_poll_ms = max(500, _config_int("COMPUTER_ACTIVITY_POLL_MS", 1000))
     self._computer_comment_cooldown = max(30.0, _config_float("COMPUTER_ACTIVITY_COMMENT_COOLDOWN", 150.0))
+    self._apply_desktop_access_settings_from_disk()
     self._speech_hint_enabled = _config_bool("STATE_SPEECH_HINT_ENABLED", True)
     self._speech_hint_timer: Optional[QTimer] = None
     self._speech_hint_busy = False
@@ -2180,6 +2212,11 @@ class DesktopPet:
             self._chat_stream.chat_reply_finished.emit(character_name, reply)
           else:
             self._save_chat_message("ai", reply, character_name=character_name)
+        if hasattr(self.team_d, "api_update_from_chat_emotion"):
+          try:
+            self.team_d.api_update_from_chat_emotion(event)
+          except Exception as exc:
+            print(f"[DesktopPet] 更新聊天情绪画像失败: {exc}")
       wc = int(event.get("word_count", 0) or 0)
       if hasattr(self.team_d, "api_on_chat_finished"):
         self.team_d.api_on_chat_finished(wc)
@@ -2367,11 +2404,6 @@ class DesktopPet:
     else:
       self._window._plane_player.hide()
       self._window._gl.show()
-      # Live2D model reload on switch
-      from app.model_switcher import reload_live2d_model
-      new_model_path = pet.get("model_path") or self.model_path
-      if new_model_path and os.path.isfile(new_model_path):
-        reload_live2d_model(self, new_model_path)
       self._start_idle_motion()
     self._update_mouse_passthrough(self._local_mouse_pos())
     self._show_switch_notice(name)
@@ -2397,6 +2429,54 @@ class DesktopPet:
     self._sync_team_c_voice_context()
     self._save_settings()
     print(f"[DesktopPet] TTS settings updated: {self._tts_settings}")
+
+  def update_pet_personalization_settings(self, settings: dict[str, dict[str, Any]]) -> None:
+    self._apply_desktop_access_settings(settings)
+    if not self._running:
+      return
+    if self._computer_companion_enabled:
+      self._start_computer_companion()
+    else:
+      self._stop_computer_companion()
+
+  def _apply_desktop_access_settings_from_disk(self) -> None:
+    settings_path = os.path.join(PROJECT_ROOT, "data", "pet_personalization_settings.json")
+    try:
+      with open(settings_path, encoding="utf-8") as f:
+        loaded = json.load(f)
+    except (OSError, json.JSONDecodeError):
+      loaded = {}
+    self._apply_desktop_access_settings(loaded if isinstance(loaded, dict) else {})
+
+  def _apply_desktop_access_settings(self, personalization: dict[str, Any] | None) -> None:
+    settings = personalization if isinstance(personalization, dict) else {}
+    desktop_access = settings.get("desktop_access") if isinstance(settings.get("desktop_access"), dict) else {}
+    boundaries = settings.get("boundaries") if isinstance(settings.get("boundaries"), dict) else {}
+
+    authorized = _setting_bool(desktop_access.get("foreground_observation_authorized"), False)
+    comment_enabled = _setting_bool(desktop_access.get("proactive_comment_enabled"), True)
+    self._desktop_observation_authorized = authorized
+    self._computer_include_window_title = _setting_bool(desktop_access.get("include_window_title"), True)
+    self._computer_no_disturb_fullscreen = _setting_bool(boundaries.get("no_disturb_when_fullscreen"), True)
+    default_cooldown = _config_float("COMPUTER_ACTIVITY_COMMENT_COOLDOWN", 150.0)
+    configured_cooldown = _setting_float(desktop_access.get("comment_interval_seconds"), default_cooldown)
+    self._computer_comment_cooldown = max(30.0, min(3600.0, configured_cooldown))
+    self._computer_companion_enabled = bool(
+      self._computer_activity_config_enabled
+      and self._desktop_observation_authorized
+      and comment_enabled
+    )
+    if self._computer_companion_enabled and self._computer_activity_detector is None:
+      self._computer_activity_detector = ComputerActivityDetector(
+        min_comment_duration=_config_float("COMPUTER_ACTIVITY_MIN_DURATION", 0.0)
+      )
+    print(
+      "[DesktopPet] 桌面授权: "
+      f"authorized={self._desktop_observation_authorized}, "
+      f"comments={self._computer_companion_enabled}, "
+      f"title_context={self._computer_include_window_title}, "
+      f"cooldown={self._computer_comment_cooldown:.0f}s"
+    )
 
   def read_text_aloud(self, text: str, title: str = "") -> None:
     value = str(text or "").strip()
@@ -2607,23 +2687,14 @@ class DesktopPet:
     if group is None:
       print(f"[DesktopPet] 未找到动作: {motion_name}")
       return False
-    # Try SetExpression first (works for .exp3.json files)
-    try:
-      self._model.SetExpression(motion_name)
-      self._model.Update()
-      print(f"[DesktopPet] 应用表情: {motion_name}")
-      return True
-    except Exception:
-      pass
-    # If expression fails, try StartMotion
-    try:
-      self._model.StartMotion(group, 0, MotionPriority.IDLE)
-      self._model.Update()
-      print(f"[DesktopPet] 播放动作: {motion_name}")
-      return True
-    except Exception as exc:
-      print(f"[DesktopPet] 播放失败: {exc}")
-      return False
+    self._model.StartMotion(
+      group,
+      index,
+      MotionPriority.NORMAL,
+      onFinishMotionHandler=self._start_idle_motion,
+    )
+    print(f"[DesktopPet] 播放动作: {motion_name}")
+    return True
 
   def set_expression(self, emotion: str) -> bool:
     if self._is_flat_mode():
@@ -3049,6 +3120,13 @@ class DesktopPet:
     QTimer.singleShot(self._computer_poll_ms, self._poll_computer_companion)
     print("[DesktopPet] 电脑状态陪伴点评已开启。")
 
+  def _stop_computer_companion(self) -> None:
+    if self._computer_comment_timer is not None:
+      self._computer_comment_timer.stop()
+      self._computer_comment_timer = None
+    self._computer_comment_busy = False
+    print("[DesktopPet] 电脑状态陪伴点评已关闭。")
+
   def _start_state_speech_hints(self) -> None:
     if not self._speech_hint_enabled:
       return
@@ -3115,6 +3193,8 @@ class DesktopPet:
   def _poll_computer_companion(self) -> None:
     if (
       not self._running
+      or not self._computer_companion_enabled
+      or not self._desktop_observation_authorized
       or self._computer_activity_detector is None
       or self._computer_comment_busy
       or self._chat_open
@@ -3129,9 +3209,12 @@ class DesktopPet:
       print(f"[DesktopPet] 电脑状态检测失败: {exc}")
       return
 
+    if self._computer_no_disturb_fullscreen and bool(state.get("is_fullscreen")):
+      return
     if not state.get("need_response"):
       return
-    event = build_companion_event(state)
+    comment_state = self._privacy_filtered_activity_state(state)
+    event = build_companion_event(comment_state)
     if not event:
       return
 
@@ -3144,7 +3227,19 @@ class DesktopPet:
 
     self._last_computer_comment_at = now
     self._last_computer_comment_signature = signature
-    self._emit_computer_companion_comment(event, state)
+    self._emit_computer_companion_comment(event, comment_state)
+
+  def _privacy_filtered_activity_state(self, state: dict[str, Any]) -> dict[str, Any]:
+    filtered = dict(state)
+    if not self._computer_include_window_title:
+      filtered["window_title"] = ""
+      filtered["description"] = re.sub(
+        r"，窗口标题是.*?(?:，|。|$)",
+        "，",
+        str(filtered.get("description") or ""),
+      ).rstrip("，")
+      filtered["suggestion"] = build_activity_suggestion(filtered)
+    return filtered
 
   def _emit_computer_companion_comment(self, event: dict[str, Any], state: dict[str, Any]) -> None:
     self._computer_comment_busy = True
@@ -3207,9 +3302,7 @@ class DesktopPet:
     self._update_mouse_passthrough(self._local_mouse_pos())
 
   def _stream_text_to_ui(self, text: str) -> None:
-    for ch in text:
-      self._stream_ui_callback(ch)
-      time.sleep(0.015)
+    show_feedback_message(text, self._stream_ui_callback, stream=True, delay=0.015)
 
   @staticmethod
   def _computer_comment_signature(event: dict[str, Any]) -> str:
@@ -3244,17 +3337,12 @@ class DesktopPet:
     return gp.x(), gp.y()
 
   def _init_model_gl(self) -> None:
-    try:
-      self._model = live2d.LAppModel()
-      self._model.LoadModelJson(self.model_path, maskBufferCount=2)
-      self._model.Resize(self._win_w, self._win_h)
-      self._build_motion_index()
-      self._load_available_motions()
-      self._start_idle_motion()
-    except Exception as exc:
-      msg = "init failed: " + str(exc)
-      print(msg)
-      self._model = None
+    self._model = live2d.LAppModel()
+    self._model.LoadModelJson(self.model_path, maskBufferCount=2)
+    self._model.Resize(self._win_w, self._win_h)
+    self._build_motion_index()
+    self._load_available_motions()
+    self._start_idle_motion()
 
   def _capture_mao_pro_motion_preview(self) -> None:
     """mao_pro_zh：从首个 motion3 首帧生成预览图。"""
@@ -4100,31 +4188,32 @@ class DesktopPet:
       state["tts_style"] = emotion_style
     tts_settings = dict(self._tts_settings)
     state["tts_settings"] = tts_settings
+    if str(tts_settings.get("response_language") or "").strip():
+      state["response_language"] = str(tts_settings.get("response_language") or "").strip()
     if str(tts_settings.get("edge_voice") or "").strip():
       state["edge_voice"] = str(tts_settings.get("edge_voice") or "").strip()
+    try:
+      ui_settings = load_ui_settings(PROJECT_ROOT)
+      personalization = ui_settings.get("personalization_settings")
+      if isinstance(personalization, dict):
+        state["personalization_settings"] = personalization
+    except Exception as exc:
+      print(f"[DesktopPet] Load personalization settings failed: {exc}")
+    try:
+      state["user_profile"] = UserProfile.load().to_prompt_context()
+    except Exception as exc:
+      print(f"[DesktopPet] Load user profile failed: {exc}")
     return state
 
   def _start_idle_motion(self, *_args: Any) -> None:
     if self._model is None:
       return
-    if not self._has_idle_motions():
-      return
     self._model.StartMotion("Idle", 0, MotionPriority.IDLE, onFinishMotionHandler=self._start_idle_motion)
-
-  def _has_idle_motions(self) -> bool:
-    """Check if the current model has any Idle motion entries."""
-    try:
-      with open(self.model_path, encoding="utf-8-sig") as f:
-        data = json.load(f)
-      idle_entries = data.get("FileReferences", {}).get("Motions", {}).get("Idle", [])
-      return len(idle_entries) > 0
-    except (OSError, json.JSONDecodeError):
-      return True
 
   def _build_motion_index(self) -> None:
     self._motion_index.clear()
     try:
-      with open(self.model_path, encoding="utf-8-sig") as f:
+      with open(self.model_path, encoding="utf-8") as f:
         data = json.load(f)
       motion_groups = data.get("FileReferences", {}).get("Motions", {})
     except (OSError, json.JSONDecodeError) as exc:
@@ -4166,7 +4255,7 @@ class DesktopPet:
   def _scan_motions_from_model_json(self) -> list[str]:
     names: list[str] = []
     try:
-      with open(self.model_path, encoding="utf-8-sig") as f:
+      with open(self.model_path, encoding="utf-8") as f:
         data = json.load(f)
       motion_groups = data.get("FileReferences", {}).get("Motions", {})
     except (OSError, json.JSONDecodeError):

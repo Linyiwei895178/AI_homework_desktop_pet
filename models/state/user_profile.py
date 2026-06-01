@@ -1,143 +1,145 @@
 """
-UserProfile: user preference/behavior profile with JSON persistence.
-
-Tracks:
-- Display name and preferences.
-- Emotion history snapshot from chat analysis.
-- Activity history snapshot from vision.
-- Settings for TTS/UI/notification preferences.
+Lightweight user profile memory for personalization and care signals.
 """
 
 from __future__ import annotations
 
 import json
-import os
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
-_PROFILE_PATH = Path(__file__).resolve().parents[2] / "data" / "user_profile.json"
+DEFAULT_PROFILE_PATH = Path(__file__).resolve().parents[2] / "data" / "user_profile.json"
 
 
 class UserProfile:
-    """
-    User preference and behavior profile.
+    """Small mutable profile that can be fed into prompt construction."""
 
-    Usage:
-        profile = UserProfile()
-        profile.load()
-        profile.update_from_chat_emotion({"emotion_label": "sad", "confidence": 0.8})
-        profile.update_from_activity({"activity_code": "coding", "duration": 3600})
-        profile.save()
-        ctx = profile.to_prompt_context()
-    """
+    def __init__(
+        self,
+        nickname: str = "",
+        tone: str = "",
+        catchphrase: str = "",
+        relationship: str = "陪伴伙伴",
+        comfort_level: int = 50,
+        recent_emotions: list[dict[str, Any]] | None = None,
+        activity_stats: dict[str, Any] | None = None,
+        updated_at: float | None = None,
+    ) -> None:
+        self.nickname = str(nickname or "").strip()
+        self.tone = str(tone or "").strip()
+        self.catchphrase = str(catchphrase or "").strip()
+        self.relationship = str(relationship or "陪伴伙伴").strip()
+        self.comfort_level = _clamp_int(comfort_level, 0, 100)
+        self.recent_emotions = list(recent_emotions or [])
+        self.activity_stats = dict(activity_stats or {})
+        self.updated_at = float(updated_at or time.time())
 
-    def __init__(self, filepath: Optional[str | Path] = None):
-        self._path = Path(filepath or _PROFILE_PATH)
-        self._data: Dict[str, Any] = {
-            "display_name": "",
-            "preferred_response_language": "zh-CN",
-            "last_emotion": "neutral",
-            "last_emotion_confidence": 0.0,
-            "last_emotion_timestamp": 0.0,
-            "recent_activities": [],
-            "disturb_preference": "normal",  # "low" | "normal" | "high"
-            "daily_interaction_count": 0,
-            "daily_chat_count": 0,
-            "last_active_date": "",
-            "tts_enabled": True,
-            "auto_reply_enabled": True,
-            "created_at": "",
-        }
+    def update_from_chat_emotion(self, emotion_result: dict[str, Any]) -> None:
+        """Update profile counters and comfort level from one emotion result."""
+        result = _extract_emotion_result(emotion_result)
+        label = str(result.get("emotion_label") or "neutral").strip() or "neutral"
+        confidence = _float(result.get("confidence"), 0.0)
+        need_care = bool(result.get("need_care"))
 
-    def load(self) -> "UserProfile":
-        """Load profile from JSON file. Returns self."""
-        if self._path.exists():
-            try:
-                with open(self._path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    self._data.update(data)
-            except (json.JSONDecodeError, OSError) as exc:
-                print(f"[UserProfile] Load error: {exc}")
-        return self
+        self.recent_emotions.append(
+            {
+                "emotion_label": label,
+                "confidence": round(confidence, 2),
+                "need_care": need_care,
+                "timestamp": time.time(),
+            }
+        )
+        self.recent_emotions = self.recent_emotions[-12:]
 
-    def save(self) -> bool:
-        """Save profile to JSON file. Returns True on success."""
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._path, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, ensure_ascii=False, indent=2)
-            return True
-        except OSError as exc:
-            print(f"[UserProfile] Save error: {exc}")
-            return False
+        counts = self.activity_stats.setdefault("emotion_counts", {})
+        counts[label] = int(counts.get(label, 0)) + 1
+        self.activity_stats["chat_count"] = int(self.activity_stats.get("chat_count", 0)) + 1
+        if need_care:
+            self.activity_stats["care_needed_count"] = int(self.activity_stats.get("care_needed_count", 0)) + 1
 
-    def update_from_chat_emotion(self, emotion_result: Dict[str, Any]) -> None:
-        """
-        Update profile from chat emotion analysis result.
+        delta = {
+            "positive": 3,
+            "neutral": 1,
+            "stress": -3,
+            "sad": -4,
+            "angry": -4,
+            "tired": -2,
+            "confused": -1,
+        }.get(label, 0)
+        self.comfort_level = _clamp_int(round(self.comfort_level + delta), 0, 100)
+        self.updated_at = time.time()
 
-        :param emotion_result: output from emotion_analyzer.analyze_chat_emotion()
-        """
-        if not isinstance(emotion_result, dict):
-            return
-        label = emotion_result.get("emotion_label", "neutral")
-        confidence = float(emotion_result.get("confidence", 0.0))
-        self._data["last_emotion"] = label
-        self._data["last_emotion_confidence"] = confidence
-        self._data["last_emotion_timestamp"] = __import__("time").time()
-        self._data["daily_chat_count"] = int(self._data.get("daily_chat_count", 0)) + 1
-
-    def update_from_activity(self, activity_state: Dict[str, Any]) -> None:
-        """
-        Update profile from computer activity detection.
-
-        :param activity_state: output from ComputerActivityDetector.get_state()
-        """
-        if not isinstance(activity_state, dict):
-            return
-        code = str(activity_state.get("activity_code", "") or "")
-        if code:
-            activities: list = self._data.setdefault("recent_activities", [])
-            activities.append({
-                "code": code,
-                "timestamp": __import__("time").time(),
-            })
-            # Keep only last 20 entries
-            if len(activities) > 20:
-                self._data["recent_activities"] = activities[-20:]
-
-    def update_from_settings(self, settings: Dict[str, Any]) -> None:
-        """
-        Update profile from UI settings.
-
-        :param settings: UI personalization settings dict
-        """
-        if not isinstance(settings, dict):
-            return
-        for key in ("display_name", "preferred_response_language", "tts_enabled", "auto_reply_enabled", "disturb_preference"):
-            if key in settings:
-                self._data[key] = settings[key]
-
-    def to_prompt_context(self) -> Dict[str, Any]:
-        """
-        Convert profile to a compact dict for prompt_builder.
-
-        :returns: dict with user context info
-        """
+    def to_prompt_context(self) -> dict[str, Any]:
+        """Return a compact dict for prompt_builder without persistence details."""
         return {
-            "display_name": self._data.get("display_name", ""),
-            "last_emotion": self._data.get("last_emotion", "neutral"),
-            "disturb_preference": self._data.get("disturb_preference", "normal"),
-            "daily_interaction_count": self._data.get("daily_interaction_count", 0),
+            "nickname": self.nickname,
+            "tone": self.tone,
+            "catchphrase": self.catchphrase,
+            "relationship": self.relationship,
+            "comfort_level": self.comfort_level,
+            "recent_emotions": list(self.recent_emotions[-6:]),
+            "activity_stats": dict(self.activity_stats),
         }
 
-    def get(self, key: str, default: Any = None) -> Any:
-        return self._data.get(key, default)
+    def to_dict(self) -> dict[str, Any]:
+        data = self.to_prompt_context()
+        data["updated_at"] = self.updated_at
+        return data
 
-    def set(self, key: str, value: Any) -> None:
-        self._data[key] = value
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> "UserProfile":
+        raw = data if isinstance(data, dict) else {}
+        return cls(
+            nickname=raw.get("nickname", ""),
+            tone=raw.get("tone", ""),
+            catchphrase=raw.get("catchphrase", ""),
+            relationship=raw.get("relationship", "陪伴伙伴"),
+            comfort_level=raw.get("comfort_level", 50),
+            recent_emotions=raw.get("recent_emotions") if isinstance(raw.get("recent_emotions"), list) else [],
+            activity_stats=raw.get("activity_stats") if isinstance(raw.get("activity_stats"), dict) else {},
+            updated_at=raw.get("updated_at"),
+        )
 
-    @property
-    def data(self) -> Dict[str, Any]:
-        return dict(self._data)
+    @classmethod
+    def load(cls, filepath: str | Path = DEFAULT_PROFILE_PATH) -> "UserProfile":
+        path = Path(filepath)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, TypeError):
+            return cls()
+        return cls.from_dict(data if isinstance(data, dict) else {})
+
+    def save(self, filepath: str | Path = DEFAULT_PROFILE_PATH) -> None:
+        path = Path(filepath)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_user_profile(filepath: str | Path = DEFAULT_PROFILE_PATH) -> UserProfile:
+    return UserProfile.load(filepath)
+
+
+def _extract_emotion_result(value: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    nested = value.get("emotion_result")
+    if isinstance(nested, dict):
+        return nested
+    return value
+
+
+def _float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _clamp_int(value: Any, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = minimum
+    return max(minimum, min(maximum, number))

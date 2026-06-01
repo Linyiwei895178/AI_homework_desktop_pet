@@ -12,6 +12,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+from app.ui.ui_settings_store import load_ui_settings
 from models.nlp.chat_memory import ChatMemory
 from models.nlp.deepseek_api import DeepSeekClient
 from models.nlp.prompt_builder import (
@@ -19,6 +20,7 @@ from models.nlp.prompt_builder import (
     normalize_response_language,
     response_language_from_edge_voice,
 )
+from models.state.user_profile import UserProfile
 from models.tts.language_match import detect_text_language, language_family, languages_match
 from models.tts.tts_manager import TTSManager
 
@@ -90,9 +92,13 @@ class AIChatVoiceAssistant:
         response_language = self._response_language_from_state(llm_state)
         with self._lock:
             history = self._history_for_response_language(self.memory.get_messages(), response_language)
-        reply = self.llm.generate(text, user_state=llm_state, history=history).strip()
+        try:
+            reply = self.llm.generate(text, user_state=llm_state, history=history).strip()
+        except Exception as exc:
+            print(f"[AIChatVoiceAssistant] LLM 生成失败，使用本地降级回复: {exc}")
+            reply = _friendly_fallback_reply(llm_state)
         if not reply:
-            reply = "我刚刚有点走神了，可以再说一次吗？"
+            reply = _friendly_fallback_reply(llm_state)
         tts_started = False
         if self.auto_tts and _can_start_tts_before_display(reply, response_language):
             self._play_voice_async(reply, state=voice_state, action=voice_action)
@@ -108,7 +114,7 @@ class AIChatVoiceAssistant:
             self._last_reply = display_reply
 
         if self.auto_tts and not tts_started:
-            self._play_voice(spoken_reply, state=voice_state, action=voice_action)
+            self._safe_play_voice(spoken_reply, state=voice_state, action=voice_action)
 
         return display_reply
 
@@ -181,17 +187,30 @@ class AIChatVoiceAssistant:
         state: str,
         action: str,
     ) -> Optional[Dict[str, Any]]:
+        enriched = dict(current_state) if isinstance(current_state, dict) else {}
+        self._inject_personalization_context(enriched)
+
         language = self._response_language_for_voice_context(state=state, action=action)
         if not language:
-            return current_state
+            return enriched or current_state
         if isinstance(current_state, dict):
-            enriched = dict(current_state)
             if normalize_response_language(enriched.get("response_language")):
                 return enriched
-        else:
-            enriched = {}
         enriched["response_language"] = language
         return enriched
+
+    @staticmethod
+    def _inject_personalization_context(state: Dict[str, Any]) -> None:
+        if "personalization_settings" not in state:
+            settings = load_ui_settings()
+            personalization = settings.get("personalization_settings")
+            if isinstance(personalization, dict):
+                state["personalization_settings"] = personalization
+        if "user_profile" not in state:
+            try:
+                state["user_profile"] = UserProfile.load().to_prompt_context()
+            except Exception as exc:
+                print(f"[AIChatVoiceAssistant] 用户画像读取失败: {exc}")
 
     def _response_language_for_voice_context(self, state: str = "neutral", action: str = "speak") -> str:
         explicit = normalize_response_language(
@@ -313,6 +332,13 @@ class AIChatVoiceAssistant:
             if self.stream_delay > 0:
                 time.sleep(self.stream_delay)
 
+    def _safe_play_voice(self, text: str, state: str = "neutral", action: str = "speak") -> Optional[str]:
+        try:
+            return self._play_voice(text, state=state, action=action)
+        except Exception as exc:
+            print(f"[AIChatVoiceAssistant] TTS 播放失败: {exc}")
+            return None
+
 
 def _state_code_to_voice_state(state_code: str) -> str:
     return {
@@ -365,3 +391,12 @@ def _can_start_tts_before_display(text: str, response_language: str = "") -> boo
 
 def _contains_cjk(value: str) -> bool:
     return any("\u4e00" <= char <= "\u9fff" for char in value or "")
+
+
+def _friendly_fallback_reply(current_state: Optional[Dict[str, Any]] = None) -> str:
+    state_code = ""
+    if isinstance(current_state, dict):
+        state_code = str(current_state.get("state_code") or current_state.get("mood") or "").strip()
+    if state_code in {"tired", "sad", "stress"}:
+        return "我刚刚有点走神啦，但我还在，先陪你慢慢缓一下。"
+    return "我刚刚有点走神啦，我们再试一次～"

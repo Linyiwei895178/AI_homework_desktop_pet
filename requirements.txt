@@ -25,6 +25,7 @@ mediapipe>=0.10.0
 edge-tts>=6.1.12         # 更自然的微软神经语音
 pyttsx3>=2.90            # 离线回退语音
 pywin32>=306; platform_system == "Windows"  # Windows 后台播放 MP3
+imageio-ffmpeg>=0.5.1    # MP4 语音包导入时抽取音轨
 
 # 长文本 / 书籍导入
 pypdf>=4.0.0              # PDF 文本提取

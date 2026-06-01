@@ -16,7 +16,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+from models.tts.openvoice_bridge import OpenVoicePostProcessor
 from models.tts.voice_pack import VoicePackManager
+from models.tts.voice_style_pack import resolve_voice_style_pack_settings
 from utils.config import config
 
 
@@ -24,10 +26,24 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 TTS_RUNTIME_OVERRIDE_KEYS = (
     "edge_voice",
+    "response_language",
+    "voice_style_pack",
+    "voice_style_pack_enabled",
     "edge_rate",
     "edge_pitch",
     "edge_volume",
+    "edge_playback_guard",
+    "text_normalizer",
+    "prosody_style",
+    "voice_style_pack_locks_prosody",
     "edge_timeout",
+    "openvoice_enabled",
+    "openvoice_python",
+    "openvoice_repo_dir",
+    "openvoice_checkpoint_dir",
+    "openvoice_device",
+    "openvoice_tau",
+    "openvoice_timeout",
     "tts_rate",
     "tts_volume",
 )
@@ -117,6 +133,7 @@ class TTSManager:
         self.emotion_style = "auto"
         self._runtime_overrides: dict[str, Any] = {}
         self.sounds_dir = PROJECT_ROOT / "assets" / "sounds"
+        self.openvoice = OpenVoicePostProcessor(PROJECT_ROOT)
         voice_pack_dir = Path(voice_pack_dir)
         if not voice_pack_dir.is_absolute():
             voice_pack_dir = PROJECT_ROOT / voice_pack_dir
@@ -286,10 +303,39 @@ class TTSManager:
         profile = self.voice_pack.voice_profile(state=state, action=action)
         if profile:
             settings.update(profile)
+        style_pack_enabled = self._style_pack_enabled()
+        if style_pack_enabled:
+            voice_style_pack = resolve_voice_style_pack_settings(
+                self._runtime_overrides.get("voice_style_pack"),
+                self._runtime_overrides.get("response_language"),
+            )
+            if voice_style_pack:
+                settings.update(voice_style_pack)
         if auto_profile and not self._emotion_style_is_auto():
             settings.update(auto_profile)
-        settings.update(self._runtime_overrides)
+        runtime_overrides = dict(self._runtime_overrides)
+        if style_pack_enabled:
+            runtime_overrides.pop("edge_voice", None)
+            if bool(settings.get("voice_style_pack_locks_prosody", True)):
+                for key in (
+                    "edge_rate",
+                    "edge_pitch",
+                    "edge_volume",
+                    "edge_playback_guard",
+                    "text_normalizer",
+                    "prosody_style",
+                    "voice_style_pack_locks_prosody",
+                ):
+                    runtime_overrides.pop(key, None)
+        settings.update(runtime_overrides)
         return settings
+
+    def _style_pack_enabled(self) -> bool:
+        if "voice_style_pack_enabled" in self._runtime_overrides:
+            return str(
+                self._runtime_overrides.get("voice_style_pack_enabled", True)
+            ).strip().lower() not in {"0", "false", "no", "off"}
+        return bool(str(self._runtime_overrides.get("voice_style_pack") or "").strip())
 
     def _emotion_style_is_auto(self) -> bool:
         return (self.emotion_style or "auto").strip().lower() in {"", "auto", "follow", "follow-state"}
@@ -342,7 +388,7 @@ class TTSManager:
 
         async def save_audio() -> None:
             communicate = edge_tts.Communicate(
-                _edge_playback_guard_text(text),
+                _edge_synthesis_text(text, settings),
                 voice=str(settings.get("edge_voice") or config.EDGE_TTS_VOICE),
                 rate=str(settings.get("edge_rate") or "+0%"),
                 volume=str(settings.get("edge_volume") or "+0%"),
@@ -356,8 +402,9 @@ class TTSManager:
         self._run_async(save_audio)
         if not output_path.exists() or output_path.stat().st_size <= 0:
             raise RuntimeError("edge-tts 没有生成音频文件")
-        self._play_media(output_path)
-        return str(output_path)
+        playback_path = self.openvoice.convert_if_enabled(output_path, self.voice_pack, settings)
+        self._play_media(playback_path)
+        return str(playback_path)
 
     def _speak_pyttsx3(self, text: str, settings: dict) -> None:
         try:
@@ -521,9 +568,72 @@ def _contains_cjk(value: str) -> bool:
     return any("\u4e00" <= char <= "\u9fff" for char in value or "")
 
 
-def _edge_playback_guard_text(text: str) -> str:
+def _edge_synthesis_text(text: str, settings: dict | None = None) -> str:
+    value = str(text or "")
+    normalizer = str((settings or {}).get("text_normalizer") or "").strip().lower()
+    if normalizer == "zh_tw_natural":
+        value = _normalize_zh_tw_synthesis_text(value)
+    value = _normalize_voice_style_prosody_text(
+        value,
+        str((settings or {}).get("prosody_style") or "").strip().lower(),
+    )
+    return _edge_playback_guard_text(value, settings)
+
+
+def _normalize_voice_style_prosody_text(text: str, prosody_style: str = "") -> str:
+    value = str(text or "")
+    if not value:
+        return value
+
+    style = (prosody_style or "natural").strip().lower().replace("-", "_")
+    if style in {"", "natural", "taiwan"}:
+        return value
+
+    value = re.sub(r"[!！]{3,}", "！", value)
+    value = re.sub(r"[?？]{3,}", "？", value)
+    value = re.sub(r"[~～]{2,}", "。", value)
+
+    if style in {"boss", "dominant"}:
+        return _space_cjk_punctuation(value, strong=True)
+    if style in {"mature", "gentle"}:
+        return _space_cjk_punctuation(value, strong=False)
+    if style in {"sharp"}:
+        return re.sub(r"\s*([，。！？；：、,.!?;:])\s*", r"\1", value).strip()
+    return value
+
+
+def _space_cjk_punctuation(text: str, strong: bool = False) -> str:
+    value = str(text or "")
+    if not _contains_cjk(value):
+        return value
+    pause_marks = "，、；;：:"
+    end_marks = "。！？!?"
+    value = re.sub(rf"([{re.escape(pause_marks)}])\s*", r"\1 ", value)
+    if strong:
+        value = re.sub(rf"([{re.escape(end_marks)}])\s*", r"\1 ", value)
+    return value.strip()
+
+
+def _normalize_zh_tw_synthesis_text(text: str) -> str:
+    value = str(text or "")
+    if not value:
+        return value
+    value = re.sub(r"[ \t]*([，。！？；：、])[ \t]*", r"\1", value)
+    value = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", value)
+    value = re.sub(r"[，,]{2,}", "，", value)
+    value = re.sub(r"[。．]{2,}", "。", value)
+    value = re.sub(r"[~～]{2,}", "。", value)
+    return value.strip()
+
+
+def _edge_playback_guard_text(text: str, settings: dict | None = None) -> str:
     value = str(text or "")
     if not value.strip():
+        return value
+    guard_enabled = str(
+        (settings or {}).get("edge_playback_guard", True)
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    if not guard_enabled:
         return value
     if value.lstrip().startswith((",", ".", ";", ":", "!", "?")):
         return value

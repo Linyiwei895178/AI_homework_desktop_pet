@@ -41,6 +41,8 @@ def reload_live2d_model(desk, new_model_path: str) -> bool:
 
     try:
         desk._init_model_gl()
+        if getattr(desk, "_model", None) is None:
+            raise RuntimeError("Live2D model init returned no model")
         print(f"[ModelSwitcher] Model loaded: {new_model_path}")
         return True
     except Exception as exc:
@@ -53,6 +55,8 @@ def reload_live2d_model(desk, new_model_path: str) -> bool:
             desk.model_path = os.path.normpath(old_path)
             try:
                 desk._init_model_gl()
+                if getattr(desk, "_model", None) is None:
+                    raise RuntimeError("Live2D rollback init returned no model")
                 print(f"[ModelSwitcher] Rollback successful")
             except Exception:
                 print(f"[ModelSwitcher] Rollback also failed")

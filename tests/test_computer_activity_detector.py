@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.nlp.deepseek_api import DeepSeekClient
 from models.nlp.prompt_builder import build_proactive_prompt, build_state_context
+from app.ui.ui_settings_store import DEFAULT_PERSONALIZATION_SETTINGS
 from models.vision.computer_activity_detector import (
     ACTIVITY_BROWSING,
     ACTIVITY_CHATTING,
@@ -124,6 +125,45 @@ def test_default_detector_comments_on_first_game_detection():
     assert state["activity_code"] == ACTIVITY_GAMING
     assert state["duration"] == 0.0
     assert state["need_response"] is True
+
+
+def test_detector_can_comment_on_authorized_work_contexts():
+    detector = ComputerActivityDetector()
+    detector._read_foreground_window = lambda: ForegroundWindow(
+        hwnd=2,
+        process_name="Code.exe",
+        process_path="",
+        window_title="desktop_pet.py - Visual Studio Code",
+        is_fullscreen=False,
+    )
+
+    state = detector.get_state()
+    event = build_companion_event(state)
+
+    assert state["activity_code"] == ACTIVITY_CODING
+    assert state["need_response"] is True
+    assert event["activity_code"] == ACTIVITY_CODING
+    assert "编程" in event["suggestion"] or "代码" in event["suggestion"]
+
+
+def test_chat_windows_are_not_proactively_commented_on():
+    state = classify_window_activity(
+        process_name="WeChat.exe",
+        window_title="微信",
+        is_fullscreen=False,
+    )
+    state["duration"] = 180.0
+
+    assert state["activity_code"] == ACTIVITY_CHATTING
+    assert build_companion_event(state) == {}
+
+
+def test_desktop_access_defaults_require_explicit_authorization():
+    desktop_access = DEFAULT_PERSONALIZATION_SETTINGS["desktop_access"]
+
+    assert desktop_access["foreground_observation_authorized"] is False
+    assert desktop_access["proactive_comment_enabled"] is True
+    assert desktop_access["include_window_title"] is True
 
 
 def test_prompt_builder_includes_computer_activity_context():

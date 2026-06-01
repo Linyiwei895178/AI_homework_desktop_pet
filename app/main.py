@@ -1,41 +1,25 @@
 """
 AI_Desktop_Pet - 程序入口
 启动桌面UI，加载桌宠，处理事件循环
-
-模块结构（8大模块）：
-- utils:    config, logger, event_log, time_utils, safe_json, file_manager
-- app/ui:   DesktopPet, widgets, pet_motion, cloud_panel, feedback_bubble, ui_settings_store
-- app/controller: EventHandler, PetController
-- app/services: EventBus, AppContext, SyncScheduler, DemoMode
-- models/state: PetState, BehaviorRules, EchoTeamDInterface, UserProfile, PetLeveling, StateSerialization
-- models/nlp:  DeepSeekClient, PromptBuilder, EmotionAnalyzer, ProactiveEventBuilder
-- models/tts:  TTSEngine, TTSManager, SoundEffectManager, EchoTeamCInterface
-- models/vision: UserStateDetector, ComputerActivityDetector, QwenVLClient, ScreenUsageTracker, GestureDetector, CompanionEventBuilder
-- models/cloud: CloudConfig, CloudModels, SupabaseCloudService, SharedPetRoomManager
 """
 import sys
 import os
-from pathlib import Path
 
 # 将项目根目录加入 sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-# ── Team A: UI ──
 from app.ui.desktop_pet import DesktopPet
 from app.controller.event_handler import EventHandler
 from app.controller.pet_controller import PetController
-# ── Team D: State ──
 from models.state.pet_state import PetState
 from models.state.behavior_rules import decide_action
 from models.state.echo_team_d_interface import EchoTeamDInterface
-# ── Team C: NLP / TTS ──
 from models.nlp.deepseek_api import generate_pet_reply, DeepSeekClient
 from models.tts.tts_manager import speak
 from models.tts.echo_team_c_interface import EchoTeamCInterface
-# ── Team B: Vision ──
 from models.vision.qwen_vl_api import get_user_state, QwenVLClient
 from models.vision.user_state_detector import (
     UserStateDetector,
@@ -43,15 +27,7 @@ from models.vision.user_state_detector import (
     STATE_AWAY, STATE_RETURN, STATE_STUDY_LONG, STATE_LOW_LIGHT,
     STATE_CAMERA_ERROR, STATE_UNKNOWN,
 )
-# ── Utils ──
 from utils.logger import setup_logger
-from utils.event_log import get_event_log
-from utils.time_utils import CooldownTracker
-from utils.safe_json import safe_read_json, safe_write_json
-from utils.file_manager import FileManager, file_manager
-from app.services.event_bus import get_event_bus
-from app.services.app_context import AppContext
-from app.services.demo_mode import MockUserStateProvider
 
 
 def main():
@@ -88,7 +64,15 @@ def main():
     team_c = EchoTeamCInterface()
 
     # 队员C ← 注册队员D的状态回调（对话结束后通知队员D）
-    team_c.api_register_logic_callback(team_d.api_on_chat_finished)
+    def _on_team_c_chat_event(event):
+        if isinstance(event, dict):
+            if hasattr(team_d, "api_update_from_chat_emotion"):
+                team_d.api_update_from_chat_emotion(event)
+            team_d.api_on_chat_finished(int(event.get("word_count", 0) or 0))
+        else:
+            team_d.api_on_chat_finished(int(event or 0))
+
+    team_c.api_register_logic_callback(_on_team_c_chat_event)
 
     # 队员D ← 注册队员C的状态监听（状态变化时通知队员C）
     team_d.api_register_status_listener(lambda event: logger.info(f"[队员C←队员D] 状态事件: {event}"))
@@ -106,73 +90,56 @@ def main():
     logger.info("[队员A] 鼠标事件回调绑定完成")
 
     # ====== 6. 初始化用户状态检测器 (队员B) ======
-    MOCK_ENABLED = os.getenv("DESKTOP_PET_MOCK_USER_STATE", "false").strip().lower() in {
-        "1", "true", "yes", "y", "on"
-    }  # 可通过环境变量强制开启模拟状态
-    mock_user_state_provider = MockUserStateProvider(cycle_seconds=10.0)
-    required_user_state_fields = {
-        "state_code", "state_name", "description", "tags", "confidence",
-        "duration", "need_response", "suggestion", "source",
-    }
-    allowed_user_state_codes = {
-        STATE_NORMAL, STATE_FOCUSED, STATE_DISTRACTED, STATE_TIRED,
-        STATE_AWAY, STATE_RETURN, STATE_STUDY_LONG, STATE_LOW_LIGHT,
-        STATE_CAMERA_ERROR, STATE_UNKNOWN,
-    }
-    vision_fallback_logged = False
-
-    user_detector = None
-    VISION_ENABLED = (
-        not MOCK_ENABLED
-        and os.getenv("DESKTOP_PET_ENABLE_USER_STATE_DETECTOR", "true").strip().lower() in {
-            "1", "true", "yes", "y", "on"
-        }
-    )
-    if VISION_ENABLED:
-        try:
-            user_detector = UserStateDetector(enable_vlm=False)
-            user_detector.start()
-            logger.info("[队员B] 用户状态检测器已启动")
-        except Exception:
-            user_detector = None
-            logger.exception("[队员B] 用户状态检测器初始化失败，切换到 mock 用户状态，继续启动桌宠。")
-    else:
-        logger.info(f"[队员B] 使用 mock 用户状态（mock={MOCK_ENABLED}, vision_enabled={VISION_ENABLED}）")
+    # 取消注释以下代码即可启用摄像头检测：
+    # user_detector = UserStateDetector(enable_vlm=False)
+    # user_detector.set_mock_state(STATE_NORMAL)
+    # team_d.api_bind_vision_detector(user_detector)  # 队员B → 队员D 自动同步
+    # user_detector.start()
+    # logger.info("[队员B] 用户状态检测器已启动，已绑定队员D")
 
     # ====== 7. 启动定时状态检测 + 自动回应 ======
+    MOCK_ENABLED = os.getenv("DESKTOP_PET_MOCK_USER_STATE", "false").strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }  # demo阶段可通过环境变量开启模拟状态
+
     def check_user_state():
         """定时检测用户状态，更新桌宠行为和对话"""
-        nonlocal vision_fallback_logged
+        if MOCK_ENABLED:
+            # demo阶段：使用模拟状态轮换展示功能
+            mock_states_cycle = [
+                STATE_NORMAL,
+                STATE_FOCUSED,
+                STATE_DISTRACTED,
+                STATE_TIRED,
+                STATE_RETURN,
+            ]
+            import time
+            idx = int(time.time() / 10) % len(mock_states_cycle)
+            mock_code = mock_states_cycle[idx]
 
-        if MOCK_ENABLED or user_detector is None:
-            user_state = mock_user_state_provider.get_state()
+            # 构建模拟状态字典
+            user_state = {
+                "state_code": mock_code,
+                "state_name": {
+                    STATE_NORMAL: "正常状态",
+                    STATE_FOCUSED: "专注学习",
+                    STATE_DISTRACTED: "疑似分心",
+                    STATE_TIRED: "疑似疲劳",
+                    STATE_RETURN: "回到座位",
+                }.get(mock_code, "未知"),
+                "description": f"模拟状态: {mock_code}",
+                "tags": [mock_code, "mock"],
+                "confidence": 0.85,
+                "duration": 10.0,
+                "need_response": mock_code in (STATE_DISTRACTED, STATE_TIRED),
+                "suggestion": "根据用户状态做出合适的回应。",
+                "source": ["mock"],
+            }
         else:
             # 正式模式：从 UserStateDetector 获取真实状态
-            try:
-                user_state = user_detector.get_state()
-            except Exception:
-                if not vision_fallback_logged:
-                    logger.exception("[队员B] 获取用户状态失败，切换到 mock 用户状态。")
-                    vision_fallback_logged = True
-                user_state = mock_user_state_provider.get_state()
-
-            if not required_user_state_fields.issubset(set(user_state.keys())):
-                if not vision_fallback_logged:
-                    logger.warning("[队员B] 用户状态字段不完整，切换到 mock 用户状态。")
-                    vision_fallback_logged = True
-                user_state = mock_user_state_provider.get_state()
-
-            if user_state.get("state_code") not in allowed_user_state_codes:
-                if not vision_fallback_logged:
-                    logger.warning("[队员B] 用户状态码不合法，切换到 mock 用户状态。")
-                    vision_fallback_logged = True
-                user_state = mock_user_state_provider.get_state()
-
-            if user_state.get("state_code") == STATE_CAMERA_ERROR:
-                if not vision_fallback_logged:
-                    logger.warning("[队员B] 摄像头不可用或权限不足，切换到 mock 用户状态。")
-                    vision_fallback_logged = True
-                user_state = mock_user_state_provider.get_state()
+            # user_state = user_detector.get_state()
+            QTimer.singleShot(3000, check_user_state)
+            return  # 真实视觉检测未开启时保持安静
 
         # 6a. 更新桌宠状态（队员B → 队员D）
         team_d.api_apply_user_state(user_state)
@@ -208,15 +175,14 @@ def main():
                 speak(hint, state="hint", action="speak")
                 # 注意：主动提示不计入对话字数，不更新状态
 
-    # 启动定时检测（每 3 秒一次）。挂到 pet 上避免 QTimer 被垃圾回收。
-    state_timer = QTimer(app)
-    state_timer.setInterval(3000)
-    state_timer.timeout.connect(check_user_state)
-    pet._user_state_timer = state_timer
-    state_timer.start()
+        # 6e. 定时循环（每 3 秒检测一次）
+        QTimer.singleShot(3000, check_user_state)
+
+    # 启动定时检测（延迟 1 秒后首次执行）
+    QTimer.singleShot(1000, check_user_state)
     logger.info(f"[主循环] 定时状态检测已启动（每3秒一次，mock={MOCK_ENABLED}）")
 
-    # ====== 8. 启动事件循环（Qt主事件循环） ======
+    # ====== 8. 启动事件循环（Tkinter主事件循环） ======
     logger.info("启动桌面宠物事件循环...")
     try:
         pet.run()
@@ -226,8 +192,8 @@ def main():
         logger.exception(f"运行时异常: {e}")
     finally:
         # 停止用户状态检测器（如果已启动）
-        if user_detector:
-            user_detector.stop()
+        # if "user_detector" in dir() and user_detector:
+        #     user_detector.stop()
         if getattr(pet, "_running", False):
             pet.close()
         logger.info("AI_Desktop_Pet 已退出。")

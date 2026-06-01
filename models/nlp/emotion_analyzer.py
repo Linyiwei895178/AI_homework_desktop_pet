@@ -1,142 +1,195 @@
 """
-EmotionAnalyzer: lightweight rule-based chat emotion analysis.
+Rule-based chat emotion analysis for Team C.
 
-Supports positive, neutral, stress, sad, angry, tired, confused.
-# TODO: use DeepSeek for better emotion analysis.
+The analyzer intentionally stays deterministic and dependency-free so it can
+run for every user message before the LLM/TTS path starts.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
-# Keyword rules for each emotion category
-_EMOTION_KEYWORDS: Dict[str, List[str]] = {
-    "positive": [
-        "开心", "高兴", "好", "棒", "赞", "喜欢", "爱", "哈哈", "嘿嘿",
-        "不错", "谢谢", "感谢", "完美", "厉害", "漂亮", "舒服", "放松",
-        "happy", "great", "love", "nice", "good", "wow", "awesome",
-    ],
-    "stress": [
-        "压力", "焦虑", "紧张", "忙", "累死了", "赶", "deadline", "ddl",
-        "烦", "爆", "撑不住", "好难", "崩溃", "stress", "anxious", "overwhelmed",
-    ],
-    "sad": [
-        "难过", "伤心", "哭", "泪", "失落", "失望", "孤单", "寂寞",
-        "想哭", "心累", "没意思", "sad", "cry", "lonely", "depressed",
-    ],
-    "angry": [
-        "生气", "烦死了", "气死", "讨厌", "火大", "暴躁", "愤怒",
-        "受不了", "怒", "angry", "mad", "annoyed", "frustrated",
-    ],
-    "tired": [
-        "困", "累", "想睡", "没精神", "乏力", "疲劳", "倦",
-        "不想动", "tired", "sleepy", "exhausted", "drained",
-    ],
-    "confused": [
-        "?", "不懂", "什么", "为啥", "怎么", "奇怪", "迷", "疑惑",
-        "confused", "what", "why", "huh", "puzzled",
-    ],
-    "neutral": [],  # fallback
+EMOTION_LABELS = ("positive", "neutral", "stress", "sad", "angry", "tired", "confused")
+
+_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "positive": (
+        "开心",
+        "高兴",
+        "舒服",
+        "喜欢",
+        "爱你",
+        "太好了",
+        "棒",
+        "顺利",
+        "谢谢",
+        "哈哈",
+        "嘿嘿",
+        "happy",
+        "great",
+        "thanks",
+        "love",
+    ),
+    "stress": (
+        "压力",
+        "焦虑",
+        "紧张",
+        "崩溃",
+        "忙不过来",
+        "来不及",
+        "ddl",
+        "deadline",
+        "考试",
+        "项目",
+        "加班",
+        "撑不住",
+        "stress",
+        "stressed",
+        "anxious",
+    ),
+    "sad": (
+        "难过",
+        "伤心",
+        "委屈",
+        "想哭",
+        "孤独",
+        "失落",
+        "不开心",
+        "心累",
+        "sad",
+        "upset",
+        "lonely",
+        "cry",
+    ),
+    "angry": (
+        "生气",
+        "愤怒",
+        "气死",
+        "烦死",
+        "讨厌",
+        "恶心",
+        "火大",
+        "别烦",
+        "滚",
+        "angry",
+        "mad",
+        "hate",
+    ),
+    "tired": (
+        "累",
+        "困",
+        "疲惫",
+        "没精神",
+        "睡不醒",
+        "熬夜",
+        "想睡",
+        "休息",
+        "tired",
+        "sleepy",
+        "exhausted",
+    ),
+    "confused": (
+        "不懂",
+        "不会",
+        "迷茫",
+        "困惑",
+        "搞不懂",
+        "怎么办",
+        "为什么",
+        "怎么回事",
+        "不知道",
+        "confused",
+        "why",
+        "how",
+        "what",
+    ),
 }
 
+_SUGGESTIONS = {
+    "positive": "接住用户的好心情，轻快回应，可以一起庆祝一下。",
+    "neutral": "自然陪聊，保持简短友好。",
+    "stress": "先安抚压力，再建议把事情拆成一个很小的下一步。",
+    "sad": "先共情陪伴，不急着讲道理，给一个温柔的小建议。",
+    "angry": "先承认用户的不爽，避免火上浇油，引导慢慢说。",
+    "tired": "提醒用户放松和休息，语气放轻。",
+    "confused": "帮用户把问题理清楚，先问或给一个最小起点。",
+}
 
-def analyze_chat_emotion(
-    text: str,
-    history: Optional[List[str]] = None,
-) -> Dict[str, Any]:
+_CARE_LABELS = {"stress", "sad", "angry", "tired", "confused"}
+
+
+def analyze_chat_emotion(text: str, history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """
-    Analyze the emotion of a chat message using keyword rules.
+    Classify one user message into a small, stable emotion label.
 
-    :param text:    user's input text
-    :param history: optional list of recent chat messages (not yet used)
-    :returns: dict with keys:
-        - emotion_label: str (positive/neutral/stress/sad/angry/tired/confused)
-        - confidence:     float (0.0-1.0)
-        - reason:         str
-        - suggestion:     str (action suggestion for the pet)
-        - need_care:      bool
-
-    # TODO: use DeepSeek for better emotion analysis (check deepseek_api availability).
+    Returns a dict containing emotion_label, confidence, reason, suggestion and
+    need_care. `history` is accepted for future model-backed analysis.
     """
-    if not text or not text.strip():
-        return {
-            "emotion_label": "neutral",
-            "confidence": 0.8,
-            "reason": "用户没有输入文本。",
-            "suggestion": "保持安静陪伴。",
-            "need_care": False,
-        }
+    value = str(text or "").strip()
+    if not value:
+        return _result("neutral", 0.45, "用户没有输入有效内容。")
 
-    cleaned = text.lower().strip()
+    # TODO: use DeepSeek for better analysis.
+    scores: dict[str, float] = {label: 0.0 for label in EMOTION_LABELS}
+    lowered = value.lower()
+    for label, keywords in _KEYWORDS.items():
+        for keyword in keywords:
+            if keyword and keyword.lower() in lowered:
+                scores[label] += 1.0 + min(0.4, len(keyword) / 12)
 
-    # Score each emotion category
-    scores: Dict[str, int] = {}
-    for emotion, keywords in _EMOTION_KEYWORDS.items():
-        if not keywords:
-            continue
-        score = 0
-        for kw in keywords:
-            # Count keyword occurrences
-            score += len(re.findall(re.escape(kw.lower()), cleaned))
-        if score > 0:
-            scores[emotion] = score
+    punctuation_boost = min(0.25, value.count("!") * 0.06 + value.count("！") * 0.06)
+    if punctuation_boost:
+        if scores["angry"] > 0:
+            scores["angry"] += punctuation_boost
+        elif scores["positive"] > 0:
+            scores["positive"] += punctuation_boost
 
-    if not scores:
-        return _neutral_result()
+    if re.search(r"(吗|嘛|么|？|\?)\s*$", value):
+        scores["confused"] += 0.35
+    if re.search(r"(呜|唉|哎|唔|哭|555|www)", lowered):
+        scores["sad"] += 0.45
+    if re.search(r"(啊啊+|烦+|草+)", lowered):
+        scores["angry"] += 0.35
+    if len(value) <= 3 and not any(scores.values()):
+        scores["neutral"] = 0.45
 
-    # Pick the highest-scored emotion
-    best_emotion = max(scores, key=scores.get)
-    best_score = scores[best_emotion]
-    total_score = sum(scores.values())
+    label, raw_score = max(scores.items(), key=lambda item: item[1])
+    if raw_score <= 0:
+        label = "neutral"
+        raw_score = 0.5
 
-    confidence = min(1.0, (best_score / max(total_score, 1)) * 0.6 + 0.3)
+    confidence = _confidence(raw_score, value)
+    reason = _reason(label, value, raw_score)
+    return _result(label, confidence, reason)
 
-    result = _build_result(best_emotion, confidence)
-    return result
 
-
-def _neutral_result() -> Dict[str, Any]:
+def _result(label: str, confidence: float, reason: str) -> dict[str, Any]:
+    emotion_label = label if label in EMOTION_LABELS else "neutral"
     return {
-        "emotion_label": "neutral",
-        "confidence": 0.8,
-        "reason": "未检测到明显情绪关键词。",
-        "suggestion": "保持自然陪伴。",
-        "need_care": False,
+        "emotion_label": emotion_label,
+        "confidence": round(max(0.0, min(1.0, float(confidence))), 2),
+        "reason": reason,
+        "suggestion": _SUGGESTIONS[emotion_label],
+        "need_care": emotion_label in _CARE_LABELS,
     }
 
 
-def _build_result(emotion: str, confidence: float) -> Dict[str, Any]:
-    suggestions = {
-        "positive": "用户心情不错，可以一起开心互动。",
-        "stress": "用户有压力，先用温暖的话安抚，再简短鼓励。",
-        "sad": "用户有点低落，温柔陪伴，不要追问原因。",
-        "angry": "用户有点烦躁，先安抚情绪，不要讲道理。",
-        "tired": "用户很疲惫，建议简短关心，鼓励休息。",
-        "confused": "用户有些困惑，可以简单解释或询问是否需要帮助。",
-    }
-    need_care_map = {
-        "positive": False,
-        "neutral": False,
-        "stress": True,
-        "sad": True,
-        "angry": True,
-        "tired": True,
-        "confused": False,
-    }
-    reasons = {
-        "positive": "检测到开心/积极词汇。",
-        "stress": "检测到压力/焦虑相关词汇。",
-        "sad": "检测到难过/失落相关词汇。",
-        "angry": "检测到生气/烦躁相关词汇。",
-        "tired": "检测到疲惫/困倦相关词汇。",
-        "confused": "检测到困惑/疑问相关词汇。",
-    }
-    return {
-        "emotion_label": emotion,
-        "confidence": round(confidence, 2),
-        "reason": reasons.get(emotion, "关键词匹配结果。"),
-        "suggestion": suggestions.get(emotion, "根据当前状态自然回应。"),
-        "need_care": need_care_map.get(emotion, False),
-    }
+def _confidence(score: float, text: str) -> float:
+    base = 0.52 + min(0.36, score * 0.13)
+    if len(text) >= 12:
+        base += 0.04
+    return base
+
+
+def _reason(label: str, text: str, score: float) -> str:
+    if label == "neutral":
+        return "没有明显情绪关键词，按普通聊天处理。"
+    matched = [
+        keyword
+        for keyword in _KEYWORDS.get(label, ())
+        if keyword and keyword.lower() in text.lower()
+    ]
+    if matched:
+        return f"检测到“{matched[0]}”等表达，倾向 {label}。"
+    return f"根据语气和上下文线索，倾向 {label}。"

@@ -1,0 +1,178 @@
+{
+  "format": "pet_buddy_live2d_base_template_v2",
+  "name": "smooth_front_view_white_mannequin_base",
+  "canvas": {
+    "width": 1024,
+    "height": 1536
+  },
+  "view": "front/main",
+  "purpose": "high-resolution smooth white mannequin base for Live2D-style rigging and later face/hair/outfit drawing",
+  "preview": "base_front_preview.png",
+  "high_fidelity_preview": "ai_chroma_front_reference_transparent.png",
+  "high_fidelity_cut_layers": {
+    "manifest": "ai_cut_layers/manifest.json",
+    "full_base": "ai_cut_layers/full_base.png",
+    "layered_preview": "ai_cut_layers/layered_preview.png"
+  },
+  "face_construction_preview": "face_front_construction.png",
+  "draw_order": [
+    "left_leg",
+    "right_leg",
+    "neck",
+    "left_arm",
+    "right_arm",
+    "torso",
+    "left_ear",
+    "right_ear",
+    "head",
+    "face_relief",
+    "face_guides"
+  ],
+  "layers": {
+    "left_leg": "layers/left_leg.png",
+    "right_leg": "layers/right_leg.png",
+    "neck": "layers/neck.png",
+    "left_arm": "layers/left_arm.png",
+    "right_arm": "layers/right_arm.png",
+    "torso": "layers/torso.png",
+    "left_ear": "layers/left_ear.png",
+    "right_ear": "layers/right_ear.png",
+    "head": "layers/head.png",
+    "face_relief": "layers/face_relief.png",
+    "face_guides": "layers/face_guides.png"
+  },
+  "anchors": {
+    "head": {
+      "top": [
+        512,
+        78
+      ],
+      "center": [
+        512,
+        334
+      ],
+      "chin": [
+        512,
+        586
+      ],
+      "left_eye_socket": [
+        430,
+        376
+      ],
+      "right_eye_socket": [
+        594,
+        376
+      ],
+      "mouth": [
+        512,
+        488
+      ]
+    },
+    "body": {
+      "neck": [
+        512,
+        612
+      ],
+      "shoulders": [
+        [
+          350,
+          642
+        ],
+        [
+          674,
+          642
+        ]
+      ],
+      "waist": [
+        [
+          412,
+          1050
+        ],
+        [
+          612,
+          1050
+        ]
+      ],
+      "hands": [
+        [
+          288,
+          1092
+        ],
+        [
+          736,
+          1092
+        ]
+      ],
+      "feet": [
+        [
+          392,
+          1410
+        ],
+        [
+          632,
+          1410
+        ]
+      ]
+    }
+  },
+  "recommended_live2d_params": {
+    "ParamAngleX": {
+      "range": [
+        -10,
+        10
+      ],
+      "layers": [
+        "head",
+        "left_ear",
+        "right_ear",
+        "face_relief"
+      ]
+    },
+    "ParamAngleY": {
+      "range": [
+        -8,
+        8
+      ],
+      "layers": [
+        "head",
+        "face_relief",
+        "neck"
+      ]
+    },
+    "ParamBodyAngleX": {
+      "range": [
+        -6,
+        6
+      ],
+      "layers": [
+        "torso",
+        "left_arm",
+        "right_arm"
+      ]
+    },
+    "ParamBreath": {
+      "range": [
+        0,
+        1
+      ],
+      "layers": [
+        "torso",
+        "neck"
+      ]
+    },
+    "ParamEyeLOpen": {
+      "range": [
+        0,
+        1
+      ],
+      "source": "replace left socket with final eye layers"
+    },
+    "ParamEyeROpen": {
+      "range": [
+        0,
+        1
+      ],
+      "source": "replace right socket with final eye layers"
+    }
+  }
+}

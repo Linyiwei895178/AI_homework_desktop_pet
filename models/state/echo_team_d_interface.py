@@ -26,12 +26,12 @@ EchoTeamDInterface - State / 行为决策 接口管理层
 """
 
 import threading
+import time
 from typing import Callable, Dict, Any, Optional
 
 from models.state.pet_state import PetState
 from models.state.behavior_rules import BehaviorRules
-from models.state.pet_leveling import apply_leveling_state
-from models.state.state_serialization import pet_state_to_dict, apply_dict_to_pet_state
+from models.state.user_profile import UserProfile
 
 
 class EchoTeamDInterface:
@@ -51,6 +51,7 @@ class EchoTeamDInterface:
         """
         self.pet_state = pet_state_instance
         self.rules = BehaviorRules(pet_state_instance)
+        self.user_profile = UserProfile.load()
 
         # 队员C注册的状态变化监听器
         self._status_change_listener: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -185,6 +186,75 @@ class EchoTeamDInterface:
                 target=self._status_change_listener, args=(event_data,), daemon=True
             ).start()
 
+    def api_update_from_chat_emotion(self, emotion_result: Dict[str, Any]) -> None:
+        """
+        【队员C专用】根据聊天情绪分析结果更新用户画像和桌宠状态。
+
+        `emotion_result` 可以是 analyze_chat_emotion 的结果，也可以是
+        Team C 发出的 user_chat 事件字典，其中包含 emotion_result 字段。
+        """
+        result = emotion_result.get("emotion_result") if isinstance(emotion_result, dict) else None
+        if not isinstance(result, dict):
+            result = emotion_result if isinstance(emotion_result, dict) else {}
+        if not result:
+            return
+
+        self.user_profile.update_from_chat_emotion(result)
+        try:
+            self.user_profile.save()
+        except OSError as exc:
+            print(f"[EchoTeamDInterface] 用户画像保存失败: {exc}")
+
+        label = str(result.get("emotion_label") or "neutral").strip()
+        confidence = _safe_float(result.get("confidence"), 0.0)
+        need_care = bool(result.get("need_care"))
+        ps = self.pet_state
+
+        if label == "positive":
+            ps.mood = "happy"
+            ps.intimacy = min(100, ps.intimacy + 2)
+            ps.energy = max(0, ps.energy - 1)
+        elif label == "angry":
+            ps.mood = "angry"
+            ps.energy = max(0, ps.energy - 2)
+        elif label in {"stress", "sad", "tired", "confused"}:
+            ps.mood = "sad"
+            ps.energy = max(0, ps.energy - (2 if label in {"stress", "tired"} else 1))
+            if need_care and confidence >= 0.55:
+                ps.intimacy = min(100, ps.intimacy + 1)
+        else:
+            if ps.mood == "angry":
+                ps.mood = "neutral"
+
+        if hasattr(ps, "_history"):
+            ps._history.append(
+                {
+                    "event": f"chat_emotion:{label}",
+                    "mood": ps.mood,
+                    "energy": ps.energy,
+                    "intimacy": ps.intimacy,
+                    "emotion_result": dict(result),
+                    "timestamp": time.time(),
+                }
+            )
+
+        if need_care and self._status_change_listener:
+            event_data = {
+                "event_type": "chat_emotion_alert",
+                "emotion_result": dict(result),
+                "state_code": label,
+                "suggestion": result.get("suggestion", ""),
+                "action": self.api_decide_action(),
+                "pet_id": self.pet_state.pet_id,
+                "mood": self.pet_state.mood,
+                "energy": self.pet_state.energy,
+                "intimacy": self.pet_state.intimacy,
+                "user_profile": self.user_profile.to_prompt_context(),
+            }
+            threading.Thread(
+                target=self._status_change_listener, args=(event_data,), daemon=True
+            ).start()
+
     # =========================================================================
     # 接口 7：提供给 【队员C (NLP/TTS)】 —— 获取主动语音提示文本
     # =========================================================================
@@ -262,73 +332,6 @@ class EchoTeamDInterface:
     # =========================================================================
     # 接口 12：提供给 【队员C (NLP/TTS)】 —— 持久化状态
     # =========================================================================
-
-    # =========================================================================
-    # 接口 14：提供给 【队员A/C】 —— 应用互动并返回状态变化
-    # =========================================================================
-    def api_apply_interaction(self, action_type: str, actor: str = "local") -> dict:
-        """
-        应用一次互动（点击/投喂/玩耍/打工等），更新桌宠状态并返回变化。
-
-        :param action_type: 互动类型
-        :param actor: 互动执行者
-        :return: 状态变化字典
-        """
-        return self.pet_state.apply_interaction(action_type, actor)
-
-    # =========================================================================
-    # 接口 15：提供给 【Cloud】 —— 获取云端同步数据载荷
-    # =========================================================================
-    def api_get_cloud_sync_payload(self) -> dict:
-        """
-        获取当前桌宠状态的云端同步数据载荷。
-
-        :return: 包含所有状态字段的字典
-        """
-        return pet_state_to_dict(self.pet_state)
-
-    # =========================================================================
-    # 接口 16：提供给 【Cloud】 —— 应用云端拉取的状态
-    # =========================================================================
-    def api_apply_cloud_state(self, state_dict: dict) -> None:
-        """
-        将云端拉取的状态应用到本地桌宠。
-        # TODO: 冲突解决（updated_at 最新覆盖 / 事件增量合并）
-
-        :param state_dict: 云端状态字典
-        """
-        apply_dict_to_pet_state(self.pet_state, state_dict)
-
-    # =========================================================================
-    # 接口 17：提供给 【队员C】 —— 从聊天情绪分析结果更新状态
-    # =========================================================================
-    def api_update_from_chat_emotion(self, emotion_result: dict) -> None:
-        """
-        根据聊天情绪分析结果更新桌宠状态。
-
-        :param emotion_result: emotion_analyzer.analyze_chat_emotion() 的输出
-        """
-        if not isinstance(emotion_result, dict):
-            return
-        label = emotion_result.get("emotion_label", "neutral")
-        need_care = emotion_result.get("need_care", False)
-        if need_care:
-            self.pet_state.mood = label if label in ("sad", "angry", "hungry") else self.pet_state.mood
-        print(f"[EchoTeamDInterface] 情绪分析更新: {label}, need_care={need_care}")
-
-    # =========================================================================
-    # 接口 18：提供给 【NLP】 —— 获取用户画像上下文
-    # =========================================================================
-    def api_get_user_profile_context(self) -> dict:
-        """
-        获取用户画像的prompt上下文。
-        # TODO: 接入 UserProfile 实例
-
-        :return: 用户画像上下文字典，未接入时返回空字典
-        """
-        if hasattr(self, "_user_profile") and self._user_profile:
-            return self._user_profile.to_prompt_context()
-        return {}
     def api_save_state(self, filepath: Optional[str] = None):
         """
         【队员C专用】将当前桌宠状态持久化到 JSON 文件。
@@ -347,3 +350,10 @@ class EchoTeamDInterface:
         :param filepath: 读取路径，默认 logs/pet_state.json
         """
         self.pet_state.load_state(filepath)
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

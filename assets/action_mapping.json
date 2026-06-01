@@ -18,36 +18,12 @@
     ]
   },
   "winter": {},
-  "monkey": {
+  "我的Live2D角色": {
     "idle": [
-      "Idle"
+      "我的Live2D角色/我的Live2D角色_anim_idle.gif"
     ],
     "happy": [
-      "WTF"
-    ],
-    "surprised": [
-      "WTF"
-    ],
-    "angry": [
-      "WTF"
-    ],
-    "sad": [
-      "BRA"
-    ],
-    "shy": [
-      "BRA"
-    ],
-    "customize_hair": [
-      "HairCustom"
-    ],
-    "wear_glasses": [
-      "GLASSES"
-    ],
-    "wear_sunglasses": [
-      "SUNGLASSES"
-    ],
-    "wear_coat": [
-      "COAT"
+      "我的Live2D角色/我的Live2D角色_anim_happy.gif"
     ]
   }
 }

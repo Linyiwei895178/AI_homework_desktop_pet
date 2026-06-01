@@ -211,6 +211,10 @@ def build_system_prompt(
     response_language: Any = None,
 ) -> str:
     state_context = build_state_context(current_state)
+    personalization_context = build_personalization_context(current_state)
+    full_context = state_context
+    if personalization_context:
+        full_context = f"{state_context}；{personalization_context}"
     language = (
         normalize_response_language(response_language)
         or _response_language_from_state(current_state)
@@ -223,7 +227,7 @@ def build_system_prompt(
             "说话要适合被语音朗读，句子短一点，语气软一点。"
             "回复要短；不要说自己是大模型，不要暴露接口或状态字段名。"
             "如果用户状态需要关心，先共情，再给一个很小的行动建议。"
-            f"\n\n当前上下文：{state_context}"
+            f"\n\n当前上下文：{full_context}"
         )
     if language == "zh-TW":
         return (
@@ -232,7 +236,7 @@ def build_system_prompt(
             "说话要适合被语音朗读，句子短一点，语气软一点。"
             "回复要短；不要说自己是大模型，不要暴露接口或状态字段名。"
             "如果用户状态需要关心，先共情，再给一个很小的行动建议。"
-            f"\n\n当前上下文：{state_context}"
+            f"\n\n当前上下文：{full_context}"
         )
     if language != "zh-CN":
         language_name = RESPONSE_LANGUAGE_NAMES.get(language, "the selected language")
@@ -244,7 +248,7 @@ def build_system_prompt(
             "Keep replies brief unless the user clearly asks for more. "
             "Do not say you are a large language model, and do not expose API or state field names. "
             "If the user's state needs care, empathize first, then offer one tiny next step. "
-            f"\n\nCurrent context: {state_context}"
+            f"\n\nCurrent context: {full_context}"
         )
     return (
         "你是桌面宠物 Echo，是一个亲切、活泼、声音甜一点的可爱女孩。"
@@ -255,7 +259,7 @@ def build_system_prompt(
         "回复要短，通常控制在 80 个中文字符以内；除非用户明确要求长回答。"
         "不要说自己是大模型，不要暴露接口或状态字段名。"
         "如果用户状态需要关心，先共情，再给一个很小的行动建议。"
-        f"\n\n当前上下文：{state_context}"
+        f"\n\n当前上下文：{full_context}"
     )
 
 
@@ -321,14 +325,133 @@ def build_state_context(current_state: Optional[Dict[str, Any]]) -> str:
     return "；".join(parts) if parts else "暂无用户状态信息。"
 
 
+def build_personalization_context(current_state: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(current_state, dict):
+        return ""
+
+    personalization = current_state.get("personalization_settings")
+    if not isinstance(personalization, dict):
+        personalization = {}
+    profile = _profile_context(current_state.get("user_profile"))
+
+    speech_style = personalization.get("speech_style") if isinstance(personalization.get("speech_style"), dict) else {}
+    interaction = (
+        personalization.get("interaction_frequency")
+        if isinstance(personalization.get("interaction_frequency"), dict)
+        else {}
+    )
+    companion = (
+        personalization.get("companion_mode")
+        if isinstance(personalization.get("companion_mode"), dict)
+        else {}
+    )
+
+    tone = str(speech_style.get("tone") or profile.get("tone") or "").strip()
+    nickname = str(speech_style.get("nickname") or profile.get("nickname") or "").strip()
+    catchphrase = str(speech_style.get("catchphrase") or profile.get("catchphrase") or "").strip()
+    relationship = str(profile.get("relationship") or companion.get("mode") or "").strip()
+    comfort_level = profile.get("comfort_level")
+    recent_emotions = _recent_emotion_labels(profile.get("recent_emotions"))
+    activity_summary = _activity_summary(profile.get("activity_stats"))
+
+    parts: list[str] = []
+    if nickname:
+        parts.append(f"可以自然称呼用户为“{nickname}”")
+    if relationship:
+        parts.append(f"你和用户的关系像“{relationship}”，回复要有陪伴感")
+    if catchphrase:
+        parts.append(f"偶尔可以自然带上口头禅“{catchphrase}”，不要生硬重复")
+    tone_hint = _tone_hint(tone)
+    if tone_hint:
+        parts.append(tone_hint)
+    if isinstance(comfort_level, (int, float)):
+        if comfort_level <= 35:
+            parts.append("用户最近更需要安稳和被接住，少开玩笑，多一点确定的陪伴")
+        elif comfort_level >= 75:
+            parts.append("用户最近状态较松弛，可以更轻快亲近一点")
+    if recent_emotions:
+        parts.append(f"最近聊天情绪多为{recent_emotions}，回应时顺着这个气氛")
+    if activity_summary:
+        parts.append(activity_summary)
+
+    proactive_level = _safe_int(interaction.get("proactive_level"), -1)
+    quiet_when_busy = _setting_bool(interaction.get("quiet_when_busy"), True)
+    focus_silence = _setting_bool(companion.get("focus_silence"), False)
+    if proactive_level >= 0:
+        if proactive_level <= 25:
+            parts.append("主动打扰要很少，除非用户明显需要照顾")
+        elif proactive_level >= 75:
+            parts.append("可以更主动一点，但每次仍然只说短句")
+    if quiet_when_busy or focus_silence:
+        parts.append("用户专注或忙碌时要更克制，尽量不打断")
+
+    return "；".join(parts)
+
+
 def build_proactive_prompt(event_data: Dict[str, Any]) -> str:
     event_type = event_data.get("event_type") or event_data.get("event") or "status_event"
+    style = _proactive_style_suffix(event_data)
+    if event_type == "screen_time_reminder":
+        minutes = _safe_int(event_data.get("minutes"), 0)
+        activity = str(event_data.get("activity_name") or event_data.get("activity_code") or "电脑前").strip()
+        low_light = bool(event_data.get("low_light"))
+        is_focused = bool(event_data.get("is_focused")) or str(event_data.get("state_code") or "") == "focused"
+        if is_focused and _low_proactive_preference(event_data):
+            return f"用户正在专注使用电脑，已经大约 {minutes} 分钟。请只说一句极轻的关心，必要时也可以表达先不打扰。{style}"
+        if low_light:
+            return f"用户在偏暗环境里使用电脑，已经大约 {minutes} 分钟。请提醒调亮灯光或休息眼睛，只说一句短句。{style}"
+        return f"用户已经在{activity}持续大约 {minutes} 分钟。请生成一句短短的休息提醒，像桌宠温柔关心。{style}"
+
+    if event_type == "chat_emotion_alert":
+        emotion = event_data.get("emotion_result") if isinstance(event_data.get("emotion_result"), dict) else event_data
+        label = _emotion_label_cn(str(emotion.get("emotion_label") or event_data.get("state_code") or "neutral"))
+        suggestion = str(emotion.get("suggestion") or event_data.get("suggestion") or "").strip()
+        if suggestion:
+            return f"刚刚用户聊天里表现出{label}。请按这个方向安抚一句：{suggestion} 只说一句，适合气泡和语音。{style}"
+        return f"刚刚用户聊天里表现出{label}。请主动说一句短短的陪伴话。{style}"
+
+    if event_type == "gesture_event":
+        gesture = str(event_data.get("gesture_type") or "unknown").strip()
+        gesture_name = {
+            "wave": "挥手",
+            "thumbs_up": "点赞",
+            "heart": "比心",
+            "facepalm": "捂脸",
+            "stretch": "伸懒腰",
+        }.get(gesture, gesture)
+        return f"用户刚做了“{gesture_name}”手势。请用桌宠口吻回应一句，短、自然、别解释识别过程。{style}"
+
+    if event_type == "cloud_pet_event":
+        actor = str(event_data.get("actor_name") or "队友").strip()
+        action_type = str(event_data.get("action_type") or "update").strip()
+        pet_name = str(event_data.get("pet_name") or "小宠物").strip()
+        action_text = {
+            "feed": f"{actor}刚刚喂了{pet_name}",
+            "play": f"{actor}刚刚陪{pet_name}玩了一会儿",
+            "level_up": f"{pet_name}升级了",
+            "exp_gain": f"{pet_name}获得了新的经验",
+            "coins_gain": f"{pet_name}攒到了一点金币",
+            "bond_bonus": f"你们和{pet_name}的羁绊变深了",
+        }.get(action_type, f"{actor}刚刚更新了{pet_name}的共养状态")
+        bonuses = []
+        if event_data.get("level") not in (None, ""):
+            bonuses.append(f"等级 {event_data.get('level')}")
+        if event_data.get("exp_gain") not in (None, "", 0):
+            bonuses.append(f"经验 +{event_data.get('exp_gain')}")
+        if event_data.get("coins_gain") not in (None, "", 0):
+            bonuses.append(f"金币 +{event_data.get('coins_gain')}")
+        if event_data.get("bond_bonus") not in (None, "", 0):
+            bonuses.append(f"羁绊 +{event_data.get('bond_bonus')}")
+        bonus_text = "，".join(bonuses)
+        detail = f"，{bonus_text}" if bonus_text else ""
+        return f"联机共养事件：{action_text}{detail}。请生成一句自然的宠物口吻中文短句，适合气泡和 TTS。{style}"
+
     if event_type == "user_state_alert":
         suggestion = str(event_data.get("suggestion", "") or "").strip()
         state_code = str(event_data.get("state_code", "unknown") or "unknown")
         if suggestion:
-            return f"用户当前状态是 {state_code}。请按这个方向主动说一句话：{suggestion}"
-        return f"用户当前状态是 {state_code}。请主动说一句温柔、简短的话。"
+            return f"用户当前状态是 {state_code}。请按这个方向主动说一句话：{suggestion}{style}"
+        return f"用户当前状态是 {state_code}。请主动说一句温柔、简短的话。{style}"
 
     if event_type == "chat_finished":
         return "刚刚对话结束，保持安静，不需要主动说话。"
@@ -350,10 +473,10 @@ def build_proactive_prompt(event_data: Dict[str, Any]) -> str:
         if detail_text:
             base += f"，{detail_text}"
         if suggestion:
-            return f"{base}。{suggestion} 请只说一句，像朋友在旁边小声点评。"
-        return f"{base}。请只说一句，像朋友在旁边小声点评。"
+            return f"{base}。{suggestion} 请只说一句，像朋友在旁边小声点评。{style}"
+        return f"{base}。请只说一句，像朋友在旁边小声点评。{style}"
 
-    return "根据当前状态，主动说一句简短自然的话。"
+    return f"根据当前状态，主动说一句简短自然的话。{style}"
 
 
 def _format_tags(tags: Any) -> str:
@@ -367,3 +490,112 @@ def _format_tags(tags: Any) -> str:
         if text and text not in result:
             result.append(text)
     return "、".join(result[:6])
+
+
+def _profile_context(profile: Any) -> dict[str, Any]:
+    if hasattr(profile, "to_prompt_context") and callable(profile.to_prompt_context):
+        try:
+            data = profile.to_prompt_context()
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return profile if isinstance(profile, dict) else {}
+
+
+def _tone_hint(tone: str) -> str:
+    value = str(tone or "").strip()
+    lowered = value.lower()
+    if not value:
+        return ""
+    if any(word in value for word in ("毒舌", "吐槽")):
+        return "说话可以轻微吐槽，但要站在用户这边，不能刻薄伤人"
+    if any(word in value for word in ("温柔", "撒娇", "甜")):
+        return "语气更温柔柔软，可以轻轻撒娇，但不要过度黏人"
+    if any(word in value for word in ("电子管家", "管家", "秘书", "效率")) or "butler" in lowered:
+        return "像可靠的电子管家，简洁、稳妥、把下一步说清楚"
+    if any(word in value for word in ("朋友", "陪伴")):
+        return "像熟悉的朋友自然聊天，轻松但不敷衍"
+    if any(word in value for word in ("元气", "活泼")):
+        return "语气更有活力，鼓励用户行动，但句子仍然短"
+    return f"整体语气贴近“{value}”，但仍保持短句和自然口吻"
+
+
+def _recent_emotion_labels(items: Any) -> str:
+    if not isinstance(items, list):
+        return ""
+    labels: list[str] = []
+    for item in items[-5:]:
+        if isinstance(item, dict):
+            label = str(item.get("emotion_label") or "").strip()
+        else:
+            label = str(item or "").strip()
+        if label:
+            labels.append(_emotion_label_cn(label))
+    return "、".join(labels[-5:])
+
+
+def _emotion_label_cn(label: str) -> str:
+    return {
+        "positive": "开心",
+        "neutral": "平稳",
+        "stress": "压力",
+        "sad": "低落",
+        "angry": "生气",
+        "tired": "疲惫",
+        "confused": "困惑",
+    }.get(str(label or "").strip(), str(label or "").strip())
+
+
+def _activity_summary(stats: Any) -> str:
+    if not isinstance(stats, dict):
+        return ""
+    chat_count = _safe_int(stats.get("chat_count"), 0)
+    care_count = _safe_int(stats.get("care_needed_count"), 0)
+    counts = stats.get("emotion_counts") if isinstance(stats.get("emotion_counts"), dict) else {}
+    top_label = ""
+    if counts:
+        top_label = max(counts.items(), key=lambda item: int(item[1] or 0))[0]
+    parts: list[str] = []
+    if chat_count:
+        parts.append(f"已经有过 {chat_count} 次对话积累")
+    if care_count:
+        parts.append(f"其中有 {care_count} 次需要更多关怀")
+    if top_label:
+        parts.append(f"最常出现的情绪是{_emotion_label_cn(str(top_label))}")
+    return "，".join(parts)
+
+
+def _proactive_style_suffix(event_data: Dict[str, Any]) -> str:
+    context = build_personalization_context(event_data)
+    if not context:
+        return "请只输出一句话。"
+    return f"个性化语气参考：{context}。请只输出一句话。"
+
+
+def _low_proactive_preference(event_data: Dict[str, Any]) -> bool:
+    personalization = event_data.get("personalization_settings")
+    if not isinstance(personalization, dict):
+        return False
+    interaction = personalization.get("interaction_frequency")
+    companion = personalization.get("companion_mode")
+    interaction = interaction if isinstance(interaction, dict) else {}
+    companion = companion if isinstance(companion, dict) else {}
+    proactive_level = _safe_int(interaction.get("proactive_level"), 50)
+    quiet_when_busy = _setting_bool(interaction.get("quiet_when_busy"), True)
+    focus_silence = _setting_bool(companion.get("focus_silence"), False)
+    return proactive_level <= 30 or quiet_when_busy or focus_silence
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _setting_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "开启", "允许", "记住"}
