@@ -4214,7 +4214,7 @@ class DesktopPet:
   def _start_idle_motion(self, *_args: Any) -> None:
     if self._model is None:
       return
-    self._model.StartMotion("Idle", 0, MotionPriority.IDLE, onFinishMotionHandler=self._start_idle_motion)
+    self._model.StartMotion("Idle", 0, MotionPriority.FORCE)
 
   def _build_motion_index(self) -> None:
     self._motion_index.clear()
