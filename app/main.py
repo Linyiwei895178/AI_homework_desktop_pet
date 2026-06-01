@@ -1,25 +1,41 @@
 """
 AI_Desktop_Pet - 程序入口
 启动桌面UI，加载桌宠，处理事件循环
+
+模块结构（8大模块）：
+- utils:    config, logger, event_log, time_utils, safe_json, file_manager
+- app/ui:   DesktopPet, widgets, pet_motion, cloud_panel, feedback_bubble, ui_settings_store
+- app/controller: EventHandler, PetController
+- app/services: EventBus, AppContext, SyncScheduler, DemoMode
+- models/state: PetState, BehaviorRules, EchoTeamDInterface, UserProfile, PetLeveling, StateSerialization
+- models/nlp:  DeepSeekClient, PromptBuilder, EmotionAnalyzer, ProactiveEventBuilder
+- models/tts:  TTSEngine, TTSManager, SoundEffectManager, EchoTeamCInterface
+- models/vision: UserStateDetector, ComputerActivityDetector, QwenVLClient, ScreenUsageTracker, GestureDetector, CompanionEventBuilder
+- models/cloud: CloudConfig, CloudModels, SupabaseCloudService, SharedPetRoomManager
 """
 import sys
 import os
+from pathlib import Path
 
 # 将项目根目录加入 sys.path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
+# ── Team A: UI ──
 from app.ui.desktop_pet import DesktopPet
 from app.controller.event_handler import EventHandler
 from app.controller.pet_controller import PetController
+# ── Team D: State ──
 from models.state.pet_state import PetState
 from models.state.behavior_rules import decide_action
 from models.state.echo_team_d_interface import EchoTeamDInterface
+# ── Team C: NLP / TTS ──
 from models.nlp.deepseek_api import generate_pet_reply, DeepSeekClient
 from models.tts.tts_manager import speak
 from models.tts.echo_team_c_interface import EchoTeamCInterface
+# ── Team B: Vision ──
 from models.vision.qwen_vl_api import get_user_state, QwenVLClient
 from models.vision.user_state_detector import (
     UserStateDetector,
@@ -27,7 +43,14 @@ from models.vision.user_state_detector import (
     STATE_AWAY, STATE_RETURN, STATE_STUDY_LONG, STATE_LOW_LIGHT,
     STATE_CAMERA_ERROR, STATE_UNKNOWN,
 )
+# ── Utils ──
 from utils.logger import setup_logger
+from utils.event_log import get_event_log
+from utils.time_utils import CooldownTracker
+from utils.safe_json import safe_read_json, safe_write_json
+from utils.file_manager import FileManager, file_manager
+from app.services.event_bus import get_event_bus
+from app.services.app_context import AppContext
 
 
 def main():

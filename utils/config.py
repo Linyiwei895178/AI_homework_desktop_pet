@@ -75,6 +75,39 @@ class Config:
         self.COMPUTER_ACTIVITY_MIN_DURATION = os.getenv("COMPUTER_ACTIVITY_MIN_DURATION", "0")
         self.COMPUTER_ACTIVITY_COMMENT_COOLDOWN = os.getenv("COMPUTER_ACTIVITY_COMMENT_COOLDOWN", "150")
 
+        # Cloud / Supabase
+        self.SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+        self.SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+
+        # Emotion
+        self.EMOTION_ANALYSIS_ENABLED = os.getenv("EMOTION_ANALYSIS_ENABLED", "true")
+
+        # Screen usage
+        self.SCREEN_USAGE_ENABLED = os.getenv("SCREEN_USAGE_ENABLED", "true")
+        self.SCREEN_REMINDER_THRESHOLDS = os.getenv("SCREEN_REMINDER_THRESHOLDS", "60,120,180,240")
+
+        # AI memory
+        self.AI_MEMORY_DIR = os.getenv("AI_MEMORY_DIR", "assets/ai_memory")
+        self.AI_MEMORY_FILE = os.getenv("AI_MEMORY_FILE", "")
+
+        # UI
+        self.UI_OPACITY = os.getenv("UI_OPACITY", "1.0")
+        self.UI_SCALE = os.getenv("UI_SCALE", "1.0")
+        self.UI_THEME = os.getenv("UI_THEME", "default")
+        self.UI_RESPONSE_LANGUAGE = os.getenv("UI_RESPONSE_LANGUAGE", "zh-CN")
+        self.UI_AUTO_HIDE = os.getenv("UI_AUTO_HIDE", "false")
+        self.UI_MOUSE_FOLLOW = os.getenv("UI_MOUSE_FOLLOW", "false")
+        self.UI_FREE_ROAM = os.getenv("UI_FREE_ROAM", "true")
+        self.UI_PIN_TO_TOP = os.getenv("UI_PIN_TO_TOP", "true")
+        self.UI_SHOW_CHAT_BUBBLE = os.getenv("UI_SHOW_CHAT_BUBBLE", "true")
+        self.UI_SHOW_STATUS_BAR = os.getenv("UI_SHOW_STATUS_BAR", "true")
+        self.UI_SHOW_CLOUD_PANEL = os.getenv("UI_SHOW_CLOUD_PANEL", "false")
+
+        # Demo / Mock
+        self.DESKTOP_PET_MOCK_USER_STATE = os.getenv("DESKTOP_PET_MOCK_USER_STATE", "true")
+        self.DESKTOP_PET_MOCK_CLOUD = os.getenv("DESKTOP_PET_MOCK_CLOUD", "false")
+        self.DESKTOP_PET_MOCK_GESTURE = os.getenv("DESKTOP_PET_MOCK_GESTURE", "false")
+
         # 应用配置
         self.DEBUG = os.getenv("DEBUG", "True").lower() == "true"
         self.LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")

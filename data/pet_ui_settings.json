@@ -1,7 +1,7 @@
 {
   "pin_top": false,
   "hover_fade": false,
-  "status_bar": false,
+  "status_bar": true,
   "chat_open": true,
   "voice_pack_id": "",
   "tts_settings": {

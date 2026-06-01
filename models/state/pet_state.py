@@ -1,14 +1,21 @@
 """
-桌宠状态（心情/能量/亲密度）
+桌宠状态（心情/能量/亲密度/等级/经验/金币/饱食度/羁绊）
 
 对接 UserStateDetector 状态字典，通过 update_from_user_state() 方法
 将用户状态识别结果映射为桌宠自身的 mood/energy/intimacy 变化。
+
+扩展字段（队员D后续可配置数值）：
+- level: 等级（默认1）
+- exp: 经验值
+- coins: 金币
+- hunger: 饱食度（0-100）
+- bond_score: 羁绊值
 """
 
 import json
 import os
 import time
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 
 # 用户 state_code → 桌宠 mood 映射规则
@@ -30,24 +37,39 @@ class PetState:
     """
     桌宠状态类
     管理桌宠的心情(mood)、能量(energy)、亲密度(intimacy)
+    扩展字段：等级(level)、经验(exp)、金币(coins)、饱食度(hunger)、羁绊(bond_score)
 
     支持两种更新方式：
     1. update_state(event)       - 根据事件名称更新（旧接口）
     2. update_from_user_state(state_dict) - 根据用户状态字典更新（新接口）
     """
 
-    def __init__(self, mood: str = "neutral", energy: int = 100, intimacy: int = 50, pet_id: str = "cat"):
+    def __init__(self, mood: str = "neutral", energy: int = 100, intimacy: int = 50, pet_id: str = "cat",
+                 level: int = 1, exp: int = 0, coins: int = 0, hunger: int = 50, bond_score: int = 0):
         """
         初始化桌宠状态
 
         :param mood: 初始心情，可选 "neutral", "happy", "sad", "angry", "hungry"
         :param energy: 初始能量值 (0-100)
         :param intimacy: 初始亲密度 (0-100)
+        :param pet_id: 桌宠ID
+        :param level: 初始等级
+        :param exp: 初始经验值
+        :param coins: 初始金币
+        :param hunger: 初始饱食度 (0-100)
+        :param bond_score: 初始羁绊值
         """
         self.mood = mood
         self.energy = max(0, min(100, energy))
         self.intimacy = max(0, min(100, intimacy))
         self.pet_id = (pet_id or "cat").strip() or "cat"
+
+        # 扩展字段
+        self.level = max(1, int(level))
+        self.exp = max(0, int(exp))
+        self.coins = max(0, int(coins))
+        self.hunger = max(0, min(100, int(hunger)))
+        self.bond_score = max(0, int(bond_score))
 
         # 状态变化记录
         self._last_event = None
@@ -103,6 +125,11 @@ class PetState:
             "mood": self.mood,
             "energy": self.energy,
             "intimacy": self.intimacy,
+            "level": self.level,
+            "exp": self.exp,
+            "coins": self.coins,
+            "hunger": self.hunger,
+            "bond_score": self.bond_score,
             "timestamp": time.time(),
         })
 
@@ -163,8 +190,99 @@ class PetState:
             "mood": self.mood,
             "energy": self.energy,
             "intimacy": self.intimacy,
+            "level": self.level,
+            "exp": self.exp,
+            "coins": self.coins,
+            "hunger": self.hunger,
+            "bond_score": self.bond_score,
             "timestamp": time.time(),
         })
+
+    # ── 扩展方法 ──
+
+    def add_exp(self, amount: int) -> List[str]:
+        """
+        增加经验值，如果达到升级所需经验则自动升级。
+
+        :param amount: 增加的经验值（正整数）
+        :return: 触发的事件列表，可能包含 "level_up"
+        """
+        if amount <= 0:
+            return []
+        self.exp += int(amount)
+        events = []
+
+        # TODO: 真实升级公式接入 pet_leveling.py
+        next_exp = self.level * 100 + (self.level - 1) * 50
+        if self.exp >= next_exp:
+            self.exp -= next_exp
+            self.level += 1
+            self.coins += 50
+            self.energy = min(100, self.energy + 20)
+            self.intimacy = min(100, self.intimacy + 10)
+            self.bond_score += 5
+            events.append("level_up")
+            print(f"[PetState] 升级! 当前等级={self.level}, 剩余exp={self.exp}")
+
+        return events
+
+    def apply_interaction(self, action_type: str, actor: str = "local") -> dict:
+        """
+        应用一次互动（点击/投喂/玩耍等），更新状态并返回变化。
+
+        :param action_type: 互动类型
+        :param actor: 互动执行者
+        :return: 状态变化字典
+        """
+        old = {
+            "mood": self.mood, "energy": self.energy, "intimacy": self.intimacy,
+            "level": self.level, "exp": self.exp, "coins": self.coins,
+            "hunger": self.hunger, "bond_score": self.bond_score,
+        }
+        self.update_state(action_type)
+        deltas = {}
+        for key, old_val in old.items():
+            new_val = getattr(self, key, old_val)
+            if isinstance(new_val, (int, float)) and isinstance(old_val, (int, float)):
+                diff = new_val - old_val
+                if diff != 0:
+                    deltas[key] = diff
+        deltas["actor"] = actor
+        deltas["action_type"] = action_type
+        return deltas
+
+    def to_dict(self) -> dict:
+        """将当前状态转换为字典（包含所有字段）。"""
+        return {
+            "pet_id": self.pet_id, "mood": self.mood, "energy": self.energy,
+            "intimacy": self.intimacy, "level": self.level, "exp": self.exp,
+            "coins": self.coins, "hunger": self.hunger, "bond_score": self.bond_score,
+        }
+
+    def from_dict(self, data: dict) -> "PetState":
+        """从字典恢复状态（兼容旧格式，缺失字段使用默认值）。"""
+        if not isinstance(data, dict):
+            return self
+        self.mood = str(data.get("mood", self.mood))
+        self.energy = max(0, min(100, int(data.get("energy", self.energy))))
+        self.intimacy = max(0, min(100, int(data.get("intimacy", self.intimacy))))
+        self.pet_id = str(data.get("pet_id", self.pet_id) or self.pet_id)
+        self.level = max(1, int(data.get("level", self.level)))
+        self.exp = max(0, int(data.get("exp", self.exp)))
+        self.coins = max(0, int(data.get("coins", self.coins)))
+        self.hunger = max(0, min(100, int(data.get("hunger", self.hunger))))
+        self.bond_score = max(0, int(data.get("bond_score", self.bond_score)))
+        return self
+
+    def get_level_progress(self) -> dict:
+        """获取等级进度信息。"""
+        next_exp = self.level * 100 + (self.level - 1) * 50
+        progress = min(1.0, self.exp / max(next_exp, 1))
+        return {
+            "level": self.level, "exp": self.exp,
+            "next_level_exp": next_exp, "progress": round(progress, 4),
+            "remaining": max(0, next_exp - self.exp),
+        }
 
     def get_last_user_state(self) -> Optional[dict]:
         """
@@ -194,12 +312,7 @@ class PetState:
             os.makedirs(logs_dir, exist_ok=True)
             filepath = os.path.join(logs_dir, "pet_state.json")
 
-        state_data = {
-            "pet_id": self.pet_id,
-            "mood": self.mood,
-            "energy": self.energy,
-            "intimacy": self.intimacy,
-        }
+        state_data = self.to_dict()
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump(state_data, f, ensure_ascii=False, indent=2)
         print(f"[PetState] 状态已保存到: {filepath}")
@@ -225,10 +338,7 @@ class PetState:
         with open(filepath, "r", encoding="utf-8") as f:
             state_data = json.load(f)
 
-        self.mood = state_data.get("mood", self.mood)
-        self.energy = max(0, min(100, state_data.get("energy", self.energy)))
-        self.intimacy = max(0, min(100, state_data.get("intimacy", self.intimacy)))
-        self.pet_id = str(state_data.get("pet_id", self.pet_id) or self.pet_id)
+        self.from_dict(state_data)
         print(f"[PetState] 状态已从 {filepath} 恢复: {self}")
         return self
 
@@ -271,13 +381,8 @@ class PetState:
 
         :return: 包含 mood, energy, intimacy 的字典
         """
-        return {
-            "pet_id": self.pet_id,
-            "mood": self.mood,
-            "energy": self.energy,
-            "intimacy": self.intimacy
-        }
+        return self.to_dict()
 
     def __str__(self) -> str:
         """字符串表示"""
-        return f"PetState(mood={self.mood}, energy={self.energy}, intimacy={self.intimacy})"
+        return f"PetState(mood={self.mood}, energy={self.energy}, intimacy={self.intimacy}, level={self.level}, exp={self.exp}, coins={self.coins}, hunger={self.hunger}, bond_score={self.bond_score})"

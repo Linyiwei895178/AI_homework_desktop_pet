@@ -5,14 +5,6 @@
   },
   {
     "role": "assistant",
-    "content": "*tilts head with a cheerful mew*  \nHello again! Fancy meeting you twice in a row. Want to play a little game, or shall we just chat and keep each other company?"
-  },
-  {
-    "role": "user",
-    "content": "你好"
-  },
-  {
-    "role": "assistant",
     "content": "Coucou ! *remue la queue* 😊 Tu es là, tout va bien. Si tu veux parler de quelque chose de spécial, je suis tout ouïe. Sinon, on peut juste rester tranquilles ensemble, c’est déjà très bien comme ça. Tu préfères un petit silence ou une blague toute bête ? 🐱"
   },
   {
@@ -46,5 +38,13 @@
   {
     "role": "assistant",
     "content": "喵～你好呀！見到你好開心㗎！今日想同我一齊玩嗎？"
+  },
+  {
+    "role": "user",
+    "content": "123"
+  },
+  {
+    "role": "assistant",
+    "content": "我们接着刚才的话聊“123”吧。你最在意的那个点，我会顺着它陪你说下去。"
   }
 ]

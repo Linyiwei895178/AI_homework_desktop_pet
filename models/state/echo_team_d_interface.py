@@ -30,6 +30,8 @@ from typing import Callable, Dict, Any, Optional
 
 from models.state.pet_state import PetState
 from models.state.behavior_rules import BehaviorRules
+from models.state.pet_leveling import apply_leveling_state
+from models.state.state_serialization import pet_state_to_dict, apply_dict_to_pet_state
 
 
 class EchoTeamDInterface:
@@ -260,6 +262,73 @@ class EchoTeamDInterface:
     # =========================================================================
     # 接口 12：提供给 【队员C (NLP/TTS)】 —— 持久化状态
     # =========================================================================
+
+    # =========================================================================
+    # 接口 14：提供给 【队员A/C】 —— 应用互动并返回状态变化
+    # =========================================================================
+    def api_apply_interaction(self, action_type: str, actor: str = "local") -> dict:
+        """
+        应用一次互动（点击/投喂/玩耍/打工等），更新桌宠状态并返回变化。
+
+        :param action_type: 互动类型
+        :param actor: 互动执行者
+        :return: 状态变化字典
+        """
+        return self.pet_state.apply_interaction(action_type, actor)
+
+    # =========================================================================
+    # 接口 15：提供给 【Cloud】 —— 获取云端同步数据载荷
+    # =========================================================================
+    def api_get_cloud_sync_payload(self) -> dict:
+        """
+        获取当前桌宠状态的云端同步数据载荷。
+
+        :return: 包含所有状态字段的字典
+        """
+        return pet_state_to_dict(self.pet_state)
+
+    # =========================================================================
+    # 接口 16：提供给 【Cloud】 —— 应用云端拉取的状态
+    # =========================================================================
+    def api_apply_cloud_state(self, state_dict: dict) -> None:
+        """
+        将云端拉取的状态应用到本地桌宠。
+        # TODO: 冲突解决（updated_at 最新覆盖 / 事件增量合并）
+
+        :param state_dict: 云端状态字典
+        """
+        apply_dict_to_pet_state(self.pet_state, state_dict)
+
+    # =========================================================================
+    # 接口 17：提供给 【队员C】 —— 从聊天情绪分析结果更新状态
+    # =========================================================================
+    def api_update_from_chat_emotion(self, emotion_result: dict) -> None:
+        """
+        根据聊天情绪分析结果更新桌宠状态。
+
+        :param emotion_result: emotion_analyzer.analyze_chat_emotion() 的输出
+        """
+        if not isinstance(emotion_result, dict):
+            return
+        label = emotion_result.get("emotion_label", "neutral")
+        need_care = emotion_result.get("need_care", False)
+        if need_care:
+            self.pet_state.mood = label if label in ("sad", "angry", "hungry") else self.pet_state.mood
+        print(f"[EchoTeamDInterface] 情绪分析更新: {label}, need_care={need_care}")
+
+    # =========================================================================
+    # 接口 18：提供给 【NLP】 —— 获取用户画像上下文
+    # =========================================================================
+    def api_get_user_profile_context(self) -> dict:
+        """
+        获取用户画像的prompt上下文。
+        # TODO: 接入 UserProfile 实例
+
+        :return: 用户画像上下文字典，未接入时返回空字典
+        """
+        if hasattr(self, "_user_profile") and self._user_profile:
+            return self._user_profile.to_prompt_context()
+        return {}
     def api_save_state(self, filepath: Optional[str] = None):
         """
         【队员C专用】将当前桌宠状态持久化到 JSON 文件。
