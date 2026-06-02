@@ -97,30 +97,24 @@ class PetController:
 
     def _action_happy(self, pet):
         """
-        开心动作：切换表情，生成对话，语音播报
+        开心动作：只切换表情/动作，不主动生成语音。
         """
-        # TO_DO: 开心动作逻辑
         print("[PetController] 桌宠很开心！😊")
         self._apply_pet_visual(pet, "happy")
-        self._reply_and_speak_async("I'm so happy!", "happy")
 
     def _action_sad(self, pet):
         """
-        难过动作：切换表情，生成安慰对话
+        难过动作：只切换表情/动作，不主动生成语音。
         """
-        # TO_DO: 难过动作逻辑
         print("[PetController] 桌宠有点难过...😢")
         self._apply_pet_visual(pet, "sad")
-        self._reply_and_speak_async("I'm feeling sad...", "sad")
 
     def _action_hungry(self, pet):
         """
-        饥饿动作：切换表情
+        饥饿动作：只切换表情/动作，不主动生成语音。
         """
-        # TO_DO: 饥饿动作逻辑
         print("[PetController] 桌宠饿了...🍽️")
         self._apply_pet_visual(pet, "hungry")
-        self._reply_and_speak_async("I'm hungry!", "hungry")
 
     def _action_idle(self, pet):
         """

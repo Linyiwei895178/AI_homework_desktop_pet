@@ -15,7 +15,8 @@ deepface>=0.0.90        # 现成面部表情识别库
 tf-keras>=2.15.0        # DeepFace 在新版本 Keras 环境下常用兼容依赖
 
 # MediaPipe 人脸/关键点检测
-# 注意：如果当前 Python 版本安装失败，可暂时使用 OpenCV Haar + Qwen-VL 降级方案
+# Python 3.13 下使用 MediaPipe Tasks API；face_landmarker.task 模型文件不提交仓库。
+# 模型缺失或初始化失败时，UserStateDetector 自动降级到 OpenCV Haar + DeepFace/Qwen-VL。
 mediapipe>=0.10.0
 
 # API 调用

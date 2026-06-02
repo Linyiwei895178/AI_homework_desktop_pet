@@ -216,8 +216,14 @@ def main():
         logger.info("[主循环] 手势检测轮询已启动（每300ms一次，同手势3秒冷却）")
 
     # ====== 10. 启动定时状态检测 + 自动回应 ======
+    SPEECH_HINT_COOLDOWN_SECONDS = 300.0
+    last_speech_hint_text = ""
+    last_speech_hint_at = 0.0
+
     def check_user_state():
         """定时检测用户状态，更新桌宠行为和对话"""
+        nonlocal last_speech_hint_text, last_speech_hint_at
+
         if not USER_STATE_ENABLED:
             QTimer.singleShot(3000, check_user_state)
             return
@@ -256,10 +262,21 @@ def main():
         if team_d.api_should_speak():
             hint = team_d.api_get_speech_hint()
             if hint:
-                logger.info(f"[队员D→队员C] 主动语音提示: {hint}")
-                # 播放提示语音（队员C TTS）
-                speak(hint, state="hint", action="speak")
-                # 注意：主动提示不计入对话字数，不更新状态
+                now = time.monotonic()
+                same_hint_in_cooldown = (
+                    hint == last_speech_hint_text
+                    and now - last_speech_hint_at < SPEECH_HINT_COOLDOWN_SECONDS
+                )
+                chain_in_cooldown = now - last_speech_hint_at < SPEECH_HINT_COOLDOWN_SECONDS
+                if same_hint_in_cooldown or chain_in_cooldown:
+                    logger.info(f"[队员D→队员C] 主动语音提示冷却中，跳过: {hint}")
+                else:
+                    logger.info(f"[队员D→队员C] 主动语音提示: {hint}")
+                    last_speech_hint_text = hint
+                    last_speech_hint_at = now
+                    # 播放提示语音（队员C TTS）
+                    speak(hint, state="hint", action="speak")
+                    # 注意：主动提示不计入对话字数，不更新状态
 
         # 6e. 定时循环（每 3 秒检测一次）
         QTimer.singleShot(3000, check_user_state)

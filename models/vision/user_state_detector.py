@@ -11,7 +11,7 @@ UserStateDetector - 用户状态感知模块（优化版）
     need_response, suggestion, source
 
 本优化版重点：
-1. 优先使用 MediaPipe FaceDetection / FaceMesh，OpenCV Haar 只做备用。
+1. 优先使用 MediaPipe Tasks FaceLandmarker，OpenCV Haar 只做备用。
 2. “低头/短暂未识别人脸”不会立刻判断离开；只要最近检测到过脸/头，就继续认为人在。
 3. 增加状态平滑，减少 normal / unknown / away / return 抖动。
 4. Qwen-VL 每 5 秒调用一次（可通过 vlm_interval 调整）。
@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import copy
 import math
+import sys
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 # ========== 状态大类常量：已经发给队友，不要随意修改 ========== 
@@ -66,6 +68,9 @@ STATE_NAME_MAP = {
     STATE_UNKNOWN: "未知状态",
 }
 
+MEDIAPIPE_MODELS_DIR = Path(__file__).resolve().parent / "mediapipe_models"
+FACE_LANDMARKER_MODEL_PATH = MEDIAPIPE_MODELS_DIR / "face_landmarker.task"
+
 
 def create_empty_state(state_code: str = STATE_UNKNOWN) -> dict:
     if state_code not in ALL_STATE_CODES:
@@ -98,7 +103,7 @@ class UserStateDetector:
     说明：
     - 不会每帧调用 Qwen-VL，而是每 vlm_interval 秒调用一次。
     - 低头/遮挡导致短暂检测不到脸时，不会直接判断 away。
-    - 如果检测不到 MediaPipe，会自动降级到 OpenCV Haar。
+    - 如果检测不到 MediaPipe Tasks 或模型文件，会自动降级到 OpenCV Haar。
     """
 
     def __init__(
@@ -151,6 +156,12 @@ class UserStateDetector:
         self._mp_face_mesh: Any = None
         self._face_detection: Any = None
         self._face_mesh: Any = None
+        self._face_landmarker: Any = None
+        self._mediapipe_available: bool = False
+        self._mediapipe_init_reason: str = ""
+        self._haar_only_mode: bool = False
+        self._mediapipe_runtime_warning_logged: bool = False
+        self._last_mediapipe_timestamp_ms: int = 0
         self._haar_frontal: Any = None
         self._haar_profile: Any = None
         self._vl_client: Any = None
@@ -327,36 +338,16 @@ class UserStateDetector:
             print(f"[UserStateDetector] OpenCV 导入失败：{exc}")
             return False
 
-        # MediaPipe 优先，Haar 备用
-        try:
-            import mediapipe as mp  # type: ignore
-            self._mp = mp
-            self._mp_face_detection = mp.solutions.face_detection
-            self._mp_face_mesh = mp.solutions.face_mesh
-            self._face_detection = self._mp_face_detection.FaceDetection(
-                model_selection=0,
-                min_detection_confidence=0.45,
-            )
-            self._face_mesh = self._mp_face_mesh.FaceMesh(
-                static_image_mode=False,
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.45,
-                min_tracking_confidence=0.45,
-            )
-            print("[UserStateDetector] MediaPipe 已启用。")
-        except Exception as exc:
-            print(f"[UserStateDetector] MediaPipe 不可用，将使用 OpenCV Haar 降级：{exc}")
-            self._mp = None
-            self._face_detection = None
-            self._face_mesh = None
+        if not self._init_mediapipe():
+            self._enable_haar_stability_mode()
 
         try:
             frontal_path = self._cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
             profile_path = self._cv2.data.haarcascades + "haarcascade_profileface.xml"
             self._haar_frontal = self._cv2.CascadeClassifier(frontal_path)
             self._haar_profile = self._cv2.CascadeClassifier(profile_path)
-        except Exception:
+        except Exception as exc:
+            print(f"[UserStateDetector] OpenCV Haar 初始化失败：{exc}")
             self._haar_frontal = None
             self._haar_profile = None
 
@@ -381,6 +372,131 @@ class UserStateDetector:
         except Exception:
             pass
         return True
+
+    def _init_mediapipe(self) -> bool:
+        """Initialize MediaPipe Tasks FaceLandmarker when the installed API supports it."""
+        return self._init_mediapipe_tasks()
+
+    def _init_mediapipe_tasks(self) -> bool:
+        """Initialize MediaPipe Tasks FaceLandmarker, or leave Haar fallback active."""
+        self._mp = None
+        self._mp_face_detection = None
+        self._mp_face_mesh = None
+        self._face_detection = None
+        self._face_mesh = None
+        self._face_landmarker = None
+        self._mediapipe_available = False
+        self._mediapipe_init_reason = ""
+        self._mediapipe_runtime_warning_logged = False
+
+        try:
+            import mediapipe as mp  # type: ignore
+        except ImportError as exc:
+            self._mediapipe_init_reason = f"MediaPipe 未安装: {exc}"
+            print(
+                "[UserStateDetector] MediaPipe 未安装，将使用 OpenCV Haar + DeepFace/Qwen-VL 降级。"
+            )
+            return False
+        except Exception as exc:
+            self._mediapipe_init_reason = f"MediaPipe 导入失败: {exc}"
+            print(
+                f"[UserStateDetector] MediaPipe 导入失败，将使用 OpenCV Haar + DeepFace/Qwen-VL 降级：{exc}"
+            )
+            return False
+
+        version = getattr(mp, "__version__", "unknown")
+        module_file = getattr(mp, "__file__", "unknown")
+
+        try:
+            from mediapipe.tasks import python as mp_tasks_python  # type: ignore
+            from mediapipe.tasks.python import vision  # type: ignore
+            from mediapipe.tasks.python.core.base_options import BaseOptions  # type: ignore
+            _ = mp_tasks_python
+        except ImportError as exc:
+            self._mediapipe_init_reason = (
+                f"MediaPipe {version} 已安装，但 Tasks API 不可导入: {exc}; "
+                f"module={module_file}; python={sys.version.split()[0]}"
+            )
+            print(
+                "[UserStateDetector] MediaPipe Tasks API 不可用，将使用 OpenCV Haar + "
+                f"DeepFace/Qwen-VL 降级：{exc}"
+            )
+            if getattr(mp, "solutions", None) is None:
+                print(
+                    "[UserStateDetector] 当前 mediapipe 包也未提供 legacy mp.solutions。"
+                )
+            print(
+                "[UserStateDetector] 当前环境信息："
+                f"mediapipe={version}, python={sys.version.split()[0]}, module={module_file}"
+            )
+            print(
+                "[UserStateDetector] 当前环境 MediaPipe 不兼容，使用 OpenCV Haar + "
+                "DeepFace + Qwen-VL 降级方案；建议使用 Python 3.10/3.11 运行完整 "
+                "MediaPipe 功能。"
+            )
+            return False
+        except Exception as exc:
+            self._mediapipe_init_reason = (
+                f"MediaPipe {version} Tasks API 初始化前检查失败: {exc}; "
+                f"module={module_file}; python={sys.version.split()[0]}"
+            )
+            print(
+                "[UserStateDetector] MediaPipe Tasks API 检查失败，将使用 OpenCV Haar + "
+                f"DeepFace/Qwen-VL 降级：{exc}"
+            )
+            return False
+
+        if not FACE_LANDMARKER_MODEL_PATH.exists():
+            self._mediapipe_init_reason = (
+                f"MediaPipe {version} Tasks API 可用，但模型文件不存在: "
+                f"{FACE_LANDMARKER_MODEL_PATH}"
+            )
+            print("[UserStateDetector] MediaPipe Tasks 模型文件不存在，继续使用 OpenCV Haar 降级。")
+            print(f"[UserStateDetector] 模型路径：{FACE_LANDMARKER_MODEL_PATH}")
+            return False
+
+        try:
+            options = vision.FaceLandmarkerOptions(
+                base_options=BaseOptions(model_asset_path=str(FACE_LANDMARKER_MODEL_PATH)),
+                running_mode=vision.RunningMode.VIDEO,
+                num_faces=1,
+                min_face_detection_confidence=0.45,
+                min_face_presence_confidence=0.45,
+                min_tracking_confidence=0.45,
+                output_face_blendshapes=False,
+                output_facial_transformation_matrixes=False,
+            )
+            face_landmarker = vision.FaceLandmarker.create_from_options(options)
+        except Exception as exc:
+            self._mediapipe_init_reason = (
+                f"MediaPipe Tasks FaceLandmarker 初始化失败: {exc}; "
+                f"mediapipe={version}; model={FACE_LANDMARKER_MODEL_PATH}"
+            )
+            print(
+                "[UserStateDetector] MediaPipe Tasks FaceLandmarker 初始化失败，"
+                f"将使用 OpenCV Haar + DeepFace/Qwen-VL 降级：{exc}"
+            )
+            return False
+
+        self._mp = mp
+        self._face_landmarker = face_landmarker
+        self._mediapipe_available = True
+        self._mediapipe_init_reason = f"MediaPipe {version} Tasks FaceLandmarker 可用"
+        print("[UserStateDetector] MediaPipe Tasks FaceLandmarker 已启用。")
+        return True
+
+    def _enable_haar_stability_mode(self) -> None:
+        """Make Haar fallback less likely to report away during short misses."""
+        self._haar_only_mode = True
+        old_away = self._away_threshold
+        old_memory = self._face_memory_seconds
+        self._away_threshold = max(self._away_threshold, 30.0)
+        self._face_memory_seconds = max(self._face_memory_seconds, 20.0)
+        print(
+            "[UserStateDetector] 已启用 OpenCV Haar 稳定降级策略："
+            f"away_threshold {old_away:.1f}s -> {self._away_threshold:.1f}s, "
+            f"face_memory_seconds {old_memory:.1f}s -> {self._face_memory_seconds:.1f}s。"
+        )
 
     def _read_frame(self) -> Tuple[bool, Any]:
         if self._frame_provider is not None:
@@ -411,10 +527,23 @@ class UserStateDetector:
         except Exception:
             pass
         try:
+            if self._face_landmarker is not None:
+                self._face_landmarker.close()
+        except Exception:
+            pass
+        self._face_landmarker = None
+        try:
             if self._show_preview and self._cv2 is not None:
                 self._cv2.destroyAllWindows()
         except Exception:
             pass
+
+    def _next_mediapipe_timestamp_ms(self) -> int:
+        timestamp_ms = int(time.monotonic() * 1000)
+        if timestamp_ms <= self._last_mediapipe_timestamp_ms:
+            timestamp_ms = self._last_mediapipe_timestamp_ms + 1
+        self._last_mediapipe_timestamp_ms = timestamp_ms
+        return timestamp_ms
 
     # ==================== 帧分析 ====================
 
@@ -424,7 +553,7 @@ class UserStateDetector:
         brightness = self._calc_brightness(frame)
         low_light = brightness < self._low_light_threshold
 
-        # 1. 优先 MediaPipe：只要 FaceDetection 或 FaceMesh 任一成功，就认为识别到“头/脸”
+        # 1. 优先 MediaPipe Tasks：FaceLandmarker 检出关键点即认为识别到“头/脸”
         face_info = self._detect_face_or_head(frame)
         face_present = face_info["present"]
         source = face_info["source"][:] if face_info["source"] else ["rule"]
@@ -617,7 +746,7 @@ class UserStateDetector:
     def _detect_face_or_head(self, frame: Any) -> dict:
         """
         检测脸/头部。
-        只要 MediaPipe FaceDetection 或 FaceMesh 任意检测成功，就认为用户在。
+        优先使用 MediaPipe Tasks FaceLandmarker；不可用或未检出时使用 OpenCV Haar。
         """
         h, w = frame.shape[:2]
         result = {"present": False, "bbox": None, "landmarks": None, "source": []}
@@ -628,47 +757,11 @@ class UserStateDetector:
         except Exception:
             rgb = frame
 
-        # 1. MediaPipe FaceDetection
-        if self._face_detection is not None:
-            try:
-                fd = self._face_detection.process(rgb)
-                if fd and fd.detections:
-                    det = fd.detections[0]
-                    box = det.location_data.relative_bounding_box
-                    x = max(0, int(box.xmin * w))
-                    y = max(0, int(box.ymin * h))
-                    bw = min(w - x, int(box.width * w))
-                    bh = min(h - y, int(box.height * h))
-                    result.update({
-                        "present": True,
-                        "bbox": (x, y, bw, bh),
-                        "source": self._merge_source(result["source"], "mediapipe_face"),
-                    })
-            except Exception:
-                pass
+        # 1. MediaPipe Tasks FaceLandmarker
+        if self._face_landmarker is not None:
+            self._detect_face_with_mediapipe_tasks(rgb, w, h, result)
 
-        # 2. MediaPipe FaceMesh：低头时 FaceDetection 有时失败，但 FaceMesh 可能仍有关键点
-        if self._face_mesh is not None:
-            try:
-                fm = self._face_mesh.process(rgb)
-                if fm and fm.multi_face_landmarks:
-                    landmarks = fm.multi_face_landmarks[0].landmark
-                    xs = [lm.x for lm in landmarks]
-                    ys = [lm.y for lm in landmarks]
-                    x = max(0, int(min(xs) * w))
-                    y = max(0, int(min(ys) * h))
-                    bw = min(w - x, int((max(xs) - min(xs)) * w))
-                    bh = min(h - y, int((max(ys) - min(ys)) * h))
-                    result.update({
-                        "present": True,
-                        "bbox": (x, y, bw, bh),
-                        "landmarks": landmarks,
-                        "source": self._merge_source(result["source"], "mediapipe_mesh"),
-                    })
-            except Exception:
-                pass
-
-        # 3. Haar 降级：正脸 + 侧脸
+        # 2. Haar 降级：正脸 + 侧脸
         if not result["present"]:
             try:
                 gray = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2GRAY)
@@ -705,6 +798,70 @@ class UserStateDetector:
 
         return result
 
+    def _detect_face_with_mediapipe_tasks(self, rgb_frame: Any, w: int, h: int, result: dict) -> bool:
+        if self._face_landmarker is None or self._mp is None:
+            return False
+        try:
+            mp_image = self._mp.Image(
+                image_format=self._mp.ImageFormat.SRGB,
+                data=rgb_frame,
+            )
+            mp_result = self._face_landmarker.detect_for_video(
+                mp_image,
+                self._next_mediapipe_timestamp_ms(),
+            )
+            face_landmarks = getattr(mp_result, "face_landmarks", None) or []
+            if not face_landmarks:
+                return False
+
+            landmarks = face_landmarks[0]
+            bbox = self._bbox_from_landmarks(landmarks, w, h)
+            result.update({
+                "present": True,
+                "bbox": bbox,
+                "landmarks": landmarks,
+                "source": self._merge_source(result["source"], "mediapipe_tasks_face"),
+            })
+            return True
+        except Exception as exc:
+            self._disable_mediapipe_tasks_after_runtime_error(exc)
+            return False
+
+    def _bbox_from_landmarks(self, landmarks: Any, w: int, h: int) -> Tuple[int, int, int, int]:
+        xs = [float(lm.x) for lm in landmarks]
+        ys = [float(lm.y) for lm in landmarks]
+        left = max(0.0, min(xs))
+        top = max(0.0, min(ys))
+        right = min(1.0, max(xs))
+        bottom = min(1.0, max(ys))
+
+        x = max(0, int(left * w))
+        y = max(0, int(top * h))
+        bw = max(1, min(w - x, int((right - left) * w)))
+        bh = max(1, min(h - y, int((bottom - top) * h)))
+        return x, y, bw, bh
+
+    def _disable_mediapipe_tasks_after_runtime_error(self, exc: Exception) -> None:
+        self._log_mediapipe_runtime_warning("FaceLandmarker.detect_for_video", exc)
+        try:
+            if self._face_landmarker is not None:
+                self._face_landmarker.close()
+        except Exception:
+            pass
+        self._face_landmarker = None
+        self._mediapipe_available = False
+        self._mediapipe_init_reason = f"MediaPipe Tasks 运行时异常，已降级到 OpenCV Haar: {exc}"
+        if not self._haar_only_mode:
+            self._enable_haar_stability_mode()
+
+    def _log_mediapipe_runtime_warning(self, stage: str, exc: Exception) -> None:
+        if self._mediapipe_runtime_warning_logged:
+            return
+        self._mediapipe_runtime_warning_logged = True
+        print(
+            f"[UserStateDetector] MediaPipe 运行时异常({stage})，后续将继续使用 OpenCV Haar 降级：{exc}"
+        )
+
     # ==================== 特征计算 ====================
 
     def _calc_brightness(self, frame: Any) -> float:
@@ -722,7 +879,7 @@ class UserStateDetector:
         该规则不追求医学级准确，只为桌宠提醒提供参考。
         """
         try:
-            # FaceMesh 常用点：1 鼻尖，33/263 眼角，10 额头上方，152 下巴
+            # MediaPipe 人脸关键点常用点：1 鼻尖，33/263 眼角，10 额头上方，152 下巴
             nose = landmarks[1]
             left_eye = landmarks[33]
             right_eye = landmarks[263]
