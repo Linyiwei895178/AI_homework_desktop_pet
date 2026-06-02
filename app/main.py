@@ -91,13 +91,8 @@ def main():
     pet.on_right_click_callback = pet.close
     logger.info("[队员A] 鼠标事件回调绑定完成")
 
-    # ====== 6. 初始化用户状态检测器 (队员B) ======
-    # 取消注释以下代码即可启用摄像头检测：
-    # user_detector = UserStateDetector(enable_vlm=False)
-    # user_detector.set_mock_state(STATE_NORMAL)
-    # team_d.api_bind_vision_detector(user_detector)  # 队员B → 队员D 自动同步
-    # user_detector.start()
-    # logger.info("[队员B] 用户状态检测器已启动，已绑定队员D")
+    # ====== 6. 用户状态检测器接入预留 (队员B B-4) ======
+    # TODO(B-4): UserStateDetector 尚未接入主循环；接入时注意避免与 GestureDetector 抢占摄像头。
 
     # ====== 7. 初始化手势检测器 (队员B，仅通过主入口接入，不改A/C/D核心逻辑) ======
     GESTURE_ENABLED = os.getenv("DESKTOP_PET_GESTURE_ENABLED", "true").strip().lower() in {
@@ -202,8 +197,7 @@ def main():
                 "source": ["mock"],
             }
         else:
-            # 正式模式：从 UserStateDetector 获取真实状态
-            # user_state = user_detector.get_state()
+            # 正式模式：UserStateDetector 尚未接入主循环，保持安静。
             QTimer.singleShot(3000, check_user_state)
             return  # 真实视觉检测未开启时保持安静
 
@@ -257,9 +251,6 @@ def main():
     except Exception as e:
         logger.exception(f"运行时异常: {e}")
     finally:
-        # 停止用户状态检测器（如果已启动）
-        # if "user_detector" in dir() and user_detector:
-        #     user_detector.stop()
         if gesture_timer is not None:
             gesture_timer.stop()
         if gesture_detector is not None:
