@@ -147,6 +147,10 @@ class UserStateDetector:
 
         self._current_state: dict = create_empty_state(STATE_UNKNOWN)
         self._latest_frame: Any = None
+        self._latest_debug_frame: Any = None
+        self._latest_debug_info: dict = {}
+        self._last_debug_face_info: dict = {}
+        self._last_debug_analysis_info: dict = {}
         self._cap: Any = None
         self._owns_camera = frame_provider is None
 
@@ -221,6 +225,31 @@ class UserStateDetector:
                 return self._latest_frame.copy()
             except Exception:
                 return self._latest_frame
+
+    def get_debug_frame(self):
+        """Return the latest overlay debug frame as a BGR image copy."""
+        with self._lock:
+            if self._latest_debug_frame is None:
+                return None
+            try:
+                return self._latest_debug_frame.copy()
+            except Exception:
+                return self._latest_debug_frame
+
+    def get_debug_snapshot(self) -> dict:
+        """Return latest debug frame and metadata without changing get_state()."""
+        with self._lock:
+            frame = None
+            if self._latest_debug_frame is not None:
+                try:
+                    frame = self._latest_debug_frame.copy()
+                except Exception:
+                    frame = self._latest_debug_frame
+            return {
+                "frame": frame,
+                "info": copy.deepcopy(self._latest_debug_info),
+                "state": copy.deepcopy(self._current_state),
+            }
 
     def set_vlm_enabled(self, enabled: bool):
         self._vlm_enabled = bool(enabled)
@@ -311,6 +340,7 @@ class UserStateDetector:
 
                 state = self._analyze_frame(frame)
                 state = self._maybe_apply_vlm(frame, state)
+                self._cache_debug_snapshot(frame, state)
                 self._update_state(state)
 
                 if self._show_preview:
@@ -616,6 +646,23 @@ class UserStateDetector:
         low_light_duration = 0.0 if self._low_light_since is None else now - self._low_light_since
         present_duration = 0.0 if self._face_present_since is None else now - self._face_present_since
         study_duration = 0.0 if self._study_started_at is None else now - self._study_started_at
+
+        analysis_info = {
+            "face_present": bool(face_present),
+            "looking_down": bool(looking_down),
+            "eyes_closed": bool(eyes_closed),
+            "low_light": bool(low_light),
+            "brightness": round(float(brightness), 2),
+            "no_face_duration": round(float(no_face_duration), 2),
+            "looking_down_duration": round(float(looking_down_duration), 2),
+            "eyes_closed_duration": round(float(eyes_closed_duration), 2),
+            "low_light_duration": round(float(low_light_duration), 2),
+            "present_duration": round(float(present_duration), 2),
+            "study_duration": round(float(study_duration), 2),
+        }
+        with self._lock:
+            self._last_debug_face_info = dict(face_info)
+            self._last_debug_analysis_info = dict(analysis_info)
 
         # 4. 离开/回来/正常状态逻辑
         # 关键优化：最近看到过脸/头，则不判 away，避免低头误判人不在。
@@ -1176,16 +1223,111 @@ class UserStateDetector:
                 result.append(text)
         return result
 
-    def _draw_preview(self, frame: Any, state: dict):
+    def _cache_debug_snapshot(
+        self,
+        frame: Any,
+        state: dict,
+        face_info: Optional[dict] = None,
+        analysis_info: Optional[dict] = None,
+    ) -> None:
+        if frame is None:
+            return
         try:
-            text = f"{state.get('state_code')} | {state.get('state_name')} | {state.get('source')}"
-            self._cv2.putText(frame, text, (20, 40), self._cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 0), 2)
-            self._cv2.imshow("UserStateDetector Preview", frame)
-            key = self._cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                self._is_running = False
+            overlay = frame.copy()
+        except Exception:
+            return
+
+        with self._lock:
+            face = dict(face_info or self._last_debug_face_info or {})
+            analysis = dict(analysis_info or self._last_debug_analysis_info or {})
+
+        debug_info = self._build_debug_info(state, face, analysis)
+        try:
+            self._draw_debug_overlay(overlay, state, face, analysis)
         except Exception:
             pass
+
+        with self._lock:
+            self._latest_debug_frame = overlay
+            self._latest_debug_info = debug_info
+
+    def _build_debug_info(self, state: dict, face_info: dict, analysis_info: dict) -> dict:
+        landmarks = face_info.get("landmarks") or []
+        try:
+            landmarks_count = len(landmarks)
+        except Exception:
+            landmarks_count = 0
+        return {
+            "state_code": state.get("state_code", STATE_UNKNOWN),
+            "state_name": state.get("state_name", ""),
+            "confidence": state.get("confidence", 0.0),
+            "source": self._merge_source([], state.get("source", [])),
+            "face_present": bool(face_info.get("present") or analysis_info.get("face_present")),
+            "bbox": face_info.get("bbox"),
+            "landmarks_count": landmarks_count,
+            "looking_down": bool(analysis_info.get("looking_down", False)),
+            "eyes_closed": bool(analysis_info.get("eyes_closed", False)),
+            "low_light": bool(analysis_info.get("low_light", False)),
+            "brightness": analysis_info.get("brightness", 0.0),
+            "no_face_duration": analysis_info.get("no_face_duration", 0.0),
+            "updated_at": time.time(),
+        }
+
+    def _draw_debug_overlay(self, frame: Any, state: dict, face_info: dict, analysis_info: dict) -> None:
+        cv2 = self._cv2
+        if cv2 is None:
+            return
+        h, w = frame.shape[:2]
+
+        bbox = face_info.get("bbox")
+        if bbox:
+            x, y, bw, bh = [int(v) for v in bbox]
+            cv2.rectangle(frame, (x, y), (x + bw, y + bh), (255, 0, 0), 2)
+
+        landmarks = face_info.get("landmarks") or []
+        try:
+            for idx, lm in enumerate(landmarks):
+                if idx % 3 != 0:
+                    continue
+                px = int(max(0.0, min(1.0, float(lm.x))) * w)
+                py = int(max(0.0, min(1.0, float(lm.y))) * h)
+                cv2.circle(frame, (px, py), 1, (0, 255, 0), -1)
+        except Exception:
+            pass
+
+        state_code = str(state.get("state_code", STATE_UNKNOWN))
+        confidence = float(state.get("confidence", 0.0) or 0.0)
+        source = ",".join(self._merge_source([], state.get("source", []))) or "none"
+        face_text = "face: yes" if face_info.get("present") else "face: no"
+        lines = [
+            f"state: {state_code}  conf: {confidence:.2f}",
+            f"source: {source[:80]}",
+            (
+                f"{face_text}  looking_down: {bool(analysis_info.get('looking_down'))}  "
+                f"eyes_closed: {bool(analysis_info.get('eyes_closed'))}  "
+                f"low_light: {bool(analysis_info.get('low_light'))}"
+            ),
+            f"brightness: {analysis_info.get('brightness', 0.0)}",
+        ]
+        if not face_info.get("present"):
+            lines.append("no face")
+
+        panel_height = min(h, 26 + len(lines) * 24)
+        cv2.rectangle(frame, (0, 0), (w, panel_height), (0, 0, 0), -1)
+        for i, text in enumerate(lines):
+            cv2.putText(
+                frame,
+                text,
+                (12, 24 + i * 22),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.58,
+                (0, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+    def _draw_preview(self, frame: Any, state: dict):
+        self._cache_debug_snapshot(frame, state)
 
 
 # 简单手动测试：python models/vision/user_state_detector.py

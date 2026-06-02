@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 from app.services.demo_mode import MockUserStateProvider
 from app.ui.desktop_pet import DesktopPet
+from app.ui.vision_debug_panel import VisionDebugPanel
 from app.controller.event_handler import EventHandler
 from app.controller.pet_controller import PetController
 from models.state.pet_state import PetState
@@ -247,6 +248,7 @@ def main():
             return False
 
         camera_ready = False
+        detector_ready = not (USER_STATE_ENABLED and not MOCK_ENABLED)
 
         if shared_camera is None or not shared_camera.is_running():
             try:
@@ -276,14 +278,17 @@ def main():
                 )
                 user_detector.start()
                 pet._user_state_detector = user_detector
+                detector_ready = True
                 logger.info("[队员B] 用户状态检测器已启动，使用共享摄像头")
             except Exception as exc:
                 user_detector = None
                 pet._user_state_detector = None
+                detector_ready = False
                 logger.exception(f"[队员B] 用户状态检测器重新启动失败，将使用mock/unknown状态: {exc}")
         elif USER_STATE_ENABLED:
             user_detector = None
             pet._user_state_detector = None
+            detector_ready = True
             logger.info("[队员B] 用户状态检测器使用mock/unknown状态")
 
         if GESTURE_ENABLED:
@@ -313,13 +318,17 @@ def main():
                 pet._gesture_detector = None
                 logger.exception(f"[队员B] 手势检测器恢复失败，桌宠继续运行: {exc}")
 
-        if camera_ready:
+        if camera_ready and detector_ready:
             camera_detection_enabled = True
             logger.info("[队员B] 摄像头检测已开启")
             return True
 
         camera_detection_enabled = False
-        logger.warning("[队员B] 摄像头重新打开失败，主程序继续运行并降级为mock/unknown状态")
+        if not camera_ready:
+            logger.warning("[队员B] 摄像头重新打开失败，主程序继续运行并降级为mock/unknown状态")
+        elif not detector_ready:
+            logger.warning("[队员B] 用户状态检测器重新打开失败，保持摄像头检测关闭。")
+            stop_user_detector()
         return False
 
     def stop_user_detector() -> None:
@@ -430,6 +439,59 @@ def main():
     app.installEventFilter(camera_toggle_key_filter)
     pet._camera_toggle_key_filter = camera_toggle_key_filter
     logger.info("[队员B] q键摄像头/用户状态检测开关已绑定")
+
+    vision_debug_panel = None
+
+    def is_vision_debug_panel_visible() -> bool:
+        return vision_debug_panel is not None and vision_debug_panel.isVisible()
+
+    def sync_vision_debug_controls() -> None:
+        console = getattr(pet, "_console", None)
+        if console is None:
+            return
+        sync = getattr(console, "sync_vision_debug_state", None)
+        if not callable(sync):
+            return
+        try:
+            sync(is_vision_debug_panel_visible())
+        except RuntimeError:
+            return
+        except Exception as exc:
+            logger.warning(f"[队员B] 视觉调试控制台状态同步失败，已忽略: {exc}")
+
+    def ensure_vision_debug_panel() -> VisionDebugPanel:
+        nonlocal vision_debug_panel
+        if vision_debug_panel is None:
+            vision_debug_panel = VisionDebugPanel(
+                detector_getter=lambda: user_detector,
+                gesture_getter=lambda: gesture_detector.get_state() if gesture_detector is not None else None,
+                camera_enabled_getter=lambda: camera_detection_enabled,
+                refresh_ms=150,
+            )
+            vision_debug_panel.hide()
+            vision_debug_panel.start()
+            pet._vision_debug_panel = vision_debug_panel
+            vision_debug_panel.visibility_changed.connect(lambda _visible: sync_vision_debug_controls())
+            logger.info("[队员B] 视觉调试预览窗口已创建")
+        return vision_debug_panel
+
+    def set_vision_debug_panel_visible(enabled: bool) -> None:
+        panel = ensure_vision_debug_panel()
+        if enabled:
+            panel.start()
+            panel.show()
+            panel.raise_()
+            panel.activateWindow()
+            panel.update_from_detector()
+            logger.info("[队员B] 视觉调试预览窗口已显示")
+        else:
+            panel.hide()
+            logger.info("[队员B] 视觉调试预览窗口已隐藏")
+        sync_vision_debug_controls()
+
+    pet._vision_debug_set_visible = set_vision_debug_panel_visible
+    pet._vision_debug_is_visible = is_vision_debug_panel_visible
+    pet._vision_debug_panel = None
 
     # ====== 10. 启动定时状态检测 + 自动回应 ======
     SPEECH_HINT_COOLDOWN_SECONDS = 300.0
@@ -583,17 +645,55 @@ def main():
     except Exception as e:
         logger.exception(f"运行时异常: {e}")
     finally:
+        logger.info("[AI_Desktop_Pet] 正在清理子窗口和后台线程...")
+        try:
+            app.removeEventFilter(camera_toggle_key_filter)
+        except Exception:
+            pass
+        try:
+            if hasattr(team_c, "api_stop_long_text"):
+                team_c.api_stop_long_text()
+        except Exception as exc:
+            logger.warning(f"[队员C] 停止长文本朗读失败，已忽略: {exc}")
+        try:
+            if hasattr(pet, "stop_text_reading"):
+                pet.stop_text_reading()
+        except Exception as exc:
+            logger.warning(f"[队员C] 停止桌宠朗读失败，已忽略: {exc}")
         if gesture_timer is not None:
-            gesture_timer.stop()
+            try:
+                gesture_timer.stop()
+            except Exception:
+                pass
         if gesture_detector is not None:
-            gesture_detector.stop()
+            try:
+                gesture_detector.stop()
+            except Exception as exc:
+                logger.warning(f"[队员B] 手势检测器清理异常，已忽略: {exc}")
         if user_detector is not None:
-            user_detector.stop()
+            try:
+                user_detector.stop()
+            except Exception as exc:
+                logger.warning(f"[队员B] 用户状态检测器清理异常，已忽略: {exc}")
         if shared_camera is not None:
-            shared_camera.stop()
-        if getattr(pet, "_running", False):
-            pet.close()
-        logger.info("AI_Desktop_Pet 已退出。")
+            try:
+                shared_camera.stop()
+            except Exception as exc:
+                logger.warning(f"[队员B] 共享摄像头清理异常，已忽略: {exc}")
+        try:
+            if hasattr(pet, "cleanup"):
+                pet.cleanup(quit_app=False)
+            else:
+                pet.close()
+        except Exception as exc:
+            logger.warning(f"[AI_Desktop_Pet] 桌宠 UI 清理异常，已忽略: {exc}")
+        try:
+            for widget in list(app.topLevelWidgets()):
+                widget.hide()
+                widget.close()
+        except Exception:
+            pass
+        logger.info("[AI_Desktop_Pet] 清理完成，程序退出。")
 
 
 if __name__ == "__main__":

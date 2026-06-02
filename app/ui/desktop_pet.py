@@ -911,6 +911,7 @@ class PetControlConsole(ControlConsole):
       on_stop_read_text=desktop_pet.stop_text_reading,
       on_pet_settings_changed=desktop_pet.update_pet_personalization_settings,
     )
+    self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
     self._flat = desktop_pet.list_flat_pets_enriched()
     self._history_viewer: StatusHistoryViewer | None = None
     self._reload_flat_tab()
@@ -945,6 +946,37 @@ class PetControlConsole(ControlConsole):
     self.stats = self._desk.stats_for_dashboard()
     if hasattr(self, "_dash_pet_pic"):
       self._refresh_dashboard()
+
+  def _vision_debug_visible(self) -> bool:
+    getter = getattr(self._desk, "_vision_debug_is_visible", None)
+    if not callable(getter):
+      return False
+    try:
+      return bool(getter())
+    except Exception:
+      return False
+
+  def sync_vision_debug_state(self, visible: bool | None = None) -> None:
+    btn = getattr(self, "_vision_debug_btn", None)
+    if btn is None:
+      return
+    if visible is None:
+      visible = self._vision_debug_visible()
+    btn.blockSignals(True)
+    btn.setChecked(bool(visible))
+    btn.setText("视觉预览：开启" if visible else "视觉预览：关闭")
+    btn.blockSignals(False)
+
+  def _toggle_vision_debug_preview(self, checked: bool) -> None:
+    setter = getattr(self._desk, "_vision_debug_set_visible", None)
+    if callable(setter):
+      try:
+        setter(bool(checked))
+      except Exception as exc:
+        self._log(f"视觉调试预览切换失败: {exc}")
+    else:
+      self._log("视觉调试预览入口尚未初始化")
+    self.sync_vision_debug_state()
 
   def _current_pet(self) -> dict | None:
     return self._get_pet(self._current_pet_id)
@@ -982,6 +1014,23 @@ class PetControlConsole(ControlConsole):
     tool_row.addWidget(hist_btn)
     tool_row.addStretch()
     lay.addLayout(tool_row)
+    vision = QFrame()
+    vision.setStyleSheet(_glass_style(14))
+    vl = QVBoxLayout(vision)
+    vl.setContentsMargins(14, 12, 14, 12)
+    vl.setSpacing(8)
+    vl.addWidget(QLabel("<h3>视觉调试</h3>"))
+    desc = QLabel("显示B模块摄像头画面、FaceLandmarker关键点和用户状态调试信息。")
+    desc.setWordWrap(True)
+    desc.setStyleSheet("color:#64748b;")
+    vl.addWidget(desc)
+    self._vision_debug_btn = QPushButton("视觉预览：关闭")
+    self._vision_debug_btn.setCheckable(True)
+    self._vision_debug_btn.setStyleSheet(BTN_GLASS)
+    self._vision_debug_btn.clicked.connect(self._toggle_vision_debug_preview)
+    vl.addWidget(self._vision_debug_btn)
+    lay.addWidget(vision)
+    self.sync_vision_debug_state()
     lay.addWidget(QLabel("<h3>当前宠物简介</h3>"))
     intro = QFrame()
     intro.setStyleSheet(_glass_style(14))
@@ -2042,6 +2091,13 @@ class PetWindow(QWidget):
   def paintEvent(self, event) -> None:
     super().paintEvent(event)
 
+  def closeEvent(self, event) -> None:
+    if not self._pet._cleaning_up:
+      event.ignore()
+      self._pet._close_pet_window()
+      return
+    super().closeEvent(event)
+
   def mouseMoveEvent(self, event: QMouseEvent) -> None:
     if self._pet._is_flat_mode():
       pos = (event.position().x(), event.position().y())
@@ -2109,6 +2165,7 @@ class DesktopPet:
     self._model: Optional[live2d.LAppModel] = None
     self._motion_index: dict[str, tuple[str, int]] = {}
     self._running = False
+    self._cleaning_up = False
     self.available_motions: list[str] = []
     self.motion_name_map = MOTION_NAME_MAP
 
@@ -3073,19 +3130,74 @@ class DesktopPet:
     except Exception:
       pass
 
-  def close(self) -> None:
+  def _stop_runtime_timers(self) -> None:
     self._running = False
-    if self._timer:
-      self._timer.stop()
-    if self._computer_comment_timer:
-      self._computer_comment_timer.stop()
-      self._computer_comment_timer = None
-    if self._speech_hint_timer:
-      self._speech_hint_timer.stop()
-      self._speech_hint_timer = None
-    for widget in (self.info_bubble, self.chat_bubble, self.input_box):
-      if widget is not None:
-        widget.hide()
+    for attr in ("_timer", "_computer_comment_timer", "_speech_hint_timer"):
+      timer = getattr(self, attr, None)
+      if timer is not None:
+        try:
+          timer.stop()
+        except RuntimeError:
+          pass
+        setattr(self, attr, None)
+    try:
+      self._edge_hold_timer.stop()
+    except RuntimeError:
+      pass
+
+  def _close_qt_widget(self, widget: QWidget | None) -> None:
+    if not self._widget_alive(widget):
+      return
+    shutdown = getattr(widget, "shutdown", None)
+    if callable(shutdown):
+      try:
+        shutdown()
+        return
+      except RuntimeError:
+        return
+      except Exception as exc:
+        print(f"[DesktopPet] 子窗口 shutdown 失败，改用 close: {exc}")
+    try:
+      widget.hide()
+    except RuntimeError:
+      pass
+    try:
+      widget.close()
+    except RuntimeError:
+      pass
+    try:
+      widget.deleteLater()
+    except RuntimeError:
+      pass
+
+  def _close_child_windows(self) -> None:
+    for widget in (
+      getattr(self, "_vision_debug_panel", None),
+      self._console,
+      self.info_bubble,
+      self.chat_bubble,
+      self.input_box,
+      self.context_menu,
+      self.pin_submenu,
+      self.hover_submenu,
+      self.status_submenu,
+      self.chat_submenu,
+      self.arc_menu,
+      self._window,
+    ):
+      self._close_qt_widget(widget)
+    self._clear_overlay_refs()
+    self._console = None
+    self._window = None
+    if hasattr(self, "_vision_debug_panel"):
+      self._vision_debug_panel = None
+    self._chat_stream = None
+
+  def close(self) -> None:
+    self._cleaning_up = True
+    self._stop_runtime_timers()
+    self.stop_text_reading()
+    self._close_child_windows()
     self._model = None
     try:
       live2d.glRelease()
@@ -3095,6 +3207,12 @@ class DesktopPet:
       live2d.dispose()
     except Exception:
       pass
+    self._cleaning_up = False
+
+  def cleanup(self, quit_app: bool = False) -> None:
+    self.close()
+    if quit_app and self._app:
+      self._app.quit()
 
   def _tick(self) -> None:
     if not self._running:
@@ -4119,32 +4237,9 @@ class DesktopPet:
       pass
 
   def _close_pet_window(self) -> None:
-    """仅关闭桌宠悬浮窗；设置面板保持独立运行。"""
+    """关闭完整桌宠程序并释放所有 UI 子窗口。"""
     self._save_pet_memory()
-    self._running = False
-    if self._timer:
-      self._timer.stop()
-      self._timer = None
-    if self._computer_comment_timer:
-      self._computer_comment_timer.stop()
-      self._computer_comment_timer = None
-    if self._speech_hint_timer:
-      self._speech_hint_timer.stop()
-      self._speech_hint_timer = None
-    self._dismiss_menus()
-    if self._window is not None:
-      self._window.hide()
-      self._window.close()
-      self._window = None
-    self._clear_overlay_refs()
-    if self._console is not None:
-      try:
-        if self._console.isVisible():
-          return
-      except RuntimeError:
-        pass
-    if self._app:
-      self._app.quit()
+    self.cleanup(quit_app=True)
 
   def _open_settings_panel(self) -> None:
     self.arc_menu.hide()
