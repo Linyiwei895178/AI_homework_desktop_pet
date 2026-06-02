@@ -8,6 +8,16 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 
+HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (0, 5), (5, 6), (6, 7), (7, 8),
+    (0, 9), (9, 10), (10, 11), (11, 12),
+    (0, 13), (13, 14), (14, 15), (15, 16),
+    (0, 17), (17, 18), (18, 19), (19, 20),
+    (5, 9), (9, 13), (13, 17),
+]
+
+
 class VisionDebugPanel(QWidget):
     """Standalone Qt panel for visual debugging of Team B camera perception."""
 
@@ -55,6 +65,7 @@ class VisionDebugPanel(QWidget):
         self._timer.timeout.connect(self.update_from_detector)
         self._logged_waiting_frame = False
         self._logged_first_frame = False
+        self._logged_first_hand = False
         self._closing_for_cleanup = False
 
     def start(self) -> None:
@@ -122,7 +133,8 @@ class VisionDebugPanel(QWidget):
             self.info_label.setText(self._format_info(info, state, gesture_state))
             return
 
-        self.set_frame(frame)
+        display_frame = self._draw_hand_overlay(frame, gesture_state)
+        self.set_frame(display_frame)
         self.info_label.setText(self._format_info(info, state, gesture_state))
 
     def set_frame(self, frame: Any) -> None:
@@ -190,6 +202,102 @@ class VisionDebugPanel(QWidget):
         except Exception:
             return None
 
+    def _draw_hand_overlay(self, frame: Any, gesture_state: dict | None) -> Any:
+        hands = []
+        if isinstance(gesture_state, dict):
+            raw_hands = gesture_state.get("hands")
+            if isinstance(raw_hands, list):
+                hands = raw_hands
+        if not hands:
+            return frame
+
+        try:
+            import cv2  # type: ignore
+        except Exception:
+            return frame
+
+        try:
+            canvas = frame.copy()
+            height, width = canvas.shape[:2]
+            gesture_code = str((gesture_state or {}).get("gesture_code") or "none")
+            confidence = float((gesture_state or {}).get("confidence", 0.0) or 0.0)
+            zoom_state = gesture_state.get("zoom") if isinstance(gesture_state, dict) else None
+            zoom_state = zoom_state if isinstance(zoom_state, dict) else {}
+
+            for hand in hands:
+                if not isinstance(hand, dict):
+                    continue
+                landmarks = hand.get("landmarks")
+                if not isinstance(landmarks, list) or len(landmarks) < 21:
+                    continue
+
+                points: list[tuple[int, int] | None] = []
+                for landmark in landmarks:
+                    if not isinstance(landmark, dict):
+                        points.append(None)
+                        continue
+                    x = float(landmark.get("x", 0.0) or 0.0)
+                    y = float(landmark.get("y", 0.0) or 0.0)
+                    px = int(round(x * width)) if 0.0 <= x <= 1.5 else int(round(x))
+                    py = int(round(y * height)) if 0.0 <= y <= 1.5 else int(round(y))
+                    if px < 0 or py < 0 or px >= width or py >= height:
+                        points.append(None)
+                    else:
+                        points.append((px, py))
+
+                if not any(points):
+                    continue
+
+                for start, end in HAND_CONNECTIONS:
+                    if start >= len(points) or end >= len(points):
+                        continue
+                    p1 = points[start]
+                    p2 = points[end]
+                    if p1 is None or p2 is None:
+                        continue
+                    cv2.line(canvas, p1, p2, (255, 210, 40), 2, cv2.LINE_AA)
+
+                for idx, point in enumerate(points):
+                    if point is None:
+                        continue
+                    radius = 5 if idx == 0 else 4
+                    color = (0, 255, 255) if idx == 0 else (40, 255, 180)
+                    cv2.circle(canvas, point, radius, color, -1, cv2.LINE_AA)
+                    cv2.circle(canvas, point, radius + 1, (15, 32, 39), 1, cv2.LINE_AA)
+
+                wrist = points[0] or next((point for point in points if point is not None), None)
+                if wrist is not None:
+                    handedness = str(hand.get("handedness") or gesture_state.get("handedness") or "Unknown")
+                    label = f"{handedness} {gesture_code} {confidence:.2f}"
+                    cv2.putText(
+                        canvas,
+                        label,
+                        (max(4, wrist[0] + 8), max(18, wrist[1] - 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (255, 255, 120),
+                        2,
+                        cv2.LINE_AA,
+                    )
+                    pinch_distance = zoom_state.get("pinch_distance")
+                    scale_ratio = zoom_state.get("scale_ratio")
+                    if pinch_distance is not None and scale_ratio is not None:
+                        zoom_label = f"pinch {float(pinch_distance):.3f}  scale {float(scale_ratio):.2f}"
+                        cv2.putText(
+                            canvas,
+                            zoom_label,
+                            (max(4, wrist[0] + 8), max(38, wrist[1] + 12)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5,
+                            (120, 255, 255),
+                            2,
+                            cv2.LINE_AA,
+                        )
+                self._log_first_hand_once()
+            return canvas
+        except Exception:
+            return frame
+
     def _frame_to_pixmap(self, frame: Any) -> QPixmap | None:
         try:
             if frame.ndim != 3 or frame.shape[2] < 3:
@@ -223,6 +331,12 @@ class VisionDebugPanel(QWidget):
         self._logged_first_frame = True
         print("[队员B] 视觉调试预览已接收到摄像头画面")
 
+    def _log_first_hand_once(self) -> None:
+        if self._logged_first_hand:
+            return
+        self._logged_first_hand = True
+        print("[队员B] 视觉调试预览已接收到手部关键点")
+
     def _format_info(self, info: dict, state: dict, gesture_state: dict | None) -> str:
         state_code = info.get("state_code") or state.get("state_code") or "unknown"
         confidence = info.get("confidence", state.get("confidence", 0.0))
@@ -246,11 +360,22 @@ class VisionDebugPanel(QWidget):
         ]
 
         if gesture_state:
+            hands = gesture_state.get("hands")
+            hand_count = len(hands) if isinstance(hands, list) else 0
+            zoom = gesture_state.get("zoom")
+            zoom = zoom if isinstance(zoom, dict) else {}
             lines.extend([
                 f"gesture_code: {gesture_state.get('gesture_code', 'none')}",
                 f"gesture_confidence: {gesture_state.get('confidence', 0.0)}",
+                f"gesture_handedness: {gesture_state.get('handedness', 'Unknown')}",
+                f"hand_landmarks: {hand_count}",
+                f"zoom_active: {zoom.get('active', False)}",
+                f"pinch_distance: {zoom.get('pinch_distance')}",
+                f"scale_ratio: {zoom.get('scale_ratio')}",
                 f"gesture_source: {gesture_state.get('source', [])}",
             ])
+        else:
+            lines.append("gesture_detector: unavailable")
 
         updated_at = info.get("updated_at")
         if updated_at:

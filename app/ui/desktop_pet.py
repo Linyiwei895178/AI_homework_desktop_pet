@@ -3053,7 +3053,7 @@ class DesktopPet:
     self._resize_start_global = global_pos
     self._resize_start_size = (self._win_w, self._win_h)
 
-  def _apply_window_size(self, w: int, h: int) -> None:
+  def _apply_window_size(self, w: int, h: int, save_memory: bool = True) -> None:
     w = max(220, w)
     h = max(280, h)
     self._win_w, self._win_h = w, h
@@ -3070,7 +3070,8 @@ class DesktopPet:
     self._apply_ui_scale()
     if self._status_bar_enabled or self._chat_open:
       self._layout_bubbles()
-    self._save_pet_memory()
+    if save_memory:
+      self._save_pet_memory()
 
   def _ui_scale_factor(self) -> float:
     return max(0.35, min(1.25, self._win_w / BASE_WINDOW_W))
@@ -3097,6 +3098,20 @@ class DesktopPet:
     new_w = int(self._win_w * factor)
     new_h = int(new_w / self._aspect_ratio)
     self._apply_window_size(new_w, new_h)
+
+  def set_pet_scale(self, scale: float, min_scale: float = 0.6, max_scale: float = 1.8) -> None:
+    value = max(float(min_scale), min(float(max_scale), float(scale)))
+    new_w = int(round(BASE_WINDOW_W * value))
+    new_h = int(round(BASE_WINDOW_H * value))
+    if abs(new_w - self._win_w) < 2 and abs(new_h - self._win_h) < 2:
+      return
+    self._aspect_ratio = BASE_WINDOW_W / BASE_WINDOW_H
+    self._apply_window_size(new_w, new_h, save_memory=False)
+
+  def current_pet_scale(self) -> float:
+    if self._win_w <= 0:
+      return 1.0
+    return self._win_w / BASE_WINDOW_W
 
   def _on_pin_submenu_item_and_dismiss(self, choice: str) -> None:
     self._on_pin_submenu_item(choice)

@@ -17,7 +17,13 @@ GESTURE_WAVE = "wave"
 GESTURE_OK = "ok"
 GESTURE_HEART = "heart"
 GESTURE_RAISED_HAND = "raised_hand"
+GESTURE_PINCH_ZOOM = "pinch_zoom"
 GESTURE_NONE = "none"
+
+ZOOM_MIN_PINCH_DISTANCE = 0.03
+ZOOM_MAX_PINCH_DISTANCE = 0.35
+ZOOM_MIN_SCALE = 0.6
+ZOOM_MAX_SCALE = 1.8
 
 HAND_LANDMARKER_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
@@ -29,6 +35,7 @@ ALL_GESTURE_CODES = {
     GESTURE_OK,
     GESTURE_HEART,
     GESTURE_RAISED_HAND,
+    GESTURE_PINCH_ZOOM,
     GESTURE_NONE,
 }
 
@@ -37,6 +44,7 @@ GESTURE_NAME_MAP = {
     GESTURE_OK: "OK",
     GESTURE_HEART: "比心",
     GESTURE_RAISED_HAND: "举手",
+    GESTURE_PINCH_ZOOM: "手势缩放",
     GESTURE_NONE: "无",
 }
 
@@ -45,6 +53,7 @@ GESTURE_DESCRIPTIONS = {
     GESTURE_OK: "模拟检测到用户做出 OK 手势。",
     GESTURE_HEART: "模拟检测到用户比心。",
     GESTURE_RAISED_HAND: "模拟检测到用户举手。",
+    GESTURE_PINCH_ZOOM: "检测到用户正在用拇指和食指控制缩放。",
     GESTURE_NONE: "当前没有检测到明确手势。",
 }
 
@@ -53,6 +62,7 @@ GESTURE_SUGGESTIONS = {
     GESTURE_OK: "给桌宠：用轻快语气回应用户的 OK 手势，表示收到。",
     GESTURE_HEART: "给桌宠：用开心、亲近的语气回应用户比心。",
     GESTURE_RAISED_HAND: "给桌宠：回应用户举手，像被叫到一样注意用户。",
+    GESTURE_PINCH_ZOOM: "给桌宠：手势缩放是控制指令，不需要主动说话。",
     GESTURE_NONE: "给桌宠：无手势，不需要主动回应。",
 }
 
@@ -67,7 +77,7 @@ def create_gesture_state(
     if gesture_code not in ALL_GESTURE_CODES:
         gesture_code = GESTURE_NONE
 
-    need_response = gesture_code != GESTURE_NONE
+    need_response = gesture_code not in {GESTURE_NONE, GESTURE_PINCH_ZOOM}
     if confidence is None:
         confidence = 0.0 if gesture_code == GESTURE_NONE else 0.9
     return {
@@ -105,8 +115,18 @@ class GestureDetector:
         self.detect_interval = max(0.03, float(detect_interval))
         self.enable_real = bool(enable_real)
         self._frame_provider = frame_provider
+        self._last_zoom_scale = 1.0
+        self._last_zoom_active_at = 0.0
+        self._pinch_distance_history: deque[tuple[float, float]] = deque(maxlen=8)
+        self._state["zoom"] = self._inactive_zoom_state()
 
         self._thread: Optional[threading.Thread] = None
+        self._debug_snapshot: Dict[str, Any] = self._build_debug_snapshot(
+            self._state,
+            hands=[],
+            handedness=[],
+            source=self._state.get("source", ["mock_gesture"]),
+        )
         self._cv2: Any = None
         self._mp: Any = None
         self._hands: Any = None
@@ -145,13 +165,21 @@ class GestureDetector:
         with self._lock:
             return copy.deepcopy(self._state)
 
+    def get_debug_snapshot(self) -> Dict[str, Any]:
+        """Return latest MediaPipe Hands landmarks for visual debug preview."""
+        with self._lock:
+            return copy.deepcopy(self._debug_snapshot)
+
     def set_callback(self, callback: Optional[Callable[[Dict[str, Any]], None]]) -> None:
         """Register a callback invoked when set_mock_gesture updates state."""
         self._callback = callback
 
     def set_mock_gesture(self, gesture_code: str) -> None:
         """Set a mock gesture and notify the callback once if present."""
-        self._update_state(create_gesture_state(str(gesture_code or GESTURE_NONE).strip()), notify=True)
+        state = create_gesture_state(str(gesture_code or GESTURE_NONE).strip())
+        state["zoom"] = self._inactive_zoom_state()
+        self._cache_debug_snapshot(state, hands=[], handedness=[], source=state.get("source", ["mock_gesture"]))
+        self._update_state(state, notify=True)
 
     def is_running(self) -> bool:
         """Small helper for tests and future app integration."""
@@ -269,12 +297,15 @@ class GestureDetector:
             try:
                 ret, frame = self._read_frame()
                 if not ret or frame is None:
-                    self._update_state(create_gesture_state(
+                    state = create_gesture_state(
                         GESTURE_NONE,
                         confidence=0.0,
                         source=["mediapipe_hands"],
                         description="摄像头暂时没有读到画面。",
-                    ))
+                    )
+                    state["zoom"] = self._inactive_zoom_state()
+                    self._cache_debug_snapshot(state, hands=[], handedness=[], source=["mediapipe_hands"])
+                    self._update_state(state)
                     time.sleep(self.detect_interval)
                     continue
 
@@ -282,12 +313,15 @@ class GestureDetector:
                 self._update_state(state)
             except Exception as exc:
                 print(f"[GestureDetector] detect loop failed: {exc}")
-                self._update_state(create_gesture_state(
+                state = create_gesture_state(
                     GESTURE_NONE,
                     confidence=0.0,
                     source=["mediapipe_hands"],
                     description="手势识别循环出现异常，暂未检测到手势。",
-                ))
+                )
+                state["zoom"] = self._inactive_zoom_state()
+                self._cache_debug_snapshot(state, hands=[], handedness=[], source=["mediapipe_hands"])
+                self._update_state(state)
 
             elapsed = time.time() - loop_start
             time.sleep(max(0.01, self.detect_interval - elapsed))
@@ -307,36 +341,59 @@ class GestureDetector:
     def _detect_gesture(self, frame: Any) -> Dict[str, Any]:
         """Run MediaPipe Hands on one frame and classify a simple gesture."""
         if self._cv2 is None or self._hands is None:
-            return create_gesture_state(GESTURE_NONE, source=["mediapipe_hands"])
+            state = create_gesture_state(GESTURE_NONE, source=["mediapipe_hands"])
+            state["zoom"] = self._inactive_zoom_state()
+            self._cache_debug_snapshot(state, hands=[], handedness=[], source=["mediapipe_hands"])
+            return state
 
         rgb = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2RGB)
         if self._mp_mode == "solutions":
             result = self._hands.process(rgb)
             hands = [hand.landmark for hand in (getattr(result, "multi_hand_landmarks", None) or [])]
+            handedness = [
+                self._extract_handedness(item)
+                for item in (getattr(result, "multi_handedness", None) or [])
+            ]
         else:
             image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
             result = self._hands.detect(image)
             hands = getattr(result, "hand_landmarks", None) or []
+            handedness = [
+                self._extract_handedness(item)
+                for item in (getattr(result, "handedness", None) or [])
+            ]
 
         if not hands:
             self._hand_center_history.clear()
-            return create_gesture_state(
+            self._pinch_distance_history.clear()
+            state = create_gesture_state(
                 GESTURE_NONE,
                 confidence=0.0,
                 source=["mediapipe_hands"],
                 description="当前没有检测到手部。",
             )
+            state["zoom"] = self._inactive_zoom_state()
+            self._cache_debug_snapshot(state, hands=[], handedness=[], source=["mediapipe_hands"])
+            return state
 
+        zoom_state = self._calculate_zoom_state(hands[0])
         gesture_code, confidence = self._classify_hands(hands)
         description = f"MediaPipe Hands 检测到{GESTURE_NAME_MAP[gesture_code]}手势。"
         if gesture_code == GESTURE_NONE:
             description = "MediaPipe Hands 检测到手部，但没有匹配到明确手势。"
-        return create_gesture_state(
+        if zoom_state.get("active") and gesture_code == GESTURE_OK:
+            gesture_code = GESTURE_PINCH_ZOOM
+            confidence = max(confidence, float(zoom_state.get("confidence", 0.0) or 0.0))
+            description = "MediaPipe Hands 检测到拇指和食指距离变化，正在控制桌宠缩放。"
+        state = create_gesture_state(
             gesture_code,
             confidence=confidence,
             source=["mediapipe_hands"],
             description=description,
         )
+        state["zoom"] = zoom_state
+        self._cache_debug_snapshot(state, hands=hands, handedness=handedness, source=["mediapipe_hands"])
+        return state
 
     def _classify_hands(self, hands: list[Any]) -> tuple[str, float]:
         if len(hands) >= 2 and self._is_heart(hands[0], hands[1]):
@@ -400,6 +457,124 @@ class GestureDetector:
     @staticmethod
     def _distance(a: Any, b: Any) -> float:
         return math.dist((float(a.x), float(a.y)), (float(b.x), float(b.y)))
+
+    def _calculate_zoom_state(self, landmarks: Any) -> Dict[str, Any]:
+        if len(landmarks) <= 8:
+            return self._inactive_zoom_state()
+
+        pinch_distance = self._distance(landmarks[4], landmarks[8])
+        now = time.time()
+        self._pinch_distance_history.append((now, pinch_distance))
+        recent = [distance for ts, distance in self._pinch_distance_history if now - ts <= 0.8]
+        movement = (max(recent) - min(recent)) if len(recent) >= 3 else 0.0
+        moving = movement >= 0.012
+        if moving:
+            self._last_zoom_active_at = now
+
+        active = moving or (len(recent) >= 2 and now - self._last_zoom_active_at <= 0.6)
+        target_scale = self._pinch_distance_to_scale(pinch_distance)
+        smooth_scale = self._last_zoom_scale * 0.75 + target_scale * 0.25
+        if active:
+            self._last_zoom_scale = smooth_scale
+
+        return {
+            "gesture_code": GESTURE_PINCH_ZOOM,
+            "active": bool(active),
+            "pinch_distance": round(float(pinch_distance), 4),
+            "target_scale": round(float(target_scale), 3),
+            "scale_ratio": round(float(self._last_zoom_scale), 3),
+            "confidence": 0.82 if active else 0.35,
+            "min_pinch_distance": ZOOM_MIN_PINCH_DISTANCE,
+            "max_pinch_distance": ZOOM_MAX_PINCH_DISTANCE,
+            "min_scale": ZOOM_MIN_SCALE,
+            "max_scale": ZOOM_MAX_SCALE,
+            "source": ["mediapipe_hands"],
+        }
+
+    @staticmethod
+    def _pinch_distance_to_scale(pinch_distance: float) -> float:
+        span = max(0.001, ZOOM_MAX_PINCH_DISTANCE - ZOOM_MIN_PINCH_DISTANCE)
+        t = (float(pinch_distance) - ZOOM_MIN_PINCH_DISTANCE) / span
+        t = max(0.0, min(1.0, t))
+        return ZOOM_MIN_SCALE + t * (ZOOM_MAX_SCALE - ZOOM_MIN_SCALE)
+
+    def _inactive_zoom_state(self) -> Dict[str, Any]:
+        return {
+            "gesture_code": GESTURE_PINCH_ZOOM,
+            "active": False,
+            "pinch_distance": None,
+            "target_scale": round(float(self._last_zoom_scale), 3),
+            "scale_ratio": round(float(self._last_zoom_scale), 3),
+            "confidence": 0.0,
+            "min_pinch_distance": ZOOM_MIN_PINCH_DISTANCE,
+            "max_pinch_distance": ZOOM_MAX_PINCH_DISTANCE,
+            "min_scale": ZOOM_MIN_SCALE,
+            "max_scale": ZOOM_MAX_SCALE,
+            "source": ["mediapipe_hands"],
+        }
+
+    def _cache_debug_snapshot(
+        self,
+        state: Dict[str, Any],
+        hands: list[Any],
+        handedness: list[str],
+        source: list[str],
+    ) -> None:
+        snapshot = self._build_debug_snapshot(state, hands=hands, handedness=handedness, source=source)
+        with self._lock:
+            self._debug_snapshot = snapshot
+
+    def _build_debug_snapshot(
+        self,
+        state: Dict[str, Any],
+        hands: list[Any],
+        handedness: list[str],
+        source: Any,
+    ) -> Dict[str, Any]:
+        source_list = source if isinstance(source, list) else [str(source)]
+        hand_items: list[dict[str, Any]] = []
+        for index, landmarks in enumerate(hands or []):
+            label = handedness[index] if index < len(handedness) else "Unknown"
+            hand_items.append({
+                "landmarks": [self._landmark_to_dict(lm) for lm in landmarks],
+                "handedness": label or "Unknown",
+            })
+        primary_handedness = hand_items[0]["handedness"] if hand_items else "Unknown"
+        return {
+            "gesture_code": state.get("gesture_code", GESTURE_NONE),
+            "confidence": float(state.get("confidence", 0.0) or 0.0),
+            "handedness": primary_handedness,
+            "hands": hand_items,
+            "zoom": copy.deepcopy(state.get("zoom") or self._inactive_zoom_state()),
+            "source": source_list,
+            "timestamp": time.time(),
+        }
+
+    @staticmethod
+    def _landmark_to_dict(landmark: Any) -> Dict[str, float]:
+        return {
+            "x": float(getattr(landmark, "x", 0.0) or 0.0),
+            "y": float(getattr(landmark, "y", 0.0) or 0.0),
+            "z": float(getattr(landmark, "z", 0.0) or 0.0),
+        }
+
+    @staticmethod
+    def _extract_handedness(item: Any) -> str:
+        categories = item
+        if hasattr(item, "classification"):
+            categories = getattr(item, "classification", [])
+        if not isinstance(categories, (list, tuple)):
+            categories = [categories]
+        if not categories:
+            return "Unknown"
+        first = categories[0]
+        label = (
+            getattr(first, "category_name", None)
+            or getattr(first, "display_name", None)
+            or getattr(first, "label", None)
+            or ""
+        )
+        return str(label or "Unknown")
 
     def _update_state(self, state: Dict[str, Any], notify: bool = False) -> None:
         with self._lock:

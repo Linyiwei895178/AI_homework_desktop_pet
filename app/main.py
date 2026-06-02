@@ -147,9 +147,15 @@ def main():
 
     # ====== 9. 初始化手势检测器 (队员B B-5) ======
     GESTURE_COOLDOWN_SECONDS = 3.0
+    GESTURE_ZOOM_APPLY_INTERVAL_SECONDS = 0.10
+    GESTURE_ZOOM_MIN_DELTA = 0.02
+    GESTURE_ZOOM_LOG_INTERVAL_SECONDS = 0.8
     gesture_detector = None
     gesture_timer = None
     gesture_last_response_at = {}
+    gesture_zoom_last_scale = None
+    gesture_zoom_last_apply_at = 0.0
+    gesture_zoom_last_log_at = 0.0
 
     if GESTURE_ENABLED:
         try:
@@ -166,6 +172,40 @@ def main():
     else:
         logger.info("[队员B] 手势检测器已通过 DESKTOP_PET_GESTURE_ENABLED 关闭")
 
+    def apply_gesture_zoom(gesture_state: dict) -> bool:
+        """Apply pinch zoom from MediaPipe Hands without triggering speech."""
+        nonlocal gesture_zoom_last_scale, gesture_zoom_last_apply_at, gesture_zoom_last_log_at
+
+        zoom = gesture_state.get("zoom") if isinstance(gesture_state, dict) else None
+        if not isinstance(zoom, dict) or not zoom.get("active"):
+            return False
+
+        try:
+            scale = float(zoom.get("scale_ratio"))
+        except (TypeError, ValueError):
+            return False
+
+        now = time.monotonic()
+        if now - gesture_zoom_last_apply_at < GESTURE_ZOOM_APPLY_INTERVAL_SECONDS:
+            return True
+        if gesture_zoom_last_scale is not None and abs(scale - gesture_zoom_last_scale) < GESTURE_ZOOM_MIN_DELTA:
+            return True
+
+        setter = getattr(pet, "set_pet_scale", None)
+        if not callable(setter):
+            return False
+
+        setter(scale)
+        gesture_zoom_last_scale = scale
+        gesture_zoom_last_apply_at = now
+        if now - gesture_zoom_last_log_at >= GESTURE_ZOOM_LOG_INTERVAL_SECONDS:
+            gesture_zoom_last_log_at = now
+            logger.info(
+                "[队员B] 手势缩放: "
+                f"pinch_distance={zoom.get('pinch_distance')}, scale={scale:.2f}"
+            )
+        return True
+
     def check_gesture_state():
         """轮询手势状态；同一个手势 3 秒内只响应一次。"""
         if gesture_detector is None:
@@ -173,6 +213,9 @@ def main():
 
         try:
             gesture_state = gesture_detector.get_state()
+            if apply_gesture_zoom(gesture_state):
+                return
+
             gesture_code = str(gesture_state.get("gesture_code") or GESTURE_NONE).strip()
             if gesture_code == GESTURE_NONE or not gesture_state.get("need_response", False):
                 return
@@ -210,11 +253,11 @@ def main():
 
     if gesture_detector is not None:
         gesture_timer = QTimer()
-        gesture_timer.setInterval(300)
+        gesture_timer.setInterval(100)
         gesture_timer.timeout.connect(check_gesture_state)
         gesture_timer.start()
         pet._gesture_timer = gesture_timer
-        logger.info("[主循环] 手势检测轮询已启动（每300ms一次，同手势3秒冷却）")
+        logger.info("[主循环] 手势检测轮询已启动（每100ms一次，同手势3秒冷却，支持pinch缩放）")
 
     camera_detection_enabled = bool(camera_needed)
     camera_toggle_in_progress = False
@@ -308,11 +351,11 @@ def main():
                 logger.info(f"[队员B] 手势检测器已启动(real={gesture_detector.is_real_active()})")
 
                 gesture_timer = QTimer()
-                gesture_timer.setInterval(300)
+                gesture_timer.setInterval(100)
                 gesture_timer.timeout.connect(check_gesture_state)
                 gesture_timer.start()
                 pet._gesture_timer = gesture_timer
-                logger.info("[主循环] 手势检测轮询已恢复（每300ms一次）")
+                logger.info("[主循环] 手势检测轮询已恢复（每100ms一次，支持pinch缩放）")
             except Exception as exc:
                 gesture_detector = None
                 pet._gesture_detector = None
@@ -464,7 +507,11 @@ def main():
         if vision_debug_panel is None:
             vision_debug_panel = VisionDebugPanel(
                 detector_getter=lambda: user_detector,
-                gesture_getter=lambda: gesture_detector.get_state() if gesture_detector is not None else None,
+                gesture_getter=(
+                    lambda: gesture_detector.get_debug_snapshot()
+                    if gesture_detector is not None and hasattr(gesture_detector, "get_debug_snapshot")
+                    else (gesture_detector.get_state() if gesture_detector is not None else None)
+                ),
                 camera_enabled_getter=lambda: camera_detection_enabled,
                 refresh_ms=150,
             )
