@@ -99,6 +99,8 @@ class AIChatVoiceAssistant:
             reply = _friendly_fallback_reply(llm_state)
         if not reply:
             reply = _friendly_fallback_reply(llm_state)
+        if _looks_like_internal_prompt(reply):
+            reply = _status_event_fallback_reply(llm_state)
         tts_started = False
         if self.auto_tts and _can_start_tts_before_display(reply, response_language):
             self._play_voice_async(reply, state=voice_state, action=voice_action)
@@ -436,3 +438,47 @@ def _friendly_fallback_reply(current_state: Optional[Dict[str, Any]] = None) -> 
     if state_code in {"tired", "sad", "stress"}:
         return "我刚刚有点走神啦，但我还在，先陪你慢慢缓一下。"
     return "我刚刚有点走神啦，我们再试一次～"
+
+
+def _looks_like_internal_prompt(text: str) -> bool:
+    value = str(text or "")
+    markers = (
+        "请用桌宠口吻",
+        "请生成一句",
+        "请只说一句",
+        "请主动说一句",
+        "用户刚做了",
+        "用户当前状态是",
+        "刚刚用户聊天里表现出",
+        "根据当前状态",
+    )
+    return any(marker in value for marker in markers)
+
+
+def _status_event_fallback_reply(current_state: Optional[Dict[str, Any]] = None) -> str:
+    if not isinstance(current_state, dict):
+        return _friendly_fallback_reply(current_state)
+
+    event_type = str(current_state.get("event_type") or current_state.get("event") or "").strip()
+    if event_type == "gesture_event":
+        gesture = str(
+            current_state.get("gesture_type")
+            or current_state.get("gesture_code")
+            or current_state.get("gesture")
+            or ""
+        ).strip()
+        return {
+            "wave": "我看到你啦，刚刚那个挥手很可爱。",
+            "ok": "收到，OK，我已经接住你的信号啦。",
+            "heart": "哎呀，比心收到，我也开心起来了。",
+            "raised_hand": "我在呢，你举手我就马上注意到你啦。",
+        }.get(gesture, "我看到你的手势啦。")
+
+    state_code = str(current_state.get("state_code") or current_state.get("emotion_label") or "").strip()
+    if state_code in {"happy", "positive", "return"}:
+        return "看起来你心情不错呀，我也跟着开心起来了。"
+    if state_code in {"sad", "negative", "tired", "stress"}:
+        return "我看到你有点不舒服，先慢慢呼吸一下，我在旁边陪你。"
+    if state_code == "distracted":
+        return "轻轻提醒一下，我们先把注意力拉回来一点点。"
+    return _friendly_fallback_reply(current_state)

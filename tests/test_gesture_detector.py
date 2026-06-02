@@ -81,6 +81,17 @@ def test_unknown_mock_gesture_falls_back_to_none():
     assert state["need_response"] is False
 
 
+def test_reads_frame_from_shared_provider_without_camera():
+    frame = object()
+    provider = SimpleNamespace(get_frame=lambda: frame)
+    detector = GestureDetector(enable_real=False, frame_provider=provider)
+
+    ok, got = detector._read_frame()
+
+    assert ok is True
+    assert got is frame
+
+
 def test_classifies_ok_from_hand_landmarks_without_camera():
     detector = GestureDetector(enable_real=False)
     landmarks = _blank_hand()

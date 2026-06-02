@@ -1307,6 +1307,43 @@ def test_deepseek_mock_default_reply_is_contextual_not_note_taking():
     assert "今天窗外下雨了" in reply
 
 
+def test_deepseek_mock_gesture_event_does_not_repeat_internal_prompt():
+    client = DeepSeekClient(api_key="", force_mock=True)
+
+    reply = client.generate(
+        "用户刚做了“挥手”手势。请用桌宠口吻回应一句，短、自然、别解释识别过程。",
+        user_state={"event_type": "gesture_event", "gesture_type": "wave"},
+    )
+
+    assert "请用桌宠口吻" not in reply
+    assert "用户刚做了" not in reply
+    assert "看到" in reply
+
+
+def test_ai_voice_assistant_filters_internal_prompt_before_tts():
+    class PromptEchoLLM:
+        def generate(self, text_prompt, user_state=None, history=None):
+            return "用户刚做了“OK”手势。请用桌宠口吻回应一句，短、自然、别解释识别过程。"
+
+    tts = RecordingTTS()
+    assistant = AIChatVoiceAssistant(
+        llm_client=PromptEchoLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+    )
+
+    reply = assistant.respond_to_status_event(
+        {"event_type": "gesture_event", "gesture_type": "ok", "mood": "happy"}
+    )
+
+    assert "请用桌宠口吻" not in reply
+    assert "用户刚做了" not in reply
+    assert "OK" in reply
+    assert tts.calls[-1]["text"] == reply
+
+
 def test_prompt_builder_uses_english_for_english_response_language():
     prompt = build_system_prompt({"response_language": "en-US", "state_code": "normal"})
 

@@ -95,6 +95,7 @@ class GestureDetector:
         camera_index: int = 0,
         detect_interval: float = 0.12,
         enable_real: bool = True,
+        frame_provider: Any = None,
     ):
         self._running = False
         self._callback: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -103,12 +104,14 @@ class GestureDetector:
         self.camera_index = int(camera_index)
         self.detect_interval = max(0.03, float(detect_interval))
         self.enable_real = bool(enable_real)
+        self._frame_provider = frame_provider
 
         self._thread: Optional[threading.Thread] = None
         self._cv2: Any = None
         self._mp: Any = None
         self._hands: Any = None
         self._cap: Any = None
+        self._owns_camera = frame_provider is None
         self._mp_mode: Optional[str] = None
         self._real_active = False
         self._hand_center_history: deque[tuple[float, float]] = deque(maxlen=14)
@@ -175,23 +178,25 @@ class GestureDetector:
             return False
 
         try:
-            cap = cv2.VideoCapture(self.camera_index)
-            if not cap or not cap.isOpened():
-                if cap:
-                    cap.release()
-                print("[GestureDetector] Camera unavailable; falling back to mock mode.")
-                return False
-
-            try:
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            except Exception:
-                pass
-
             self._cv2 = cv2
             self._mp = mp
-            self._cap = cap
+
+            if self._frame_provider is None:
+                cap = cv2.VideoCapture(self.camera_index)
+                if not cap or not cap.isOpened():
+                    if cap:
+                        cap.release()
+                    print("[GestureDetector] Camera unavailable; falling back to mock mode.")
+                    return False
+
+                try:
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                except Exception:
+                    pass
+
+                self._cap = cap
 
             solutions = getattr(mp, "solutions", None)
             if solutions is not None and hasattr(solutions, "hands"):
@@ -259,10 +264,10 @@ class GestureDetector:
         return model_path
 
     def _detect_loop(self) -> None:
-        while self._running and self._cap is not None and self._hands is not None:
+        while self._running and self._hands is not None:
             loop_start = time.time()
             try:
-                ret, frame = self._cap.read()
+                ret, frame = self._read_frame()
                 if not ret or frame is None:
                     self._update_state(create_gesture_state(
                         GESTURE_NONE,
@@ -286,6 +291,18 @@ class GestureDetector:
 
             elapsed = time.time() - loop_start
             time.sleep(max(0.01, self.detect_interval - elapsed))
+
+    def _read_frame(self) -> tuple[bool, Any]:
+        if self._frame_provider is not None:
+            getter = getattr(self._frame_provider, "get_frame", None)
+            if not callable(getter):
+                return False, None
+            frame = getter()
+            return frame is not None, frame
+
+        if self._cap is None:
+            return False, None
+        return self._cap.read()
 
     def _detect_gesture(self, frame: Any) -> Dict[str, Any]:
         """Run MediaPipe Hands on one frame and classify a simple gesture."""

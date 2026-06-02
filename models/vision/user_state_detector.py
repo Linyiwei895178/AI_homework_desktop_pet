@@ -117,6 +117,7 @@ class UserStateDetector:
         focused_seconds: float = 25.0,
         response_cooldown: float = 30.0,
         show_preview: bool = False,
+        frame_provider: Any = None,
     ):
         self.camera_index = camera_index
         self._detect_interval = max(0.1, float(detect_interval))
@@ -132,6 +133,7 @@ class UserStateDetector:
         self._focused_seconds = float(focused_seconds)
         self._response_cooldown = float(response_cooldown)
         self._show_preview = bool(show_preview)
+        self._frame_provider = frame_provider
 
         self._is_running = False
         self._detect_thread: Optional[threading.Thread] = None
@@ -141,6 +143,7 @@ class UserStateDetector:
         self._current_state: dict = create_empty_state(STATE_UNKNOWN)
         self._latest_frame: Any = None
         self._cap: Any = None
+        self._owns_camera = frame_provider is None
 
         self._cv2: Any = None
         self._mp: Any = None
@@ -278,7 +281,7 @@ class UserStateDetector:
         while self._is_running:
             loop_start = time.time()
             try:
-                ret, frame = self._cap.read()
+                ret, frame = self._read_frame()
                 if not ret or frame is None:
                     self._update_state(self._build_state(
                         STATE_CAMERA_ERROR,
@@ -363,6 +366,9 @@ class UserStateDetector:
         # 表情识别是增强项：可用则加载，不可用不影响基础检测。
         self._init_emotion_recognizer()
 
+        if self._frame_provider is not None:
+            return True
+
         self._cap = self._cv2.VideoCapture(self.camera_index)
         if not self._cap or not self._cap.isOpened():
             return False
@@ -376,9 +382,21 @@ class UserStateDetector:
             pass
         return True
 
+    def _read_frame(self) -> Tuple[bool, Any]:
+        if self._frame_provider is not None:
+            getter = getattr(self._frame_provider, "get_frame", None)
+            if not callable(getter):
+                return False, None
+            frame = getter()
+            return frame is not None, frame
+
+        if self._cap is None:
+            return False, None
+        return self._cap.read()
+
     def _release_resources(self):
         try:
-            if self._cap is not None:
+            if self._owns_camera and self._cap is not None:
                 self._cap.release()
         except Exception:
             pass

@@ -414,8 +414,10 @@ def build_proactive_prompt(event_data: Dict[str, Any]) -> str:
         gesture = str(event_data.get("gesture_type") or "unknown").strip()
         gesture_name = {
             "wave": "挥手",
+            "ok": "OK",
             "thumbs_up": "点赞",
             "heart": "比心",
+            "raised_hand": "举手",
             "facepalm": "捂脸",
             "stretch": "伸懒腰",
         }.get(gesture, gesture)

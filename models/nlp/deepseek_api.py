@@ -87,6 +87,22 @@ def _looks_chinese_text(text: str) -> bool:
     return _contains_cjk(text) and not _contains_japanese_kana(text)
 
 
+def _looks_like_internal_prompt(text: str) -> bool:
+    return _contains_any(
+        text or "",
+        (
+            "请用桌宠口吻",
+            "请生成一句",
+            "请只说一句",
+            "请主动说一句",
+            "用户刚做了",
+            "用户当前状态是",
+            "刚刚用户聊天里表现出",
+            "根据当前状态",
+        ),
+    )
+
+
 def _as_bool(value: Any, default: bool = False) -> bool:
     if value is None:
         return default
@@ -270,6 +286,9 @@ class DeepSeekClient:
                 or user_state.get("reply_language")
                 or user_state.get("language")
             )
+            event_type = str(user_state.get("event_type") or user_state.get("event") or "").strip()
+            if event_type:
+                return self._mock_status_event_reply(user_state)
         if response_language in LOCALIZED_MOCK_REPLIES:
             return self._mock_generate_localized(
                 text_prompt,
@@ -281,7 +300,10 @@ class DeepSeekClient:
         text = text_prompt.strip()
         low = text.lower()
 
-        if _contains_any(text, ("电脑状态是 游戏中", "正在玩游戏", "陪朋友打游戏", "陪玩", "游戏中")):
+        proactive_reply = self._mock_proactive_prompt_reply(text, user_state=user_state)
+        if proactive_reply:
+            base = proactive_reply
+        elif _contains_any(text, ("电脑状态是 游戏中", "正在玩游戏", "陪朋友打游戏", "陪玩", "游戏中")):
             base = self._mock_game_companion_reply(text, user_state=user_state)
         elif _contains_any(text, ("电脑状态是 看剧", "正在看剧", "正在看视频", "一起追剧", "看剧/视频中")):
             base = self._mock_watching_companion_reply(text, user_state=user_state)
@@ -438,6 +460,88 @@ class DeepSeekClient:
             return ""
         title = title.replace(" - Google Chrome", "").replace(" - Microsoft Edge", "")
         return title[:28]
+
+    def _mock_status_event_reply(self, event_data: dict) -> str:
+        event_type = str(event_data.get("event_type") or event_data.get("event") or "").strip()
+
+        if event_type == "gesture_event":
+            gesture = str(
+                event_data.get("gesture_type")
+                or event_data.get("gesture_code")
+                or event_data.get("gesture")
+                or ""
+            ).strip()
+            return {
+                "wave": "我看到你啦，刚刚那个挥手很可爱。",
+                "ok": "收到，OK，我已经接住你的信号啦。",
+                "heart": "哎呀，比心收到，我也开心起来了。",
+                "raised_hand": "我在呢，你举手我就马上注意到你啦。",
+            }.get(gesture, "我看到你的手势啦。")
+
+        if event_type == "screen_time_reminder":
+            activity = str(event_data.get("activity_name") or event_data.get("activity_code") or "电脑前").strip()
+            return f"你已经在{activity}待了一会儿啦，先眨眨眼、活动一下肩膀吧。"
+
+        if event_type == "computer_activity_comment":
+            code = str(event_data.get("activity_code") or "").strip()
+            if code in {"gaming", "watching"}:
+                return "看起来你正玩得挺投入，我就在旁边陪你，别忘了偶尔休息一下眼睛。"
+            if code in {"coding", "working"}:
+                return "你现在挺专注的，我小声陪着你，记得过一会儿伸个懒腰。"
+            return "我看到你还在电脑前忙着呢，我会安静陪你一会儿。"
+
+        if event_type in {"user_state_alert", "chat_emotion_alert"}:
+            return self._mock_user_state_reply(event_data)
+
+        return "我看到状态变化啦，会用轻一点的声音陪着你。"
+
+    def _mock_user_state_reply(self, state: Optional[dict]) -> str:
+        if not isinstance(state, dict):
+            return "我在这儿陪着你。"
+        state_code = str(state.get("state_code") or state.get("emotion_label") or "").strip()
+        if state_code in {"happy", "positive", "return"}:
+            return "看起来你心情不错呀，我也跟着开心起来了。"
+        if state_code in {"sad", "negative", "tired", "stress"}:
+            return "我看到你有点不舒服，先慢慢呼吸一下，我在旁边陪你。"
+        if state_code == "distracted":
+            return "轻轻提醒一下，我们先把注意力拉回来一点点。"
+        if state_code == "low_light":
+            return "光线好像有点暗，要不要先把灯调亮一点？"
+        if state_code == "study_long":
+            return "你已经坚持很久啦，起来活动一下也算认真学习的一部分。"
+        if state_code == "away":
+            return "我先乖乖等你回来。"
+        return "我看到你的状态变化啦，会继续安静陪着你。"
+
+    def _mock_proactive_prompt_reply(self, text: str, user_state: Optional[dict] = None) -> str:
+        if not _looks_like_internal_prompt(text):
+            return ""
+
+        if "用户刚做了" in text and "手势" in text:
+            if "挥手" in text:
+                return "我看到你啦，刚刚那个挥手很可爱。"
+            if "OK" in text or "ok" in text:
+                return "收到，OK，我已经接住你的信号啦。"
+            if "比心" in text:
+                return "哎呀，比心收到，我也开心起来了。"
+            if "举手" in text:
+                return "我在呢，你举手我就马上注意到你啦。"
+            return "我看到你的手势啦。"
+
+        if "用户当前状态是" in text or "刚刚用户聊天里表现出" in text:
+            return self._mock_user_state_reply(user_state)
+
+        if "用户已经在" in text or "使用电脑" in text:
+            return "你已经盯着屏幕一会儿啦，先让眼睛休息十秒钟吧。"
+
+        if "电脑状态是" in text:
+            if "游戏" in text:
+                return self._mock_game_companion_reply(text, user_state=user_state)
+            if "看剧" in text or "视频" in text:
+                return self._mock_watching_companion_reply(text, user_state=user_state)
+            return "我看到你正在电脑前忙着，我会安静陪你一会儿。"
+
+        return "我看到状态变化啦，会用轻一点的声音陪着你。"
 
     def _mock_affection_reply(self, text: str) -> str:
         if _contains_any(text, ("喜欢我", "爱我")) and _contains_any(text, ("吗", "嘛", "？", "?")):
