@@ -22,13 +22,13 @@ from typing import Any, Dict, List, Optional
 USER_STATE_TO_PET_MOOD = {
     "normal": "happy",
     "focused": "neutral",
-    "distracted": "sad",
-    "tired": "sad",
-    "away": "sad",
+    "distracted": "neutral",
+    "tired": "neutral",
+    "away": "neutral",
     "return": "happy",
-    "study_long": "hungry",
-    "low_light": "sad",
-    "camera_error": "angry",
+    "study_long": "neutral",
+    "low_light": "neutral",
+    "camera_error": "neutral",
     "unknown": "neutral",
 }
 
@@ -74,6 +74,8 @@ class PetState:
         # 状态变化记录
         self._last_event = None
         self._last_user_state: Optional[dict] = None
+        self._last_user_state_effect_code: Optional[str] = None
+        self._last_user_state_effect_at: float = 0.0
         self._history = []
 
     def update_state(self, event: str):
@@ -159,22 +161,27 @@ class PetState:
         confidence = user_state.get("confidence", 0.0)
         duration = user_state.get("duration", 0.0)
         need_response = user_state.get("need_response", False)
+        now = time.time()
 
         # 将用户状态码映射为桌宠心情
         new_mood = USER_STATE_TO_PET_MOOD.get(state_code, "neutral")
         self.mood = new_mood
 
-        # 根据置信度和持续时间调整能量
-        if need_response and confidence > 0.7:
+        same_state_effect_recent = (
+            state_code == self._last_user_state_effect_code
+            and now - self._last_user_state_effect_at < 120.0
+        )
+
+        # 根据置信度和持续时间调整能量。同一用户状态短时间连续上报时不重复扣。
+        if need_response and confidence > 0.7 and not same_state_effect_recent:
             # 用户需要响应时，桌宠消耗一些能量来回应
             energy_cost = min(5, int(duration / 10) + 1) if duration > 0 else 2
             self.energy = max(0, self.energy - energy_cost)
+            self._last_user_state_effect_code = state_code
+            self._last_user_state_effect_at = now
 
-        # 特定状态下调亲密度（用户状态不好时）
-        if state_code in ("distracted", "tired", "away"):
-            intimacy_drop = int(confidence * 3) if confidence > 0.5 else 0
-            self.intimacy = max(0, self.intimacy - intimacy_drop)
-        elif state_code == "return":
+        # 用户分心/疲劳/离开是需要陪伴或等待的状态，不视为宠物自身受伤。
+        if state_code == "return":
             # 用户回来时亲密度上升
             self.intimacy = min(100, self.intimacy + 3)
         elif state_code == "focused":

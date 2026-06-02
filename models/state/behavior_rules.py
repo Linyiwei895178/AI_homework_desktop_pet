@@ -78,9 +78,10 @@ class BehaviorRules:
         根据当前 pet_state 决策应执行的动作名称
 
         决策优先级:
-          1. energy < 30 → "hungry"（饥饿优先）
-          2. mood 映射 → mood → 动作
-          3. intimacy > 80 且 idle → "happy"（高亲密度额外互动）
+          1. 用户处于 distracted/tired/away → "idle"（由主动提醒链路处理，不触发 sad 动作）
+          2. energy < 30 → "hungry"（饥饿优先）
+          3. mood 映射 → mood → 动作
+          4. intimacy > 80 且 idle → "happy"（高亲密度额外互动）
 
         :return: 动作名称字符串
                  可能值: "idle", "happy", "sad", "hungry", "angry", "feed", "play", "click"
@@ -89,6 +90,18 @@ class BehaviorRules:
           - desktop_pet.py: pet_controller.trigger_action(pet, action)
           - widgets.py:       StatusPanel.update_display(pet_state)
         """
+        last_user_state = None
+        getter = getattr(self.pet_state, "get_last_user_state", None)
+        if callable(getter):
+            try:
+                last_user_state = getter()
+            except Exception:
+                last_user_state = None
+        if isinstance(last_user_state, dict):
+            state_code = str(last_user_state.get("state_code", "") or "").strip()
+            if state_code in {"distracted", "tired", "away"}:
+                return "idle"
+
         # 饥饿优先
         if self.pet_state.energy < 30:
             return "hungry"
