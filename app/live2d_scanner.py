@@ -100,5 +100,6 @@ def scan_live2d_models(models_dir: str) -> list[dict[str, Any]]:
             "motions": [{"id": s, "label": s, "gif": "", "frames": []} for s in stems],
             "model_path": found_model3,
             "is_flat": False,
+            "is_self_modeled_live2d": False,
         })
     return results
