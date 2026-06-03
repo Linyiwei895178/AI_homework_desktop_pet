@@ -51,6 +51,9 @@ def list_live2d_motion_stems(model_path: str) -> list[str]:
             if not fname.lower().endswith(".motion3.json"):
                 continue
             stem = fname[: -len(".motion3.json")]
+            # 过滤掉 _OFF_ 开头的动作（关闭动作，不可叠加，对用户无意义）
+            if stem.startswith("_OFF_"):
+                continue
             if stem not in seen:
                 seen.add(stem)
                 stems.append(stem)

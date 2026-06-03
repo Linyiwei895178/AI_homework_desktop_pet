@@ -1,5 +1,5 @@
 {
-  "last_pet_id": "monkey",
+  "last_pet_id": "elf_count",
   "pin_top": true,
   "hover_fade": false,
   "status_bar": false,
@@ -33,11 +33,11 @@
     "tts_volume": ""
   },
   "position": [
-    100,
-    100
+    552,
+    249
   ],
   "window_size": [
-    450,
-    600
+    415,
+    553
   ]
 }

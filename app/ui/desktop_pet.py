@@ -1761,8 +1761,8 @@ def _patch_arc_menu_paint(menu: ArcMotionMenu) -> None:
         p.fillPath(path, QColor(255, 255, 255, 225))
       p.setPen(QColor(255, 255, 255) if hovered else QColor(51, 51, 51))
       label = str(item.get("label", ""))
-      if len(label) > 5:
-        label = label[:4] + "…"
+      if len(label) > 8:
+        label = label[:8]
       p.drawText(r, Qt.AlignmentFlag.AlignCenter, label)
     p.end()
 
@@ -3118,6 +3118,7 @@ class DesktopPet:
           player.set_pet(self._active_pet or {}, w, h)
       elif self._model:
         self._model.Resize(w, h)
+        self._adjust_model_canvas_fit()
     if self._resize_visible and self._window and hasattr(self._window, "_resize_overlay"):
       self._window._resize_overlay.setGeometry(0, 0, w, h)
     self._apply_ui_scale()
@@ -3577,9 +3578,31 @@ class DesktopPet:
     self._model = live2d.LAppModel()
     self._model.LoadModelJson(self.model_path, maskBufferCount=2)
     self._model.Resize(self._win_w, self._win_h)
+    self._adjust_model_canvas_fit()
     self._build_motion_index()
     self._load_available_motions()
     self._start_idle_motion()
+
+  def _adjust_model_canvas_fit(self) -> None:
+    """根据模型画布尺寸调整偏移/缩放，确保角色完整显示（脚部不被截断）。"""
+    if self._model is None or self._win_h <= 0:
+      return
+    try:
+      cw, ch = self._model.GetCanvasSize()
+      if cw <= 0 or ch <= 0:
+        return
+      win_aspect = self._win_w / self._win_h
+      canvas_aspect = cw / ch
+      if canvas_aspect < win_aspect:
+        # 模型画布比窗口更瘦高，按宽度适配后垂直居中
+        # 适当向上偏移使脚部可见
+        self._model.SetOffset(0.0, 0.08)
+      else:
+        # 模型画布比窗口更宽或相近，按高度适配后水平居中
+        # 微调偏移让脚部完整
+        self._model.SetOffset(0.0, 0.05)
+    except Exception:
+      pass
 
   def _capture_mao_pro_motion_preview(self) -> None:
     """mao_pro_zh：从首个 motion3 首帧生成预览图。"""
@@ -4485,7 +4508,8 @@ class DesktopPet:
     motions = self._scan_motions_from_folder()
     if not motions:
       motions = self._scan_motions_from_model_json()
-    self.available_motions = motions
+    # 过滤掉 _OFF_ 开头的动作（关闭动作，不可叠加，对用户无意义）
+    self.available_motions = [m for m in motions if not m.startswith("_OFF_")]
 
   def _resolve_motion(self, motion_name: str) -> tuple[Optional[str], int]:
     key = motion_name.strip().lower()

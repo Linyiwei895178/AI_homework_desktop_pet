@@ -56,3 +56,12 @@ assets/sounds/*.wav
 # ─── But keep these ───
 !.env.example
 !data/*.example.json
+
+# ─── Generated/temp analysis files ───
+analyze_*.py
+fix_*.py
+temp_*.py
+check_canvas.py
+monkey_structure_analysis.py
+D%3A/
+D%253A/
