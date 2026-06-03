@@ -159,9 +159,9 @@ BASE_WINDOW_H = 600
 LIVE2D_VIEW_OVERRIDES: dict[str, dict[str, Any]] = {
     # Tall full-body character: elf_count
     "elf_count": {
-        "base_size": (500, 880),
-        "scale": 0.68,
-        "offset": (0.0, 0.16),
+        "base_size": (500, 920),
+        "scale": 0.66,
+        "offset": (0.0, 0.18),
     },
     # Wide/chibi character: Doro
     "doro": {
@@ -3996,8 +3996,8 @@ class DesktopPet:
       if last_id == "elf_count" and isinstance(size, (list, tuple)) and len(size) == 2:
         h = int(size[1])
         if h < 800:
-          data["window_size"] = [500, 880]
-          print(f"[DesktopPet] Auto-fixed elf_count window size: {size} -> [500, 880]")
+          data["window_size"] = [500, 920]
+          print(f"[DesktopPet] Auto-fixed elf_count window size: {size} -> [500, 920]")
           try:
             with open(PET_MEMORY_PATH, "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False, indent=2)
