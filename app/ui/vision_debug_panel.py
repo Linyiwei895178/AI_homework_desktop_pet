@@ -125,6 +125,9 @@ class VisionDebugPanel(QWidget):
         frame = snapshot.get("frame")
         info = snapshot.get("info") or {}
         state = snapshot.get("state") or {}
+        if isinstance(snapshot.get("face_mimic"), dict) and "face_mimic" not in info:
+            info = dict(info)
+            info["face_mimic"] = snapshot.get("face_mimic")
         gesture_state = self._read_gesture_state()
 
         if frame is None:
@@ -249,6 +252,16 @@ class VisionDebugPanel(QWidget):
                 ),
                 f"brightness: {info.get('brightness', 0.0)}",
             ]
+            mimic = info.get("face_mimic") if isinstance(info.get("face_mimic"), dict) else {}
+            if mimic:
+                lines.extend([
+                    f"mimic: {mimic.get('expression', 'unknown')}  available: {bool(mimic.get('available'))}",
+                    (
+                        f"mouth: {mimic.get('mouth_open', 0.0)}  "
+                        f"smile: {mimic.get('smile', 0.0)}  "
+                        f"blink: {mimic.get('eye_blink_left', 0.0)}/{mimic.get('eye_blink_right', 0.0)}"
+                    ),
+                ])
             if not info.get("face_present"):
                 lines.append("no face")
 
@@ -428,6 +441,22 @@ class VisionDebugPanel(QWidget):
             f"low_light: {info.get('low_light', False)}",
             f"brightness: {info.get('brightness', 0.0)}",
         ]
+        mimic = info.get("face_mimic") if isinstance(info.get("face_mimic"), dict) else {}
+        if mimic:
+            lines.extend([
+                f"mimic_available: {mimic.get('available', False)}",
+                f"mimic_expression: {mimic.get('expression', 'unknown')}",
+                f"mimic_mouth_open: {mimic.get('mouth_open', 0.0)}",
+                f"mimic_smile: {mimic.get('smile', 0.0)}",
+                f"mimic_eye_blink_left: {mimic.get('eye_blink_left', 0.0)}",
+                f"mimic_eye_blink_right: {mimic.get('eye_blink_right', 0.0)}",
+                f"mimic_brow_raise: {mimic.get('brow_raise', 0.0)}",
+                f"mimic_mouth_frown: {mimic.get('mouth_frown', 0.0)}",
+                f"mimic_head_yaw: {mimic.get('head_yaw', 0.0)}",
+                f"mimic_head_pitch: {mimic.get('head_pitch', 0.0)}",
+                f"mimic_head_roll: {mimic.get('head_roll', 0.0)}",
+                f"mimic_source: {mimic.get('source', [])}",
+            ])
 
         if gesture_state:
             hands = gesture_state.get("hands")

@@ -71,6 +71,40 @@ STATE_NAME_MAP = {
 MEDIAPIPE_MODELS_DIR = Path(__file__).resolve().parent / "mediapipe_models"
 FACE_LANDMARKER_MODEL_PATH = MEDIAPIPE_MODELS_DIR / "face_landmarker.task"
 
+FACE_MIMIC_RAW_BLENDSHAPE_KEYS = [
+    "jawOpen",
+    "mouthSmileLeft",
+    "mouthSmileRight",
+    "eyeBlinkLeft",
+    "eyeBlinkRight",
+    "browOuterUpLeft",
+    "browOuterUpRight",
+    "mouthFrownLeft",
+    "mouthFrownRight",
+    "cheekPuff",
+    "cheekPuffLeft",
+    "cheekPuffRight",
+    "jawLeft",
+    "jawRight",
+    "browDownLeft",
+    "browDownRight",
+]
+
+FACE_MIMIC_NUMERIC_FIELDS = [
+    "mouth_open",
+    "smile",
+    "eye_blink_left",
+    "eye_blink_right",
+    "brow_raise",
+    "mouth_frown",
+    "cheek_puff",
+    "jaw_left",
+    "jaw_right",
+    "head_yaw",
+    "head_pitch",
+    "head_roll",
+]
+
 
 def create_empty_state(state_code: str = STATE_UNKNOWN) -> dict:
     if state_code not in ALL_STATE_CODES:
@@ -153,6 +187,15 @@ class UserStateDetector:
         self._latest_debug_info: dict = {}
         self._last_debug_face_info: dict = {}
         self._last_debug_analysis_info: dict = {}
+        self._face_mimic_state: dict = self._empty_face_mimic_state()
+        self._face_mimic_blendshape_enabled: bool = False
+        self._face_mimic_blendshape_unavailable_logged: bool = False
+        self._face_mimic_first_blendshape_logged: bool = False
+        self._face_mimic_landmark_fallback_logged: bool = False
+        self._face_mimic_smooth_values: dict = {}
+        self._face_mimic_stable_expression: str = "unknown"
+        self._face_mimic_candidate_expression: str = "unknown"
+        self._face_mimic_candidate_count: int = 0
         self._cap: Any = None
         self._owns_camera = frame_provider is None
 
@@ -255,7 +298,13 @@ class UserStateDetector:
                 "frame": frame,
                 "info": copy.deepcopy(self._latest_debug_info),
                 "state": copy.deepcopy(self._current_state),
+                "face_mimic": copy.deepcopy(self._face_mimic_state),
             }
+
+    def get_face_mimic_state(self) -> dict:
+        """Return the latest Face Mimic output for Team A without changing get_state()."""
+        with self._lock:
+            return copy.deepcopy(self._face_mimic_state)
 
     def set_vlm_enabled(self, enabled: bool):
         self._vlm_enabled = bool(enabled)
@@ -488,18 +537,45 @@ class UserStateDetector:
             print(f"[UserStateDetector] 模型路径：{FACE_LANDMARKER_MODEL_PATH}")
             return False
 
+        def _make_options(enable_blendshapes: bool):
+            kwargs = {
+                "base_options": BaseOptions(model_asset_path=str(FACE_LANDMARKER_MODEL_PATH)),
+                "running_mode": vision.RunningMode.VIDEO,
+                "num_faces": 1,
+                "min_face_detection_confidence": 0.45,
+                "min_face_presence_confidence": 0.45,
+                "min_tracking_confidence": 0.45,
+            }
+            if enable_blendshapes:
+                kwargs["output_face_blendshapes"] = True
+                kwargs["output_facial_transformation_matrixes"] = True
+            return vision.FaceLandmarkerOptions(**kwargs)
+
         try:
-            options = vision.FaceLandmarkerOptions(
-                base_options=BaseOptions(model_asset_path=str(FACE_LANDMARKER_MODEL_PATH)),
-                running_mode=vision.RunningMode.VIDEO,
-                num_faces=1,
-                min_face_detection_confidence=0.45,
-                min_face_presence_confidence=0.45,
-                min_tracking_confidence=0.45,
-                output_face_blendshapes=False,
-                output_facial_transformation_matrixes=False,
-            )
+            options = _make_options(enable_blendshapes=True)
             face_landmarker = vision.FaceLandmarker.create_from_options(options)
+            self._face_mimic_blendshape_enabled = True
+        except Exception as blend_exc:
+            self._face_mimic_blendshape_enabled = False
+            self._face_mimic_blendshape_unavailable_logged = True
+            print("[队员B] Face Mimic BlendShape 不可用，使用 landmarks 规则兜底")
+            print(f"[UserStateDetector] FaceLandmarker BlendShape 初始化失败：{blend_exc}")
+            try:
+                options = _make_options(enable_blendshapes=False)
+                face_landmarker = vision.FaceLandmarker.create_from_options(options)
+            except Exception as exc:
+                self._mediapipe_init_reason = (
+                    f"MediaPipe Tasks FaceLandmarker 初始化失败: {exc}; "
+                    f"mediapipe={version}; model={FACE_LANDMARKER_MODEL_PATH}"
+                )
+                print(
+                    "[UserStateDetector] MediaPipe Tasks FaceLandmarker 初始化失败，"
+                    f"将使用 OpenCV Haar + DeepFace/Qwen-VL 降级：{exc}"
+                )
+                return False
+
+        try:
+            _ = face_landmarker
         except Exception as exc:
             self._mediapipe_init_reason = (
                 f"MediaPipe Tasks FaceLandmarker 初始化失败: {exc}; "
@@ -516,6 +592,8 @@ class UserStateDetector:
         self._mediapipe_available = True
         self._mediapipe_init_reason = f"MediaPipe {version} Tasks FaceLandmarker 可用"
         print("[UserStateDetector] MediaPipe Tasks FaceLandmarker 已启用。")
+        if self._face_mimic_blendshape_enabled:
+            print("[队员B] Face Mimic BlendShape 已启用")
         return True
 
     def _enable_haar_stability_mode(self) -> None:
@@ -845,6 +923,10 @@ class UserStateDetector:
             cy = (y + bh / 2) / max(1, h)
             self._last_face_center = (cx, cy)
             self._face_center_history.append((time.time(), cx, cy))
+        if not result.get("landmarks"):
+            self._set_face_mimic_unavailable(
+                ["opencv_haar"] if result.get("present") else ["no_face"]
+            )
 
         return result
 
@@ -866,6 +948,7 @@ class UserStateDetector:
 
             landmarks = face_landmarks[0]
             bbox = self._bbox_from_landmarks(landmarks, w, h)
+            self._update_face_mimic_from_mediapipe_result(mp_result, landmarks, bbox, w, h)
             result.update({
                 "present": True,
                 "bbox": bbox,
@@ -890,6 +973,297 @@ class UserStateDetector:
         bw = max(1, min(w - x, int((right - left) * w)))
         bh = max(1, min(h - y, int((bottom - top) * h)))
         return x, y, bw, bh
+
+    # ==================== Face Mimic 输出 ====================
+
+    def _empty_face_mimic_state(self) -> dict:
+        return {
+            "available": False,
+            "expression": "unknown",
+            "mouth_open": 0.0,
+            "smile": 0.0,
+            "eye_blink_left": 0.0,
+            "eye_blink_right": 0.0,
+            "brow_raise": 0.0,
+            "mouth_frown": 0.0,
+            "cheek_puff": 0.0,
+            "jaw_left": 0.0,
+            "jaw_right": 0.0,
+            "head_yaw": 0.0,
+            "head_pitch": 0.0,
+            "head_roll": 0.0,
+            "raw_blendshapes": {
+                "jawOpen": 0.0,
+                "mouthSmileLeft": 0.0,
+                "mouthSmileRight": 0.0,
+                "eyeBlinkLeft": 0.0,
+                "eyeBlinkRight": 0.0,
+            },
+            "confidence": 0.0,
+            "timestamp": time.time(),
+            "source": [],
+        }
+
+    def _set_face_mimic_unavailable(self, source: list[str]) -> None:
+        state = self._empty_face_mimic_state()
+        state["source"] = list(source)
+        with self._lock:
+            self._face_mimic_state = state
+
+    @staticmethod
+    def _clamp01(value: Any) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _avg_values(*values: Any) -> float:
+        vals = [UserStateDetector._clamp01(v) for v in values]
+        if not vals:
+            return 0.0
+        return sum(vals) / len(vals)
+
+    def _update_face_mimic_from_mediapipe_result(
+        self,
+        mp_result: Any,
+        landmarks: Any,
+        bbox: Tuple[int, int, int, int],
+        w: int,
+        h: int,
+    ) -> None:
+        blendshapes = self._extract_blendshape_scores(mp_result)
+        if blendshapes:
+            if not self._face_mimic_first_blendshape_logged:
+                self._face_mimic_first_blendshape_logged = True
+                print("[队员B] Face Mimic 已接收到 BlendShape 参数")
+            state = self._build_face_mimic_from_blendshapes(blendshapes, landmarks, bbox, w, h)
+        else:
+            if not self._face_mimic_landmark_fallback_logged:
+                self._face_mimic_landmark_fallback_logged = True
+                print("[队员B] Face Mimic 使用 landmarks 规则兜底")
+            state = self._build_face_mimic_from_landmarks(landmarks, bbox, w, h)
+
+        with self._lock:
+            self._face_mimic_state = copy.deepcopy(state)
+
+    def _extract_blendshape_scores(self, mp_result: Any) -> dict[str, float]:
+        face_blendshapes = getattr(mp_result, "face_blendshapes", None) or []
+        if not face_blendshapes:
+            return {}
+        first = face_blendshapes[0]
+        categories = getattr(first, "categories", None)
+        if categories is None:
+            categories = first
+        scores: dict[str, float] = {}
+        try:
+            for item in categories:
+                name = str(getattr(item, "category_name", "") or getattr(item, "display_name", "") or "")
+                if not name:
+                    continue
+                scores[name] = self._clamp01(getattr(item, "score", 0.0))
+        except Exception:
+            return {}
+        return scores
+
+    def _build_face_mimic_from_blendshapes(
+        self,
+        scores: dict[str, float],
+        landmarks: Any,
+        bbox: Tuple[int, int, int, int],
+        w: int,
+        h: int,
+    ) -> dict:
+        values = {
+            "mouth_open": self._clamp01(scores.get("jawOpen", 0.0)),
+            "smile": self._avg_values(scores.get("mouthSmileLeft", 0.0), scores.get("mouthSmileRight", 0.0)),
+            "eye_blink_left": self._clamp01(scores.get("eyeBlinkLeft", 0.0)),
+            "eye_blink_right": self._clamp01(scores.get("eyeBlinkRight", 0.0)),
+            "brow_raise": self._avg_values(scores.get("browOuterUpLeft", 0.0), scores.get("browOuterUpRight", 0.0)),
+            "mouth_frown": self._avg_values(scores.get("mouthFrownLeft", 0.0), scores.get("mouthFrownRight", 0.0)),
+            "cheek_puff": self._clamp01(
+                scores.get(
+                    "cheekPuff",
+                    self._avg_values(scores.get("cheekPuffLeft", 0.0), scores.get("cheekPuffRight", 0.0)),
+                )
+            ),
+            "jaw_left": self._clamp01(scores.get("jawLeft", 0.0)),
+            "jaw_right": self._clamp01(scores.get("jawRight", 0.0)),
+        }
+        values.update(self._estimate_head_pose_from_landmarks(landmarks, w, h))
+        values = self._smooth_face_mimic_values(values)
+        expression = self._stable_face_mimic_expression(self._classify_face_mimic_expression(values, scores))
+        raw = {key: round(self._clamp01(scores.get(key, 0.0)), 3) for key in FACE_MIMIC_RAW_BLENDSHAPE_KEYS}
+        confidence = max(0.35, min(1.0, max([values.get(k, 0.0) for k in FACE_MIMIC_NUMERIC_FIELDS] + [0.35])))
+        return self._build_face_mimic_state(
+            available=True,
+            expression=expression,
+            values=values,
+            raw_blendshapes=raw,
+            confidence=confidence,
+            source=["mediapipe_face_blendshapes"],
+        )
+
+    def _build_face_mimic_from_landmarks(
+        self,
+        landmarks: Any,
+        bbox: Tuple[int, int, int, int],
+        w: int,
+        h: int,
+    ) -> dict:
+        values = {
+            "mouth_open": 0.0,
+            "smile": 0.0,
+            "eye_blink_left": 0.0,
+            "eye_blink_right": 0.0,
+            "brow_raise": 0.0,
+            "mouth_frown": 0.0,
+            "cheek_puff": 0.0,
+            "jaw_left": 0.0,
+            "jaw_right": 0.0,
+        }
+        try:
+            x, y, bw, bh = bbox
+            face_w = max(1.0, float(bw))
+            face_h = max(1.0, float(bh))
+            upper_lip = landmarks[13]
+            lower_lip = landmarks[14]
+            left_mouth = landmarks[61]
+            right_mouth = landmarks[291]
+            mouth_open_px = math.dist((upper_lip.x * w, upper_lip.y * h), (lower_lip.x * w, lower_lip.y * h))
+            mouth_width_px = math.dist((left_mouth.x * w, left_mouth.y * h), (right_mouth.x * w, right_mouth.y * h))
+            mouth_center_y = (upper_lip.y + lower_lip.y) / 2.0
+            corner_y = (left_mouth.y + right_mouth.y) / 2.0
+            values["mouth_open"] = self._clamp01((mouth_open_px / face_h) * 4.5)
+            values["smile"] = self._clamp01(((mouth_width_px / face_w) - 0.34) * 4.0)
+            values["mouth_frown"] = self._clamp01((corner_y - mouth_center_y) * 18.0)
+            left_ear = self._eye_aspect_ratio(landmarks, [33, 160, 158, 133, 153, 144], w, h)
+            right_ear = self._eye_aspect_ratio(landmarks, [362, 385, 387, 263, 373, 380], w, h)
+            values["eye_blink_left"] = self._clamp01((0.24 - left_ear) / 0.12)
+            values["eye_blink_right"] = self._clamp01((0.24 - right_ear) / 0.12)
+            left_brow = landmarks[70]
+            right_brow = landmarks[300]
+            left_eye = landmarks[33]
+            right_eye = landmarks[263]
+            brow_gap = ((left_eye.y - left_brow.y) + (right_eye.y - right_brow.y)) / 2.0
+            values["brow_raise"] = self._clamp01((brow_gap - 0.055) * 9.0)
+        except Exception:
+            pass
+        values.update(self._estimate_head_pose_from_landmarks(landmarks, w, h))
+        values = self._smooth_face_mimic_values(values)
+        expression = self._stable_face_mimic_expression(self._classify_face_mimic_expression(values, {}))
+        return self._build_face_mimic_state(
+            available=True,
+            expression=expression,
+            values=values,
+            raw_blendshapes={
+                "jawOpen": round(values.get("mouth_open", 0.0), 3),
+                "mouthSmileLeft": round(values.get("smile", 0.0), 3),
+                "mouthSmileRight": round(values.get("smile", 0.0), 3),
+                "eyeBlinkLeft": round(values.get("eye_blink_left", 0.0), 3),
+                "eyeBlinkRight": round(values.get("eye_blink_right", 0.0), 3),
+            },
+            confidence=0.45,
+            source=["mediapipe_face_landmarks_rule"],
+        )
+
+    def _smooth_face_mimic_values(self, values: dict[str, float]) -> dict[str, float]:
+        smoothed: dict[str, float] = {}
+        for key in FACE_MIMIC_NUMERIC_FIELDS:
+            current = self._clamp01(values.get(key, 0.0)) if key not in {"head_yaw", "head_pitch", "head_roll"} else float(values.get(key, 0.0) or 0.0)
+            if key not in self._face_mimic_smooth_values:
+                smoothed[key] = current
+            else:
+                smoothed[key] = self._face_mimic_smooth_values[key] * 0.7 + current * 0.3
+            if key in {"head_yaw", "head_pitch", "head_roll"}:
+                smoothed[key] = max(-1.0, min(1.0, smoothed[key]))
+            else:
+                smoothed[key] = self._clamp01(smoothed[key])
+        self._face_mimic_smooth_values = dict(smoothed)
+        return smoothed
+
+    def _classify_face_mimic_expression(self, values: dict[str, float], scores: dict[str, float]) -> str:
+        mouth_open = float(values.get("mouth_open", 0.0) or 0.0)
+        smile = float(values.get("smile", 0.0) or 0.0)
+        blink_l = float(values.get("eye_blink_left", 0.0) or 0.0)
+        blink_r = float(values.get("eye_blink_right", 0.0) or 0.0)
+        brow_raise = float(values.get("brow_raise", 0.0) or 0.0)
+        mouth_frown = float(values.get("mouth_frown", 0.0) or 0.0)
+        brow_down = self._avg_values(scores.get("browDownLeft", 0.0), scores.get("browDownRight", 0.0))
+        if mouth_open > 0.45 and brow_raise > 0.25:
+            return "surprised"
+        if smile > 0.35:
+            return "happy"
+        if blink_l > 0.65 and blink_r > 0.65:
+            return "tired"
+        if mouth_frown > 0.30 and smile < 0.20:
+            return "sad"
+        if brow_down > 0.35 and smile < 0.20:
+            return "angry"
+        return "neutral"
+
+    def _stable_face_mimic_expression(self, expression: str) -> str:
+        expression = expression if expression in {"neutral", "happy", "sad", "angry", "surprised", "tired"} else "unknown"
+        if self._face_mimic_stable_expression == "unknown":
+            self._face_mimic_stable_expression = expression
+            self._face_mimic_candidate_expression = expression
+            self._face_mimic_candidate_count = 1
+            return expression
+        if expression == self._face_mimic_stable_expression:
+            self._face_mimic_candidate_expression = expression
+            self._face_mimic_candidate_count = 0
+            return self._face_mimic_stable_expression
+        if expression == self._face_mimic_candidate_expression:
+            self._face_mimic_candidate_count += 1
+        else:
+            self._face_mimic_candidate_expression = expression
+            self._face_mimic_candidate_count = 1
+        if self._face_mimic_candidate_count >= 2:
+            self._face_mimic_stable_expression = expression
+            self._face_mimic_candidate_count = 0
+        return self._face_mimic_stable_expression
+
+    def _estimate_head_pose_from_landmarks(self, landmarks: Any, w: int, h: int) -> dict[str, float]:
+        try:
+            nose = landmarks[1]
+            left_eye = landmarks[33]
+            right_eye = landmarks[263]
+            forehead = landmarks[10]
+            chin = landmarks[152]
+            eye_center_x = (left_eye.x + right_eye.x) / 2.0
+            eye_center_y = (left_eye.y + right_eye.y) / 2.0
+            eye_distance = max(0.001, abs(right_eye.x - left_eye.x))
+            face_height = max(0.001, chin.y - forehead.y)
+            yaw = max(-1.0, min(1.0, ((nose.x - eye_center_x) / eye_distance) * 1.2))
+            pitch = max(-1.0, min(1.0, (((nose.y - eye_center_y) / face_height) - 0.18) * 3.0))
+            roll_rad = math.atan2((right_eye.y - left_eye.y) * h, (right_eye.x - left_eye.x) * w)
+            roll = max(-1.0, min(1.0, roll_rad / math.radians(45.0)))
+            return {"head_yaw": yaw, "head_pitch": pitch, "head_roll": roll}
+        except Exception:
+            return {"head_yaw": 0.0, "head_pitch": 0.0, "head_roll": 0.0}
+
+    def _build_face_mimic_state(
+        self,
+        available: bool,
+        expression: str,
+        values: dict[str, float],
+        raw_blendshapes: dict[str, float],
+        confidence: float,
+        source: list[str],
+    ) -> dict:
+        state = self._empty_face_mimic_state()
+        state.update({
+            "available": bool(available),
+            "expression": expression,
+            "confidence": round(self._clamp01(confidence), 3),
+            "timestamp": time.time(),
+            "source": list(source),
+            "raw_blendshapes": dict(raw_blendshapes),
+        })
+        for key in FACE_MIMIC_NUMERIC_FIELDS:
+            value = float(values.get(key, 0.0) or 0.0)
+            state[key] = round(max(-1.0, min(1.0, value)), 3) if key.startswith("head_") else round(self._clamp01(value), 3)
+        return state
 
     def _disable_mediapipe_tasks_after_runtime_error(self, exc: Exception) -> None:
         self._log_mediapipe_runtime_warning("FaceLandmarker.detect_for_video", exc)
@@ -1303,6 +1677,7 @@ class UserStateDetector:
             "low_light": bool(analysis_info.get("low_light", False)),
             "brightness": analysis_info.get("brightness", 0.0),
             "no_face_duration": analysis_info.get("no_face_duration", 0.0),
+            "face_mimic": copy.deepcopy(self._face_mimic_state),
             "updated_at": time.time(),
         }
 
