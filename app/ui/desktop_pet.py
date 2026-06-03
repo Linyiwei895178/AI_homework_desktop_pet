@@ -136,11 +136,11 @@ EXPRESSION_NAME_MAP: dict[str, str] = {
     "不安嘴": "不安(嘴)",
     "发型": "发型",
     "发色": "发色",
-    "披风隐藏": "隐藏披风",
+    "披风隐藏": "披风",
     "星星眼": "星星眼",
     "爱心眼": "爱心眼",
     "白眼": "白眼",
-    "白眼嘴": "白眼(嘴)",
+    "白眼嘴": "白眼嘴",
     "眼镜": "眼镜",
     "瞳色": "瞳色",
     "耳朵": "耳朵",
@@ -2871,9 +2871,9 @@ class DesktopPet:
       }
       return (prio.get(e, 99), e)
     exp_items.sort(key=_exp_sort_key)
-    items.extend(exp_items[:16])
-    if len(self.available_expressions) > 16:
-      print(f"[DesktopPet] Expression list truncated to 16 (total {len(self.available_expressions)})")
+    items.extend(exp_items)
+    if len(exp_items) > 16:
+      print(f"[DesktopPet] Arc menu displays all expressions: total={len(exp_items)}")
     return items
 
   def _expression_label(self, name: str) -> str:

@@ -946,13 +946,17 @@ def _ease_out_back(t: float) -> float:
 
 
 class ArcMotionMenu(QWidget, ScalableOverlay):
-    _BASE_RADIUS = 120
-    _BASE_BUTTON_SIZE = 48
-    RADIUS = 120
-    BUTTON_SIZE = 48
+    _BASE_RADIUS = 170
+    _BASE_BUTTON_SIZE = 52
+    _BASE_RING_GAP = 85
+    RADIUS = 170
+    BUTTON_SIZE = 52
+    RING_GAP = 85
+    MAX_ITEMS_PER_RING = 9
+    MIN_BUTTON_GAP = 12
     HOVER_SCALE = 1.1
     ANIM_DURATION = 0.42
-    STAGGER = 0.055
+    STAGGER = 0.045
 
     picked = Signal(dict)
 
@@ -973,6 +977,7 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
         super().apply_ui_scale(scale)
         self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 60)
         self.BUTTON_SIZE = _scaled_int(self._BASE_BUTTON_SIZE, self._ui_scale, 28)
+        self.RING_GAP = _scaled_int(self._BASE_RING_GAP, self._ui_scale, 52)
         self._font = _app_font(_scaled_int(12, self._ui_scale, 9))
 
     def show_menu(self, center_x: int, center_y: int, items: list[dict[str, Any]]) -> None:
@@ -981,7 +986,9 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
         self.visible = True
         self.hover_index = -1
         self._elapsed = 0.0
-        pad = self.RADIUS + self.BUTTON_SIZE + 20
+        ring_count = len(self._rings())
+        max_radius = self.RADIUS + max(0, ring_count - 1) * self.RING_GAP
+        pad = max_radius + self.BUTTON_SIZE + 36
         self.setGeometry(center_x - pad, center_y - pad, pad * 2, pad * 2)
         super().show()
         self.raise_()
@@ -998,16 +1005,47 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
             self._elapsed += dt
             self.update()
 
-    def _angle_deg(self, index: int) -> float:
+    def _rings(self) -> list[list[int]]:
+        """Group item indices into rings. Each ring has at most MAX_ITEMS_PER_RING items."""
         n = len(self.items)
-        if n <= 1:
+        if n == 0:
+            return []
+        cap = self.MAX_ITEMS_PER_RING
+        if n <= cap:
+            return [list(range(n))]
+        # Determine number of rings
+        nrings = max(2, (n + cap - 1) // cap)
+        # Distribute items as evenly as possible
+        rings: list[list[int]] = [[] for _ in range(nrings)]
+        for i in range(n):
+            # Fill from outer rings inward, but keep order
+            rings[i % nrings].append(i)
+        return rings
+
+    def _ring_for_index(self, index: int) -> tuple[int, int, int]:
+        """Return (ring_index, index_in_ring, count_in_ring) for a given global index."""
+        rings = self._rings()
+        for ri, ring in enumerate(rings):
+            if index in ring:
+                return (ri, ring.index(index), len(ring))
+        return (0, 0, 0)
+
+    @staticmethod
+    def _angle_deg_in_ring(index_in_ring: int, count_in_ring: int) -> float:
+        if count_in_ring <= 1:
             return 0.0
-        return -90.0 + 180.0 * index / (n - 1)
+        return -90.0 + 180.0 * index_in_ring / (count_in_ring - 1)
+
+    def _angle_deg(self, index: int) -> float:
+        _, idx_in_r, cnt_in_r = self._ring_for_index(index)
+        return self._angle_deg_in_ring(idx_in_r, cnt_in_r)
 
     def _btn_center(self, index: int) -> tuple[int, int]:
-        deg = math.radians(self._angle_deg(index))
-        x = self.center_x + int(self.RADIUS * math.sin(deg))
-        y = self.center_y - int(self.RADIUS * math.cos(deg))
+        ring_index, idx_in_r, cnt_in_r = self._ring_for_index(index)
+        radius = self.RADIUS + ring_index * self.RING_GAP
+        deg = math.radians(self._angle_deg_in_ring(idx_in_r, cnt_in_r))
+        x = self.center_x + int(radius * math.sin(deg))
+        y = self.center_y - int(radius * math.cos(deg))
         return x - self.x(), y - self.y()
 
     def _pop_scale(self, index: int) -> float:
@@ -1030,7 +1068,9 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
             return QRect()
         pts = [self._btn_center(i) for i in range(len(self.items))]
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-        pad = self.RADIUS + self.BUTTON_SIZE
+        ring_count = len(self._rings())
+        max_radius = self.RADIUS + max(0, ring_count - 1) * self.RING_GAP
+        pad = max_radius + self.BUTTON_SIZE
         return QRect(min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + pad * 2, max(ys) - min(ys) + pad * 2)
 
     def hover_at(self, mouse_pos: tuple[int, int] | None = None) -> None:
@@ -1040,22 +1080,42 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
         lp = self.mapFromGlobal(QPoint(*mouse_pos)) if mouse_pos else None
         self.hover_index = -1
         if lp:
-            for i in range(len(self.items)):
-                if self._pop_scale(i) > 0.2 and self.button_rect(i).contains(lp):
-                    self.hover_index = i
-                    break
+            pick = self._pick_item_at(lp)
+            if pick is not None:
+                for i, item in enumerate(self.items):
+                    if item is pick:
+                        self.hover_index = i
+                        break
         QWidget.update(self)
 
     def update(self, mouse_pos: tuple[int, int] | None = None) -> None:
         self.hover_at(mouse_pos)
 
+    def _pick_item_at(self, local_pos: QPoint) -> Optional[dict[str, Any]]:
+        """Find the closest item near local_pos using distance-based picking."""
+        candidates: list[tuple[int, int]] = []
+        for i in range(len(self.items)):
+            if self._pop_scale(i) <= 0.2:
+                continue
+            r = self.button_rect(i)
+            if r.adjusted(-4, -4, 4, 4).contains(local_pos):
+                cx, cy = self._btn_center(i)
+                dx = local_pos.x() - cx
+                dy = local_pos.y() - cy
+                dist2 = dx * dx + dy * dy
+                candidates.append((dist2, i))
+        if not candidates:
+            return None
+        _, best_i = min(candidates)
+        return self.items[best_i]
+
     def handle_click(self, mouse_pos: tuple[int, int]) -> Optional[dict[str, Any]]:
         lp = self.mapFromGlobal(QPoint(*mouse_pos))
         self.hover_index = -1
-        for i in range(len(self.items)):
-            if self.button_rect(i).contains(lp):
-                self._selected = self.items[i]
-                return self._selected
+        pick = self._pick_item_at(lp)
+        if pick is not None:
+            self._selected = pick
+            return pick
         return None
 
     def paintEvent(self, _event) -> None:
@@ -1081,11 +1141,11 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
         p.end()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        for i in range(len(self.items)):
-            if self.button_rect(i).contains(event.pos()):
-                self._selected = self.items[i]
-                self.picked.emit(self._selected)
-                return
+        pick = self._pick_item_at(event.pos())
+        if pick is not None:
+            self._selected = pick
+            self.picked.emit(pick)
+            return
         self.hide()
 
 
