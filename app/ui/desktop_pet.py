@@ -153,20 +153,35 @@ BASE_WINDOW_H = 600
 
 # --- Live2D model-specific display overrides ---
 # Some tall/slim full-body models (e.g. elf_count) need taller windows and tuning.
+# --- Per-character Live2D view profiles ---
+# Each profile defines base window size, model scale, and vertical offset.
+# Scale shrinks the model inside the window; offset (positive y=up) adjusts vertical centering.
 LIVE2D_VIEW_OVERRIDES: dict[str, dict[str, Any]] = {
+    # Tall full-body character: elf_count
     "elf_count": {
-        "base_size": (450, 820),
-        "scale": 0.72,
-        "offset": (0.0, 0.18),
+        "base_size": (500, 880),
+        "scale": 0.68,
+        "offset": (0.0, 0.16),
     },
-    # --- Extreme test config for debugging ---
-    # Uncomment below and comment the above "elf_count" entry to test
-    # whether the model resource itself lacks lower body.
-    # "elf_count": {
-    #     "base_size": (450, 900),
-    #     "scale": 0.55,
-    #     "offset": (0.0, 0.25),
-    # },
+    # Wide/chibi character: Doro
+    "doro": {
+        "base_size": (720, 560),
+        "scale": 0.72,
+        "offset": (0.0, 0.0),
+    },
+    # Human-proportioned Live2D: xiaomonv / mao_pro_zh
+    "mao_pro_zh": {
+        "base_size": (450, 600),
+        "scale": 1.0,
+        "offset": (0.0, 0.05),
+    },
+}
+
+# Default profile for any Live2D model not in LIVE2D_VIEW_OVERRIDES
+DEFAULT_LIVE2D_VIEW_PROFILE: dict[str, Any] = {
+    "base_size": (450, 600),
+    "scale": 1.0,
+    "offset": (0.0, 0.05),
 }
 MIN_ACTION_PLAY_MS = 1500
 ANIMATIONS_DIR = os.path.join(PROJECT_ROOT, "assets", "animations")
@@ -2535,23 +2550,21 @@ class DesktopPet:
       self._window._plane_player.hide()
       self._window._gl.show()
       # --- Live2D model-specific window sizing ---
-      override = LIVE2D_VIEW_OVERRIDES.get(pet_id)
-      if override:
-        base_size = override.get("base_size")
-        if base_size and len(base_size) == 2:
-          bw, bh = int(base_size[0]), int(base_size[1])
-          # Always ensure window is tall enough for this model
-          if self._win_h < bh - 20 or self._win_w != bw:
-            self._aspect_ratio = bw / bh
-            self._apply_window_size(bw, bh, save_memory=False)
-            print(f"[DesktopPet] Applied {pet_id} custom window: {bw}x{bh} (was {self._win_w}x{self._win_h})")
+      # Always switch to this model's view profile (base_size, scale, offset)
+      profile = self._current_live2d_view_profile()
+      base_size = profile.get("base_size", (450, 600))
+      bw, bh = int(base_size[0]), int(base_size[1])
+      if abs(self._win_w - bw) > 2 or abs(self._win_h - bh) > 2:
+        self._aspect_ratio = bw / bh
+        self._apply_window_size(bw, bh, save_memory=False)
+        print(f"[DesktopPet] Applied Live2D view profile: id={pet_id}, size={bw}x{bh} (was {self._win_w}x{self._win_h})")
       # Reload Live2D model
       model_path = pet.get("model_path") or ""
       if model_path and os.path.isfile(model_path):
         reload_live2d_model(self, model_path)
       # Re-apply canvas fit after model reload
       self._adjust_model_canvas_fit()
-      QTimer.singleShot(300, self._debug_save_elf_count_frame)
+      QTimer.singleShot(300, self._debug_save_live2d_frame)
       self._start_idle_motion()
     self._update_mouse_passthrough(self._local_mouse_pos())
     self._show_switch_notice(name)
@@ -3190,11 +3203,10 @@ class DesktopPet:
 
   def _current_base_size(self) -> tuple[int, int]:
     """Return base window size (w, h) for current character."""
-    override = self._live2d_view_override()
-    if override:
-      base_size = override.get("base_size")
-      if base_size and len(base_size) == 2:
-        return (int(base_size[0]), int(base_size[1]))
+    profile = self._current_live2d_view_profile()
+    base_size = profile.get("base_size", (BASE_WINDOW_W, BASE_WINDOW_H))
+    if base_size and len(base_size) == 2:
+      return (int(base_size[0]), int(base_size[1]))
     return (BASE_WINDOW_W, BASE_WINDOW_H)
 
   def set_pet_scale(self, scale: float, min_scale: float = 0.6, max_scale: float = 1.8) -> float:
@@ -3627,7 +3639,7 @@ class DesktopPet:
     self._adjust_model_canvas_fit()
     self._build_motion_index()
     self._load_available_motions()
-    QTimer.singleShot(300, self._debug_save_elf_count_frame)
+    QTimer.singleShot(300, self._debug_save_live2d_frame)
     self._start_idle_motion()
 
 
@@ -3638,86 +3650,80 @@ class DesktopPet:
     norm = os.path.normpath(self.model_path).lower()
     if "elf_count" in norm:
       return "elf_count"
+    if "doro" in norm:
+      return "doro"
+    if "mao_pro_zh" in norm or "maopro" in norm or "xiaomonv" in norm:
+      return "mao_pro_zh"
     return ""
 
-  def _live2d_view_override(self) -> dict | None:
-    """Get view override config for current model (if any)."""
+  def _current_live2d_view_profile(self) -> dict[str, Any]:
+    """Get live2d view profile for current model: base_size, scale, offset."""
     model_id = self._current_live2d_model_id()
-    return LIVE2D_VIEW_OVERRIDES.get(model_id)
+    if model_id:
+      profile = LIVE2D_VIEW_OVERRIDES.get(model_id)
+      if profile:
+        return profile
+    return dict(DEFAULT_LIVE2D_VIEW_PROFILE)
 
   def _adjust_model_canvas_fit(self) -> None:
-    """Adjust offset/scale based on model canvas size, ensuring full body visible."""
+    """Apply per-character view profile: scale + offset. No fallback branch needed."""
     if self._model is None or self._win_h <= 0:
       return
-    override = self._live2d_view_override()
-    if override:
-      scale = float(override.get("scale", 1.0))
-      ox, oy = override.get("offset", (0.0, 0.0))
-      try:
-        # --- Attempt scale ---
-        scale_applied = False
-        if hasattr(self._model, "SetScale"):
-          self._model.SetScale(scale)
-          scale_applied = True
-        elif hasattr(self._model, "SetModelScale"):
-          self._model.SetModelScale(scale)
-          scale_applied = True
-        elif hasattr(self._model, "SetModelMatrix"):
-          self._model.SetModelMatrix(scale)
-          scale_applied = True
-        else:
-          print(f"[DesktopPet] WARNING: {type(self._model).__name__} has no SetScale/SetModelScale/SetModelMatrix")
-        # --- Always apply offset ---
-        self._model.SetOffset(float(ox), float(oy))
-        try:
-          cw, ch = self._model.GetCanvasSize()
-        except Exception:
-          cw, ch = 0, 0
-        print(
-          f"[DesktopPet] Live2D fit override: id={self._current_live2d_model_id()}, "
-          f"win={self._win_w}x{self._win_h}, canvas={cw}x{ch}, "
-          f"scale={scale}(applied={scale_applied}), offset=({ox},{oy})"
-        )
-        # --- Diagnostic: extreme params still not showing feet? ---
-        if scale <= 0.6 and self._win_h >= 880:
-          print("[DesktopPet] " + "=" * 40)
-          print("[DesktopPet] DIAGNOSTIC: Extremely small scale ({:.2f}) and tall window ({:.0f}x{:.0f})".format(scale, self._win_w, self._win_h))
-          print("[DesktopPet] If feet are STILL truncated, the problem is NOT")
-          print("[DesktopPet] window clipping or offset misconfiguration.")
-          print("[DesktopPet] The Live2D model resource (moc3/artmesh) likely")
-          print("[DesktopPet] has no complete foot geometry below the visible area.")
-          print("[DesktopPet] Check debug_elf_count_frame.png for confirmation.")
-          print("[DesktopPet] Solutions: re-export model in Cubism Editor with")
-          print("[DesktopPet] full body artmesh, or pad the canvas bottom.")
-          print("[DesktopPet] " + "=" * 40)
-      except Exception as exc:
-        print(f"[DesktopPet] Live2D fit override failed: {exc}")
-      return
-    # --- Default fallback for models without override ---
+    # Every Live2D model gets its profile (override or default)
+    profile = self._current_live2d_view_profile()
+    scale = float(profile.get("scale", 1.0))
+    ox, oy = profile.get("offset", (0.0, 0.05))
     try:
-      cw, ch = self._model.GetCanvasSize()
-      if cw <= 0 or ch <= 0:
-        return
-      win_aspect = self._win_w / self._win_h
-      canvas_aspect = cw / ch
-      if canvas_aspect < win_aspect:
-        self._model.SetOffset(0.0, 0.08)
+      # --- Attempt scale ---
+      scale_applied = False
+      if hasattr(self._model, "SetScale"):
+        self._model.SetScale(scale)
+        scale_applied = True
+      elif hasattr(self._model, "SetModelScale"):
+        self._model.SetModelScale(scale)
+        scale_applied = True
+      elif hasattr(self._model, "SetModelMatrix"):
+        self._model.SetModelMatrix(scale)
+        scale_applied = True
       else:
-        self._model.SetOffset(0.0, 0.05)
-    except Exception:
-      pass
+        print(f"[DesktopPet] WARNING: {type(self._model).__name__} has no SetScale/SetModelScale/SetModelMatrix")
+      # --- Always apply offset ---
+      self._model.SetOffset(float(ox), float(oy))
+      try:
+        cw, ch = self._model.GetCanvasSize()
+      except Exception:
+        cw, ch = 0, 0
+      print(
+        f"[DesktopPet] Live2D fit override: id={self._current_live2d_model_id()}, "
+        f"win={self._win_w}x{self._win_h}, canvas={cw}x{ch}, "
+        f"scale={scale}(applied={scale_applied}), offset=({ox},{oy})"
+      )
+      # --- Diagnostic: extreme params still not showing feet? ---
+      if scale <= 0.6 and self._win_h >= 880:
+        print("[DesktopPet] " + "=" * 40)
+        print("[DesktopPet] DIAGNOSTIC: Extremely small scale ({:.2f}) and tall window ({:.0f}x{:.0f})".format(scale, self._win_w, self._win_h))
+        print("[DesktopPet] If feet are STILL truncated, the problem is NOT")
+        print("[DesktopPet] window clipping or offset misconfiguration.")
+        print("[DesktopPet] The Live2D model resource (moc3/artmesh) likely")
+        print("[DesktopPet] has no complete foot geometry below the visible area.")
+        print("[DesktopPet] Check debug_live2d_frame.png for confirmation.")
+        print("[DesktopPet] Solutions: re-export model in Cubism Editor with")
+        print("[DesktopPet] full body artmesh, or pad the canvas bottom.")
+        print("[DesktopPet] " + "=" * 40)
+    except Exception as exc:
+      print(f"[DesktopPet] Live2D fit override failed: {exc}")
 
-  def _debug_save_elf_count_frame(self) -> None:
-    """Save a debug screenshot of the current GL frame for elf_count model."""
+  def _debug_save_live2d_frame(self) -> None:
+    """Save a debug screenshot of the current GL frame for any Live2D model."""
     if self._model is None or self._window is None:
       return
     model_id = self._current_live2d_model_id()
-    if model_id != "elf_count":
+    if not model_id:
       return
     try:
       debug_dir = os.path.join(PROJECT_ROOT, "data")
       os.makedirs(debug_dir, exist_ok=True)
-      out_path = os.path.join(debug_dir, "debug_elf_count_frame.png")
+      out_path = os.path.join(debug_dir, f"debug_live2d_frame_{model_id}.png")
       self._model.Update()
       self._window._gl.update()
       QApplication.processEvents()
@@ -3982,14 +3988,16 @@ class DesktopPet:
         data = json.load(f)
       if not isinstance(data, dict):
         return {}
-      # --- Auto-fix elf_count window height being too short ---
+      # --- Per-model window size anchor ---
+      # Ensure remembered window_size at least matches each model's bare minimum.
+      # (switch_to_pet will apply the exact profile base_size anyway.)
       last_id = str(data.get("last_pet_id", "") or "")
       size = data.get("window_size")
       if last_id == "elf_count" and isinstance(size, (list, tuple)) and len(size) == 2:
         h = int(size[1])
         if h < 800:
-          data["window_size"] = [450, 820]
-          print(f"[DesktopPet] Auto-fixed elf_count window size: {size} -> [450, 820]")
+          data["window_size"] = [500, 880]
+          print(f"[DesktopPet] Auto-fixed elf_count window size: {size} -> [500, 880]")
           try:
             with open(PET_MEMORY_PATH, "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False, indent=2)
