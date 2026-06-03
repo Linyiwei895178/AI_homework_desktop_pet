@@ -3777,7 +3777,7 @@ class DesktopPet:
   def _load_settings(self) -> None:
     defaults = {
       "pin_top": True,
-      "hover_fade": True,
+      "hover_fade": False,
       "status_bar": False,
       "chat_open": False,
       "voice_pack_id": "",

@@ -1,7 +1,7 @@
 {
   "last_pet_id": "monkey",
   "pin_top": true,
-  "hover_fade": true,
+  "hover_fade": false,
   "status_bar": false,
   "chat_open": false,
   "voice_pack_id": "",
