@@ -58,6 +58,9 @@ assets/sounds/*.wav
 !data/*.example.json
 
 # ─── Generated/temp analysis files ───
+
+# Live2D debug screenshots
+data/debug_live2d_frame_*.png
 analyze_*.py
 fix_*.py
 temp_*.py
