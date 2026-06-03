@@ -63,5 +63,6 @@ fix_*.py
 temp_*.py
 check_canvas.py
 monkey_structure_analysis.py
-D%3A/
-D%253A/
+
+# ─── Private user models (DO NOT UPLOAD) ───
+assets/models/red_hair/

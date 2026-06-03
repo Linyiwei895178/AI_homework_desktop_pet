@@ -150,6 +150,16 @@ PET_MEMORY_PATH = os.path.join(PROJECT_ROOT, "assets", "pet_memory.json")
 SYNONYMS_PATH = os.path.join(PROJECT_ROOT, "assets", "synonyms.json")
 BASE_WINDOW_W = 450
 BASE_WINDOW_H = 600
+
+# --- Live2D model-specific display overrides ---
+# Some tall/slim full-body models (e.g. elf_count) need taller windows and tuning.
+LIVE2D_VIEW_OVERRIDES: dict[str, dict[str, Any]] = {
+    "elf_count": {
+        "base_size": (450, 720),
+        "scale": 0.86,
+        "offset": (0.0, -0.10),
+    },
+}
 MIN_ACTION_PLAY_MS = 1500
 ANIMATIONS_DIR = os.path.join(PROJECT_ROOT, "assets", "animations")
 IMAGES_DIR = os.path.join(PROJECT_ROOT, "assets", "images")
@@ -2021,6 +2031,7 @@ class Live2DWidget(QOpenGLWidget):
   def resizeGL(self, w: int, h: int) -> None:
     if self._pet._model is not None:
       self._pet._model.Resize(w, h)
+      self._pet._adjust_model_canvas_fit()
 
   def paintGL(self) -> None:
     if self._pet._model is None:
@@ -2515,8 +2526,19 @@ class DesktopPet:
     else:
       self._window._plane_player.hide()
       self._window._gl.show()
-      # 重新加载 Live2D 模型（根据 pet 中的 model_path）
-      model_path = pet.get('model_path') or ''
+      # --- Live2D model-specific window sizing ---
+      override = LIVE2D_VIEW_OVERRIDES.get(pet_id)
+      if override:
+        base_size = override.get("base_size")
+        if base_size and len(base_size) == 2:
+          bw, bh = int(base_size[0]), int(base_size[1])
+          # Apply custom size if current window is significantly shorter
+          if self._win_h < bh - 40:
+            self._aspect_ratio = bw / bh
+            self._apply_window_size(bw, bh, save_memory=False)
+            print(f"[DesktopPet] Applied {pet_id} custom window: {bw}x{bh}")
+      # Reload Live2D model
+      model_path = pet.get("model_path") or ""
       if model_path and os.path.isfile(model_path):
         reload_live2d_model(self, model_path)
       self._start_idle_motion()
@@ -2524,6 +2546,8 @@ class DesktopPet:
     self._show_switch_notice(name)
     print(f"[DesktopPet] 已切换到: {name}")
     QTimer.singleShot(0, self._after_pet_switch)
+    # Save memory so next startup uses correct window size
+    self._save_pet_memory()
 
   def current_voice_pack_id(self) -> str:
     return self._voice_pack_id
@@ -3153,13 +3177,23 @@ class DesktopPet:
     new_h = int(new_w / self._aspect_ratio)
     self._apply_window_size(new_w, new_h)
 
+  def _current_base_size(self) -> tuple[int, int]:
+    """Return base window size (w, h) for current character."""
+    override = self._live2d_view_override()
+    if override:
+      base_size = override.get("base_size")
+      if base_size and len(base_size) == 2:
+        return (int(base_size[0]), int(base_size[1]))
+    return (BASE_WINDOW_W, BASE_WINDOW_H)
+
   def set_pet_scale(self, scale: float, min_scale: float = 0.6, max_scale: float = 1.8) -> float:
     value = max(float(min_scale), min(float(max_scale), float(scale)))
-    new_w = int(round(BASE_WINDOW_W * value))
-    new_h = int(round(BASE_WINDOW_H * value))
+    base_w, base_h = self._current_base_size()
+    new_w = int(round(base_w * value))
+    new_h = int(round(base_h * value))
     if abs(new_w - self._win_w) < 2 and abs(new_h - self._win_h) < 2:
       return self.current_pet_scale()
-    self._aspect_ratio = BASE_WINDOW_W / BASE_WINDOW_H
+    self._aspect_ratio = base_w / base_h
     self._apply_window_size(new_w, new_h, save_memory=False)
     if self._window is not None:
       self._window.update()
@@ -3167,13 +3201,14 @@ class DesktopPet:
       player = self._plane_player()
       if player is not None:
         player.update()
-    print(f"[DesktopPet] 缩放已应用: scale={value:.2f}, size={new_w}x{new_h}")
+    print(f"[DesktopPet] Scale applied: scale={value:.2f}, size={new_w}x{new_h}")
     return self.current_pet_scale()
 
   def current_pet_scale(self) -> float:
     if self._win_w <= 0:
       return 1.0
-    return self._win_w / BASE_WINDOW_W
+    base_w, _ = self._current_base_size()
+    return self._win_w / base_w
 
   def _on_pin_submenu_item_and_dismiss(self, choice: str) -> None:
     self._on_pin_submenu_item(choice)
@@ -3583,9 +3618,44 @@ class DesktopPet:
     self._load_available_motions()
     self._start_idle_motion()
 
+
+  def _current_live2d_model_id(self) -> str:
+    """Return identifier for current Live2D model, for LIVE2D_VIEW_OVERRIDES lookup."""
+    if self._active_pet and self._active_pet.get("id"):
+      return str(self._active_pet.get("id"))
+    norm = os.path.normpath(self.model_path).lower()
+    if "elf_count" in norm:
+      return "elf_count"
+    return ""
+
+  def _live2d_view_override(self) -> dict | None:
+    """Get view override config for current model (if any)."""
+    model_id = self._current_live2d_model_id()
+    return LIVE2D_VIEW_OVERRIDES.get(model_id)
+
   def _adjust_model_canvas_fit(self) -> None:
-    """根据模型画布尺寸调整偏移/缩放，确保角色完整显示（脚部不被截断）。"""
+    """Adjust offset/scale based on model canvas size, ensuring full body visible."""
     if self._model is None or self._win_h <= 0:
+      return
+    override = self._live2d_view_override()
+    if override:
+      scale = float(override.get("scale", 1.0))
+      ox, oy = override.get("offset", (0.0, 0.0))
+      try:
+        if hasattr(self._model, "SetScale"):
+          self._model.SetScale(scale)
+        self._model.SetOffset(float(ox), float(oy))
+        try:
+          cw, ch = self._model.GetCanvasSize()
+        except Exception:
+          cw, ch = 0, 0
+        print(
+          f"[DesktopPet] Live2D fit override: id={self._current_live2d_model_id()}, "
+          f"win={self._win_w}x{self._win_h}, canvas={cw}x{ch}, "
+          f"scale={scale}, offset=({ox},{oy})"
+        )
+      except Exception as exc:
+        print(f"[DesktopPet] Live2D fit override failed: {exc}")
       return
     try:
       cw, ch = self._model.GetCanvasSize()
@@ -3594,16 +3664,15 @@ class DesktopPet:
       win_aspect = self._win_w / self._win_h
       canvas_aspect = cw / ch
       if canvas_aspect < win_aspect:
-        # 模型画布比窗口更瘦高，按宽度适配后垂直居中
-        # 适当向上偏移使脚部可见
+        # Model canvas is taller than window -> fit by width, center vertically
+        # Shift upward slightly so feet are visible
         self._model.SetOffset(0.0, 0.08)
       else:
-        # 模型画布比窗口更宽或相近，按高度适配后水平居中
-        # 微调偏移让脚部完整
+        # Model canvas is wider or similar -> fit by height, center horizontally
+        # Minor offset to show feet
         self._model.SetOffset(0.0, 0.05)
     except Exception:
       pass
-
   def _capture_mao_pro_motion_preview(self) -> None:
     """mao_pro_zh：从首个 motion3 首帧生成预览图。"""
     if not is_mao_pro_zh_model(self.model_path) or self._model is None:
@@ -3854,7 +3923,22 @@ class DesktopPet:
     try:
       with open(PET_MEMORY_PATH, encoding="utf-8") as f:
         data = json.load(f)
-      return data if isinstance(data, dict) else {}
+      if not isinstance(data, dict):
+        return {}
+      # --- Auto-fix elf_count window height being too short ---
+      last_id = str(data.get("last_pet_id", "") or "")
+      size = data.get("window_size")
+      if last_id == "elf_count" and isinstance(size, (list, tuple)) and len(size) == 2:
+        h = int(size[1])
+        if h < 680:
+          data["window_size"] = [450, 720]
+          print(f"[DesktopPet] Auto-fixed elf_count window size: {size} -> [450, 720]")
+          try:
+            with open(PET_MEMORY_PATH, "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          except OSError:
+            pass
+      return data
     except (OSError, json.JSONDecodeError, TypeError):
       return {}
 
