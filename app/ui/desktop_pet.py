@@ -130,6 +130,35 @@ MOTION_NAME_MAP: dict[str, str] = {
     "special_03": "特殊三",
 }
 
+# --- Chinese name mapping for expression labels (used in arc menu / dashboard) ---
+EXPRESSION_NAME_MAP: dict[str, str] = {
+    "不安": "不安",
+    "不安嘴": "不安(嘴)",
+    "发型": "发型",
+    "发色": "发色",
+    "披风隐藏": "隐藏披风",
+    "星星眼": "星星眼",
+    "爱心眼": "爱心眼",
+    "白眼": "白眼",
+    "白眼嘴": "白眼(嘴)",
+    "眼镜": "眼镜",
+    "瞳色": "瞳色",
+    "耳朵": "耳朵",
+    "脸红": "脸红",
+    "脸黑": "脸黑",
+    "豆豆眼": "豆豆眼",
+    "酒杯": "酒杯",
+    "麦克风": "麦克风",
+    "exp_01": "微笑",
+    "exp_02": "开心",
+    "exp_03": "难过",
+    "exp_04": "生气",
+    "exp_05": "惊讶",
+    "exp_06": "平静",
+    "exp_07": "害羞",
+    "exp_08": "困倦",
+}
+
 HIT_AREAS = ("HitAreaHead", "HitAreaBody")
 CHAT_GREETING = "你好呀！我是小黑，有什么可以帮我的吗？"
 DRAG_THRESHOLD = 5
@@ -2254,6 +2283,9 @@ class DesktopPet:
     self._cleaning_up = False
     self._closed = False
     self.available_motions: list[str] = []
+    # --- Expression support ---
+    self._expression_index: dict[str, str] = {}
+    self.available_expressions: list[str] = []
     self.motion_name_map = MOTION_NAME_MAP
 
     self.on_click_callback: Optional[Callable[..., Any]] = None
@@ -2444,10 +2476,18 @@ class DesktopPet:
   def motions_for_dashboard(self, pet: dict) -> list[dict]:
     if pet.get("is_flat"):
       return self.synonym_resolver.motions_for_flat(pet.get("id", ""))
-    return self.synonym_resolver.motions_for_live2d(
+    items = self.synonym_resolver.motions_for_live2d(
       pet.get("id", "mao"),
       pet.get("model_path") or self.model_path,
     )
+    # Append available expressions as pseudo-motion items
+    for e in self.available_expressions:
+      items.append({
+        "id": f"__expr__:{e}",
+        "label": EXPRESSION_NAME_MAP.get(e, e),
+        "kind": "expression",
+      })
+    return items
 
   def play_flat_motion(
     self,
@@ -2456,6 +2496,11 @@ class DesktopPet:
     idle_path: str,
     size: QSize,
   ) -> None:
+    # Handle expression items from dashboard
+    if motion.get("kind") == "expression":
+      expr_id = str(motion.get("id", "")).replace("__expr__:", "")
+      self.set_expression(expr_id)
+      return
     if self._console:
       self._console._play_motion(motion, pic_label, idle_path, size)
     if self._is_flat_mode():
@@ -2799,10 +2844,43 @@ class DesktopPet:
         mid = motion.get("id", "")
         items.append({"label": motion.get("label", mid), "value": mid})
       return items
-    return [
-      {"label": self.motion_name_map.get(m, m), "value": m}
-      for m in self.available_motions
-    ]
+    # --- Live2D: combine motions + expressions ---
+    items: list[dict[str, str]] = []
+    for m in self.available_motions:
+      items.append({
+        "label": self.motion_name_map.get(m, m),
+        "value": m,
+        "kind": "motion",
+      })
+    # Add expressions, limited to 16
+    exp_items = []
+    for e in self.available_expressions:
+      exp_items.append({
+        "label": self._expression_label(e),
+        "value": e,
+        "kind": "expression",
+      })
+    # Sort: common moods first, then others
+    def _exp_sort_key(item: dict) -> tuple:
+      e = str(item["value"])
+      prio = {
+        "smile": 0, "happy": 1, "sad": 2, "angry": 3,
+        "surprised": 4, "neutral": 5, "shy": 6, "sleepy": 7,
+        "不安": 8, "星星眼": 9, "爱心眼": 10, "白眼": 11,
+        "脸红": 12, "脸黑": 13, "豆豆眼": 14, "白眼嘴": 15,
+      }
+      return (prio.get(e, 99), e)
+    exp_items.sort(key=_exp_sort_key)
+    items.extend(exp_items[:16])
+    if len(self.available_expressions) > 16:
+      print(f"[DesktopPet] Expression list truncated to 16 (total {len(self.available_expressions)})")
+    return items
+
+  def _expression_label(self, name: str) -> str:
+    """Map expression id to a short display label (Chinese if available)."""
+    if name in EXPRESSION_NAME_MAP:
+      return EXPRESSION_NAME_MAP[name]
+    return name
 
   def _lower_character_layer(self) -> None:
     if self._window is None:
@@ -2871,13 +2949,20 @@ class DesktopPet:
       return True
     if self._model is None:
       return False
-    expression_id = EMOTION_TO_EXPRESSION.get(emotion.strip().lower(), emotion)
+    # If the emotion is a known available expression, use it directly
+    trimmed = emotion.strip()
+    if trimmed in self.available_expressions or trimmed in self._expression_index:
+      expression_id = trimmed
+    else:
+      expression_id = EMOTION_TO_EXPRESSION.get(trimmed.lower(), trimmed)
     try:
       self._model.SetExpression(expression_id)
-      self.current_state = emotion
+      self.current_state = expression_id
+      print(f"[DesktopPet] 设置表情成功: {expression_id}")
       return True
     except Exception as exc:
-      print(f"[DesktopPet] 设置表情失败 ({expression_id}): {exc}")
+      avail_summary = self.available_expressions[:8] if hasattr(self, 'available_expressions') else []
+      print(f"[DesktopPet] 设置表情失败: expression_id={expression_id}, available={avail_summary}, error={exc}")
       return False
 
   def on_click(self, x: int, y: int) -> dict[str, Any]:
@@ -3633,15 +3718,107 @@ class DesktopPet:
     return gp.x(), gp.y()
 
   def _init_model_gl(self) -> None:
+    # Patch model3.json if it lacks Expressions (e.g. elf_count)
+    patched_path = self._prepare_model3_with_discovered_expressions(self.model_path)
     self._model = live2d.LAppModel()
-    self._model.LoadModelJson(self.model_path, maskBufferCount=2)
+    self._model.LoadModelJson(patched_path, maskBufferCount=2)
     self._model.Resize(self._win_w, self._win_h)
     self._adjust_model_canvas_fit()
     self._build_motion_index()
     self._load_available_motions()
+    self._build_expression_index()
+    self._load_available_expressions()
     QTimer.singleShot(300, self._debug_save_live2d_frame)
     self._start_idle_motion()
 
+
+  def _prepare_model3_with_discovered_expressions(self, model_path: str) -> str:
+    """If model3.json lacks Expressions but .exp3.json files exist, create a patched copy."""
+    runtime = os.path.dirname(model_path)
+    try:
+      with open(model_path, encoding="utf-8") as f:
+        data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+      return model_path
+    fr = data.get("FileReferences", {})
+    if "Expressions" in fr and len(fr["Expressions"]) > 0:
+      return model_path  # already declared
+    # Scan for .exp3.json files
+    exp3_files: list[str] = []
+    for root, _dirs, files in os.walk(runtime):
+      for fn in files:
+        if fn.endswith(".exp3.json"):
+          rel = os.path.relpath(os.path.join(root, fn), runtime)
+          exp3_files.append(rel.replace("\\", "/"))
+    if not exp3_files:
+      return model_path  # no expression files at all
+    exp3_files.sort()
+    new_expressions = [
+      {"Name": os.path.basename(f)[: -len(".exp3.json")], "File": f}
+      for f in exp3_files
+    ]
+    data.setdefault("FileReferences", {})["Expressions"] = new_expressions
+    # Write patched copy next to original
+    patched_path = model_path[: -len(".model3.json")] + ".patched.model3.json"
+    try:
+      with open(patched_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+      print(f"[DesktopPet] Patched model3 with {len(new_expressions)} expressions: {patched_path}")
+      return patched_path
+    except OSError:
+      return model_path
+
+  def _iter_live2d_expression_files(self, model_path: str | None = None) -> list[str]:
+    """Scan runtime dir for all .exp3.json files, return sorted list."""
+    mp = model_path or self.model_path
+    runtime = os.path.dirname(mp)
+    exp3_files: list[str] = []
+    if os.path.isdir(runtime):
+      for root, _dirs, files in os.walk(runtime):
+        for fn in files:
+          if fn.endswith(".exp3.json"):
+            exp3_files.append(os.path.join(root, fn))
+    exp3_files.sort()
+    return exp3_files
+
+  @staticmethod
+  def _expression_id_from_file(path: str) -> str:
+    base = os.path.basename(path)
+    if base.lower().endswith(".exp3.json"):
+      return base[: -len(".exp3.json")]
+    return os.path.splitext(base)[0]
+
+  def _build_expression_index(self) -> None:
+    """Build self._expression_index from model3.json Expressions + file scan."""
+    self._expression_index.clear()
+    # 1. Read model3.json FileReferences.Expressions
+    try:
+      with open(self.model_path, encoding="utf-8") as f:
+        data = json.load(f)
+      expr_list = data.get("FileReferences", {}).get("Expressions", [])
+      for entry in expr_list:
+        name = entry.get("Name", "")
+        fpath = entry.get("File", "")
+        if name and fpath:
+          full = os.path.join(os.path.dirname(self.model_path), fpath.replace("/", os.sep))
+          self._expression_index[name] = full if os.path.isfile(full) else name
+    except (OSError, json.JSONDecodeError):
+      pass
+    # 2. Scan all .exp3.json files (catch files not in model3)
+    scanned = self._iter_live2d_expression_files()
+    for fp in scanned:
+      eid = self._expression_id_from_file(fp)
+      if eid not in self._expression_index:
+        self._expression_index[eid] = fp
+
+  def _load_available_expressions(self) -> None:
+    self.available_expressions = sorted(self._expression_index.keys())
+    model_id = self._current_live2d_model_id()
+    print(
+      f"[DesktopPet] Loaded expressions: id={model_id}, "
+      f"count={len(self.available_expressions)}, "
+      f"names={self.available_expressions}"
+    )
 
   def _current_live2d_model_id(self) -> str:
     """Return identifier for current Live2D model, for LIVE2D_VIEW_OVERRIDES lookup."""
@@ -4420,10 +4597,15 @@ class DesktopPet:
       self._set_chat_open(False)
 
   def _on_arc_motion_picked(self, item: dict) -> None:
-    motion = str(item.get("value", ""))
-    label = str(item.get("label", motion))
-    print(f"[DesktopPet] 播放动作: {label} ({motion})")
-    self.play_motion(motion)
+    kind = str(item.get("kind", "motion"))
+    value = str(item.get("value", ""))
+    label = str(item.get("label", value))
+    if kind == "expression":
+      print(f"[DesktopPet] 设置表情: {label} ({value})")
+      self.set_expression(value)
+    else:
+      print(f"[DesktopPet] 播放动作: {label} ({value})")
+      self.play_motion(value)
     self._close_arc_menu()
 
   def _open_context_menu(self, pos: tuple[int, int]) -> None:
