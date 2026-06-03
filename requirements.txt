@@ -12,7 +12,7 @@ requests>=2.31.0        # 调用 Qwen-VL API
 
 # B模块增强：表情识别
 deepface>=0.0.90        # 现成面部表情识别库
-tf-keras>=2.15.0        # DeepFace 在新版本 Keras 环境下常用兼容依赖
+tf-keras>=2.15.0        # DeepFace 在新版 Keras 环境下常用兼容依赖
 
 # MediaPipe 人脸/关键点检测
 # Python 3.13 下使用 MediaPipe Tasks API；face_landmarker.task 模型文件不提交仓库。
@@ -42,3 +42,7 @@ standard-chunk>=3.13.0; python_version >= "3.13"  # Python 3.13 SpeechRecognitio
 # 开发工具
 pytest>=7.0.0           # 单元测试
 pytest-cov>=4.1.0       # 测试覆盖率
+
+# ─── Cloud Sync (Supabase) ───
+supabase>=2.0.0          # Supabase Python client (可选, 未安装则降级)
+httpx>=0.27.0            # 轻量 HTTP 客户端, Supabase 内部依赖也使用它

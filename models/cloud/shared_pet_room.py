@@ -2,12 +2,24 @@
 SharedPetRoomManager: manages a shared pet room with cloud sync.
 
 Provides join/pull/push/sync interfaces.
-Actual conflict resolution is a TODO for later versions.
+First version uses request-response sync (NOT realtime).
+Conflict strategy: latest updated_at wins.
+
+Usage:
+    from models.cloud.cloud_service import SupabaseCloudService
+    from models.cloud.shared_pet_room import SharedPetRoomManager
+
+    svc = SupabaseCloudService()
+    mgr = SharedPetRoomManager(svc, room_code="ROOM123")
+    result = mgr.join_room("ROOM123", "MyPet")
+    if result["ok"]:
+        sync_result = mgr.sync_now(local_pet_state)
 """
 
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from models.cloud.cloud_models import CloudPetEvent, CloudPetState
@@ -18,140 +30,134 @@ class SharedPetRoomManager:
     """
     Manage a shared pet room.
 
-    Current version:
-    - Always uses "latest updated_at wins" for conflict resolution.
-    - Does NOT actually call Supabase if not configured.
+    - join_room: create or join a room by code.
+    - sync_now: pull remote -> merge -> push local.
+    - push_local_state: one-way push to cloud.
+    - pull_remote_state: one-way pull from cloud.
+    - append_interaction: log an interaction event.
+    - fetch_recent_events: fetch recent cloud events.
 
-    # TODO: Implement event-based incremental merge (version 2).
-    # TODO: Add offline queue and retry logic.
+    All public methods return:
+        {"ok": bool, "error": str | None, "data": Any}
+
+    When the underlying cloud service is not configured,
+    methods return {"ok": False, "error": "not_configured", "data": None}.
     """
 
-    def __init__(self, cloud_service: Optional[SupabaseCloudService] = None):
+    def __init__(
+        self,
+        cloud_service: Optional[SupabaseCloudService] = None,
+        room_code: Optional[str] = None,
+    ):
         self._service = cloud_service or SupabaseCloudService()
-        self._room_id: str = ""
+        self._room_code: str = room_code or ""
         self._room_info: Dict[str, Any] = {}
         self._on_event: Optional[Callable[[Dict[str, Any]], None]] = None
 
-    def set_on_event_callback(self, callback: Optional[Callable[[Dict[str, Any]], None]]) -> None:
+    def set_on_event_callback(
+        self, callback: Optional[Callable[[Dict[str, Any]], None]]
+    ) -> None:
         """Register a callback for incoming cloud events."""
         self._on_event = callback
 
-    def join_room(self, room_id: str, pet_name: str = "Echo") -> bool:
-        """
-        Join (or create) a shared pet room.
+    def join_room(
+        self, room_code: str, pet_name: str = "Echo"
+    ) -> Dict[str, Any]:
+        result = self._service.create_or_join_room(room_code, pet_name)
+        if result.get("ok") and result.get("data"):
+            self._room_code = room_code
+            self._room_info = result["data"].get("room", {})
+        return result
 
-        :param room_id:  room identifier
-        :param pet_name: name for the active pet in this room
-        :returns:        True on success
-        """
-        result = self._service.create_or_join_room(room_id, pet_name)
-        if result.get("success"):
-            self._room_id = room_id
-            self._room_info = result.get("room", {})
-            print(f"[SharedPetRoomManager] Joined room: {room_id}")
-            return True
-        print(f"[SharedPetRoomManager] Failed to join room: {result.get('error')}")
-        return False
-
-    def leave_room(self) -> None:
-        """Leave the current room."""
-        self._room_id = ""
+    def leave_room(self) -> Dict[str, Any]:
+        self._room_code = ""
         self._room_info = {}
+        return {"ok": True, "error": None, "data": {"left": True}}
 
     def is_in_room(self) -> bool:
-        """True if currently in a room."""
-        return bool(self._room_id)
+        return bool(self._room_code)
 
-    def get_room_id(self) -> str:
-        return self._room_id
+    def get_room_code(self) -> str:
+        return self._room_code
 
-    def sync_now(self, local_pet_state: Any) -> bool:
-        """
-        Perform a full sync cycle: push local then pull remote.
-
-        :param local_pet_state: PetState instance or dict
-        :returns: True if sync succeeded
-        """
+    def sync_now(self, local_pet_state: Any) -> Dict[str, Any]:
         if not self.is_in_room():
-            return False
+            return {"ok": False, "error": "not_in_room", "data": None}
 
-        # Push local
+        pull_result = self._service.fetch_cloud_pet_state(self._room_code)
+        remote_pet = pull_result.get("data", {}).get("pet") if pull_result.get("ok") else None
+
+        local_payload = self._build_payload(local_pet_state)
+
+        merged = dict(local_payload)
+        if remote_pet:
+            remote_ts = remote_pet.get("updated_at") or ""
+            local_ts = local_payload.get("updated_at") or ""
+            if remote_ts > local_ts:
+                for key in ("mood", "energy", "intimacy", "level", "exp",
+                            "coins", "hunger", "bond_score", "pet_name", "pet_id"):
+                    if key in remote_pet:
+                        merged[key] = remote_pet[key]
+                merged["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        push_result = self._service.save_cloud_pet_state(self._room_code, merged)
+        pushed_ok = push_result.get("ok", False)
+
+        return {
+            "ok": pushed_ok,
+            "error": None if pushed_ok else push_result.get("error"),
+            "data": {
+                "pushed": pushed_ok,
+                "pulled": bool(remote_pet),
+                "merged": merged,
+            },
+        }
+
+    def push_local_state(self, local_pet_state: Any) -> Dict[str, Any]:
+        if not self.is_in_room():
+            return {"ok": False, "error": "not_in_room", "data": None}
         payload = self._build_payload(local_pet_state)
-        push_result = self._service.save_cloud_pet_state(self._room_id, payload)
-        if not push_result.get("success"):
-            return False
+        return self._service.save_cloud_pet_state(self._room_code, payload)
 
-        # Pull remote
-        pull_result = self._service.fetch_cloud_pet_state(self._room_id)
-        if pull_result.get("success") and pull_result.get("state"):
-            self._on_state_pulled(pull_result["state"])
-
-        return True
-
-    def push_local_state(self, local_pet_state: Any) -> bool:
-        """
-        Push local pet state to the cloud (one-way).
-
-        :param local_pet_state: PetState instance or dict
-        :returns: True on success
-        """
+    def pull_remote_state(self) -> Dict[str, Any]:
         if not self.is_in_room():
-            return False
-        payload = self._build_payload(local_pet_state)
-        result = self._service.save_cloud_pet_state(self._room_id, payload)
-        return bool(result.get("success"))
+            return {"ok": False, "error": "not_in_room", "data": None}
+        return self._service.fetch_cloud_pet_state(self._room_code)
 
-    def pull_remote_state(self) -> Optional[Dict[str, Any]]:
-        """
-        Pull remote pet state from the cloud.
-
-        :returns: state dict or None
-        """
+    def append_interaction(
+        self,
+        action_type: str,
+        actor_name: str = "local",
+        delta: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         if not self.is_in_room():
-            return None
-        result = self._service.fetch_cloud_pet_state(self._room_id)
-        if result.get("success"):
-            return result.get("state")
-        return None
+            return {"ok": False, "error": "not_in_room", "data": None}
 
-    def append_interaction(self, action_type: str, actor_name: str, delta: Optional[Dict[str, float]] = None) -> bool:
-        """
-        Record an interaction event to the cloud.
-
-        :param action_type: e.g. "feed", "play", "pet", "level_up"
-        :param actor_name:  who performed the action
-        :param delta:       state changes (e.g. {"intimacy": 5, "energy": -3})
-        :returns:           True on success
-        """
-        if not self.is_in_room():
-            return False
         event = CloudPetEvent(
-            room_id=self._room_id,
-            actor=actor_name,
+            event_type="interaction",
             action_type=action_type,
+            actor_name=actor_name,
             delta=delta or {},
         )
-        result = self._service.append_pet_event(self._room_id, event.to_dict())
-        if result.get("success") and self._on_event:
+        result = self._service.append_pet_event(self._room_code, event.to_dict())
+        if result.get("ok") and self._on_event:
             self._on_event(event.to_dict())
-        return bool(result.get("success"))
+        return result
 
-    def fetch_recent_events(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """Fetch recent cloud events."""
+    def fetch_recent_events(self, limit: int = 20) -> Dict[str, Any]:
         if not self.is_in_room():
-            return []
-        result = self._service.fetch_recent_pet_events(self._room_id, limit=limit)
-        return result.get("events", [])
-
-    # ── Internal helpers ──
+            return {"ok": False, "error": "not_in_room", "data": None}
+        return self._service.fetch_recent_pet_events(self._room_code, limit=limit)
 
     def _build_payload(self, state: Any) -> Dict[str, Any]:
-        """Convert PetState (or dict) to a flat dict for cloud storage."""
-        if isinstance(state, dict):
-            payload = dict(state)
+        if hasattr(state, "to_dict") and callable(state.to_dict):
+            raw = state.to_dict()
+        elif isinstance(state, dict):
+            raw = dict(state)
         else:
-            payload = {
+            raw = {
                 "pet_id": getattr(state, "pet_id", "cat"),
+                "pet_name": getattr(state, "pet_name", "Echo"),
                 "level": getattr(state, "level", 1),
                 "exp": getattr(state, "exp", 0),
                 "coins": getattr(state, "coins", 0),
@@ -161,13 +167,6 @@ class SharedPetRoomManager:
                 "hunger": getattr(state, "hunger", 50),
                 "bond_score": getattr(state, "bond_score", 0),
             }
-        payload["updated_at"] = time.time()
-        payload["room_id"] = self._room_id
-        return payload
 
-    def _on_state_pulled(self, state_dict: Dict[str, Any]) -> None:
-        """
-        Called when remote state is fetched.
-        # TODO: Notify AppContext / EchoTeamDInterface to apply remote state.
-        """
-        pass
+        raw["updated_at"] = raw.get("updated_at") or datetime.now(timezone.utc).isoformat()
+        return raw
