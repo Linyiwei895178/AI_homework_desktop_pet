@@ -111,6 +111,7 @@ class UserStateDetector:
         camera_index: int = 0,
         detect_interval: float = 0.5,
         vlm_interval: float = 5.0,          # 按你的要求：每 5 秒调用一次 API
+        emotion_interval: float = 4.0,
         enable_vlm: bool = False,
         study_long_seconds: float = 40 * 60,
         away_threshold: float = 12.0,       # 优化：离开阈值拉长，低头不会马上 away
@@ -127,6 +128,7 @@ class UserStateDetector:
         self.camera_index = camera_index
         self._detect_interval = max(0.1, float(detect_interval))
         self._vlm_interval = max(5.0, float(vlm_interval))
+        self._emotion_interval = max(3.0, float(emotion_interval))
         self._vlm_enabled = bool(enable_vlm)
         self._study_long_seconds = float(study_long_seconds)
         self._away_threshold = float(away_threshold)
@@ -195,6 +197,10 @@ class UserStateDetector:
         self._last_response_at: Dict[str, float] = {}
         self._last_vlm_at: float = 0.0
         self._last_vlm_state: Optional[dict] = None
+        self._last_emotion_at: float = 0.0
+        self._last_emotion_failure_at: float = 0.0
+        self._last_emotion_result: Any = None
+        self._emotion_busy: bool = False
 
     # ==================== 对外接口 ====================
 
@@ -383,9 +389,6 @@ class UserStateDetector:
 
         if self._vlm_enabled:
             self._init_vlm_client()
-
-        # 表情识别是增强项：可用则加载，不可用不影响基础检测。
-        self._init_emotion_recognizer()
 
         if self._frame_provider is not None:
             return True
@@ -985,19 +988,50 @@ class UserStateDetector:
             return
         if self._emotion_recognizer is not None:
             return
+        now = time.time()
+        if self._last_emotion_failure_at and now - self._last_emotion_failure_at < 30.0:
+            return
         try:
             from models.vision.emotion_recognizer import EmotionRecognizer
             self._emotion_recognizer = EmotionRecognizer(
                 enabled=True,
                 min_confidence=0.70,
                 min_margin=0.18,
-                analyze_interval=2.0,
+                analyze_interval=self._emotion_interval,
                 smoothing_window=3,
             )
             print("[UserStateDetector] DeepFace 表情识别模块已加载（保守模式）。")
         except Exception as exc:
             print(f"[UserStateDetector] DeepFace 表情识别不可用：{exc}")
+            self._last_emotion_failure_at = time.time()
             self._emotion_recognizer = None
+
+    def _maybe_analyze_emotion(self, frame: Any) -> Any:
+        """Lazy, rate-limited DeepFace analysis."""
+        if not self._emotion_enabled or frame is None:
+            return self._last_emotion_result
+        now = time.time()
+        if self._emotion_busy:
+            return self._last_emotion_result
+        if self._last_emotion_at and now - self._last_emotion_at < self._emotion_interval:
+            return self._last_emotion_result
+        if self._last_emotion_failure_at and now - self._last_emotion_failure_at < 30.0:
+            return self._last_emotion_result
+
+        self._emotion_busy = True
+        try:
+            self._init_emotion_recognizer()
+            if self._emotion_recognizer is None:
+                return self._last_emotion_result
+            self._last_emotion_at = now
+            self._last_emotion_result = self._emotion_recognizer.analyze_frame(frame)
+            return self._last_emotion_result
+        except Exception as exc:
+            self._last_emotion_failure_at = time.time()
+            print(f"[UserStateDetector] DeepFace 表情分析失败：{exc}")
+            return self._last_emotion_result
+        finally:
+            self._emotion_busy = False
 
     def _maybe_apply_vlm(self, frame: Any, base_state: dict) -> dict:
         """
@@ -1025,15 +1059,7 @@ class UserStateDetector:
 
         self._last_vlm_at = now
 
-        emotion_result = None
-        try:
-            if self._emotion_enabled:
-                self._init_emotion_recognizer()
-            if self._emotion_recognizer is not None:
-                emotion_result = self._emotion_recognizer.analyze_frame(frame)
-        except Exception as exc:
-            print(f"[UserStateDetector] DeepFace 表情分析失败：{exc}")
-            emotion_result = None
+        emotion_result = self._maybe_analyze_emotion(frame)
 
         try:
             # qwen_vl_api.py 如果已经加入 build_prompt_with_emotion，就使用表情增强提示词；否则自动退回默认提示词。
@@ -1233,7 +1259,7 @@ class UserStateDetector:
         if frame is None:
             return
         try:
-            overlay = frame.copy()
+            raw_frame = frame.copy()
         except Exception:
             return
 
@@ -1242,13 +1268,9 @@ class UserStateDetector:
             analysis = dict(analysis_info or self._last_debug_analysis_info or {})
 
         debug_info = self._build_debug_info(state, face, analysis)
-        try:
-            self._draw_debug_overlay(overlay, state, face, analysis)
-        except Exception:
-            pass
 
         with self._lock:
-            self._latest_debug_frame = overlay
+            self._latest_debug_frame = raw_frame
             self._latest_debug_info = debug_info
 
     def _build_debug_info(self, state: dict, face_info: dict, analysis_info: dict) -> dict:
@@ -1257,6 +1279,16 @@ class UserStateDetector:
             landmarks_count = len(landmarks)
         except Exception:
             landmarks_count = 0
+        landmark_points: list[dict[str, float]] = []
+        try:
+            for lm in landmarks:
+                landmark_points.append({
+                    "x": float(getattr(lm, "x", 0.0) or 0.0),
+                    "y": float(getattr(lm, "y", 0.0) or 0.0),
+                    "z": float(getattr(lm, "z", 0.0) or 0.0),
+                })
+        except Exception:
+            landmark_points = []
         return {
             "state_code": state.get("state_code", STATE_UNKNOWN),
             "state_name": state.get("state_name", ""),
@@ -1265,6 +1297,7 @@ class UserStateDetector:
             "face_present": bool(face_info.get("present") or analysis_info.get("face_present")),
             "bbox": face_info.get("bbox"),
             "landmarks_count": landmarks_count,
+            "landmarks": landmark_points,
             "looking_down": bool(analysis_info.get("looking_down", False)),
             "eyes_closed": bool(analysis_info.get("eyes_closed", False)),
             "low_light": bool(analysis_info.get("low_light", False)),

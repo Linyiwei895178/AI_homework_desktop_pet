@@ -20,10 +20,16 @@ GESTURE_RAISED_HAND = "raised_hand"
 GESTURE_PINCH_ZOOM = "pinch_zoom"
 GESTURE_NONE = "none"
 
-ZOOM_MIN_PINCH_DISTANCE = 0.03
-ZOOM_MAX_PINCH_DISTANCE = 0.35
-ZOOM_MIN_SCALE = 0.6
-ZOOM_MAX_SCALE = 1.8
+ZOOM_MIN_PINCH_DISTANCE = 0.04
+ZOOM_MAX_PINCH_DISTANCE = 0.30
+ZOOM_MIN_SCALE = 0.7
+ZOOM_MAX_SCALE = 1.6
+ZOOM_SCALE_DEAD_ZONE = 0.06
+ZOOM_SMOOTH_ALPHA = 0.4
+ZOOM_UPDATE_INTERVAL = 0.15
+ZOOM_MIN_HAND_BBOX_AREA = 0.0
+ZOOM_SENSITIVITY_MODE = "simple"
+ZOOM_SPIKE_THRESHOLD = 0.18
 
 HAND_LANDMARKER_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
@@ -91,6 +97,124 @@ def create_gesture_state(
     }
 
 
+class ZoomGestureController:
+    """Simple direct pinch-distance to scale mapper."""
+
+    def __init__(
+        self,
+        min_pinch_distance: float = ZOOM_MIN_PINCH_DISTANCE,
+        max_pinch_distance: float = ZOOM_MAX_PINCH_DISTANCE,
+        min_scale: float = ZOOM_MIN_SCALE,
+        max_scale: float = ZOOM_MAX_SCALE,
+        scale_dead_zone: float = ZOOM_SCALE_DEAD_ZONE,
+        smooth_alpha: float = ZOOM_SMOOTH_ALPHA,
+        zoom_update_interval: float = ZOOM_UPDATE_INTERVAL,
+        min_hand_bbox_area: float = ZOOM_MIN_HAND_BBOX_AREA,
+        spike_threshold: float = ZOOM_SPIKE_THRESHOLD,
+    ) -> None:
+        self.min_pinch_distance = float(min_pinch_distance)
+        self.max_pinch_distance = float(max_pinch_distance)
+        self.min_scale = float(min_scale)
+        self.max_scale = float(max_scale)
+        self.scale_dead_zone = float(scale_dead_zone)
+        self.smooth_alpha = float(smooth_alpha)
+        self.zoom_update_interval = float(zoom_update_interval)
+        self.min_hand_bbox_area = float(min_hand_bbox_area)
+        self.spike_threshold = float(spike_threshold)
+        self.smooth_scale = 1.0
+        self.applied_scale = 1.0
+        self._last_update_at = 0.0
+        self._last_pinch_distance: float | None = None
+
+    def update(
+        self,
+        pinch_distance: float | None,
+        hand_bbox_area: float | None,
+        now: float,
+        blocked_by_gesture: bool = False,
+    ) -> Dict[str, Any]:
+        if blocked_by_gesture:
+            return self._state(False, pinch_distance, "blocked_gesture", hand_bbox_area)
+
+        if pinch_distance is None:
+            self._last_pinch_distance = None
+            return self._state(False, None, "no_hand", hand_bbox_area)
+
+        hand_area = float(hand_bbox_area or 0.0)
+        if hand_area < self.min_hand_bbox_area:
+            return self._state(False, pinch_distance, "hand_too_small", hand_area)
+
+        value = float(pinch_distance)
+        if value < self.min_pinch_distance * 0.5 or value > self.max_pinch_distance * 1.5:
+            self._last_pinch_distance = value
+            return self._state(False, value, "pinch_out_of_range", hand_area)
+
+        if self._last_pinch_distance is not None and abs(value - self._last_pinch_distance) > self.spike_threshold:
+            self._last_pinch_distance = value
+            return self._state(False, value, "spike_ignored", hand_area)
+
+        target_scale = self._pinch_distance_to_scale(value)
+
+        if self._last_pinch_distance is None:
+            self._last_pinch_distance = value
+            self.smooth_scale = self.applied_scale
+            return self._state(False, value, "baseline", hand_area, target_scale)
+
+        self._last_pinch_distance = value
+        alpha = max(0.01, min(1.0, self.smooth_alpha))
+        self.smooth_scale = self.smooth_scale * (1.0 - alpha) + target_scale * alpha
+
+        if abs(self.smooth_scale - self.applied_scale) < self.scale_dead_zone:
+            return self._state(False, value, "scale_dead_zone", hand_area, target_scale)
+        if now - self._last_update_at < self.zoom_update_interval:
+            return self._state(True, value, "rate_limited", hand_area, target_scale)
+
+        self.applied_scale = self.smooth_scale
+        self._last_update_at = now
+        return self._state(True, value, "active", hand_area, target_scale)
+
+    def inactive_state(self) -> Dict[str, Any]:
+        return self._state(False, None, "idle", None)
+
+    def _pinch_distance_to_scale(self, pinch_distance: float) -> float:
+        span = max(0.001, self.max_pinch_distance - self.min_pinch_distance)
+        t = (float(pinch_distance) - self.min_pinch_distance) / span
+        t = max(0.0, min(1.0, t))
+        return self.min_scale + t * (self.max_scale - self.min_scale)
+
+    def _state(
+        self,
+        active: bool,
+        pinch_distance: float | None,
+        reason: str,
+        hand_bbox_area: float | None,
+        target_scale: float | None = None,
+    ) -> Dict[str, Any]:
+        if target_scale is None and active is not None:
+            target_scale = self.smooth_scale
+        if target_scale is None:
+            target_scale = self.smooth_scale
+        return {
+            "gesture_code": GESTURE_PINCH_ZOOM,
+            "active": bool(active),
+            "phase": "simple_active" if active else "simple_idle",
+            "pinch_distance": round(float(pinch_distance), 4) if pinch_distance is not None else None,
+            "hand_bbox_area": round(float(hand_bbox_area), 4) if hand_bbox_area is not None else None,
+            "target_scale": round(float(target_scale), 3),
+            "smooth_scale": round(float(self.smooth_scale), 3),
+            "scale_ratio": round(float(self.smooth_scale), 3),
+            "applied_scale": round(float(self.applied_scale), 3),
+            "reason": reason,
+            "confidence": 0.82 if active else 0.25,
+            "min_pinch_distance": self.min_pinch_distance,
+            "max_pinch_distance": self.max_pinch_distance,
+            "min_scale": self.min_scale,
+            "max_scale": self.max_scale,
+            "sensitivity_mode": ZOOM_SENSITIVITY_MODE,
+            "source": ["mediapipe_hands"],
+        }
+
+
 class GestureDetector:
     """
     Mock-first gesture detector.
@@ -103,7 +227,7 @@ class GestureDetector:
         self,
         initial_gesture: str = GESTURE_NONE,
         camera_index: int = 0,
-        detect_interval: float = 0.12,
+        detect_interval: float = 0.25,
         enable_real: bool = True,
         frame_provider: Any = None,
     ):
@@ -115,9 +239,7 @@ class GestureDetector:
         self.detect_interval = max(0.03, float(detect_interval))
         self.enable_real = bool(enable_real)
         self._frame_provider = frame_provider
-        self._last_zoom_scale = 1.0
-        self._last_zoom_active_at = 0.0
-        self._pinch_distance_history: deque[tuple[float, float]] = deque(maxlen=8)
+        self._zoom_controller = ZoomGestureController()
         self._state["zoom"] = self._inactive_zoom_state()
 
         self._thread: Optional[threading.Thread] = None
@@ -365,19 +487,19 @@ class GestureDetector:
 
         if not hands:
             self._hand_center_history.clear()
-            self._pinch_distance_history.clear()
             state = create_gesture_state(
                 GESTURE_NONE,
                 confidence=0.0,
                 source=["mediapipe_hands"],
                 description="当前没有检测到手部。",
             )
-            state["zoom"] = self._inactive_zoom_state()
+            state["zoom"] = self._zoom_controller.update(None, None, time.time())
             self._cache_debug_snapshot(state, hands=[], handedness=[], source=["mediapipe_hands"])
             return state
 
-        zoom_state = self._calculate_zoom_state(hands[0])
         gesture_code, confidence = self._classify_hands(hands)
+        zoom_blocked = gesture_code == GESTURE_WAVE
+        zoom_state = self._calculate_zoom_state(hands[0], blocked_by_gesture=zoom_blocked)
         description = f"MediaPipe Hands 检测到{GESTURE_NAME_MAP[gesture_code]}手势。"
         if gesture_code == GESTURE_NONE:
             description = "MediaPipe Hands 检测到手部，但没有匹配到明确手势。"
@@ -458,38 +580,18 @@ class GestureDetector:
     def _distance(a: Any, b: Any) -> float:
         return math.dist((float(a.x), float(a.y)), (float(b.x), float(b.y)))
 
-    def _calculate_zoom_state(self, landmarks: Any) -> Dict[str, Any]:
+    def _calculate_zoom_state(self, landmarks: Any, blocked_by_gesture: bool = False) -> Dict[str, Any]:
         if len(landmarks) <= 8:
-            return self._inactive_zoom_state()
+            return self._zoom_controller.update(None, None, time.time(), blocked_by_gesture=blocked_by_gesture)
 
         pinch_distance = self._distance(landmarks[4], landmarks[8])
-        now = time.time()
-        self._pinch_distance_history.append((now, pinch_distance))
-        recent = [distance for ts, distance in self._pinch_distance_history if now - ts <= 0.8]
-        movement = (max(recent) - min(recent)) if len(recent) >= 3 else 0.0
-        moving = movement >= 0.012
-        if moving:
-            self._last_zoom_active_at = now
-
-        active = moving or (len(recent) >= 2 and now - self._last_zoom_active_at <= 0.6)
-        target_scale = self._pinch_distance_to_scale(pinch_distance)
-        smooth_scale = self._last_zoom_scale * 0.75 + target_scale * 0.25
-        if active:
-            self._last_zoom_scale = smooth_scale
-
-        return {
-            "gesture_code": GESTURE_PINCH_ZOOM,
-            "active": bool(active),
-            "pinch_distance": round(float(pinch_distance), 4),
-            "target_scale": round(float(target_scale), 3),
-            "scale_ratio": round(float(self._last_zoom_scale), 3),
-            "confidence": 0.82 if active else 0.35,
-            "min_pinch_distance": ZOOM_MIN_PINCH_DISTANCE,
-            "max_pinch_distance": ZOOM_MAX_PINCH_DISTANCE,
-            "min_scale": ZOOM_MIN_SCALE,
-            "max_scale": ZOOM_MAX_SCALE,
-            "source": ["mediapipe_hands"],
-        }
+        hand_bbox_area = self._hand_bbox_area(landmarks)
+        return self._zoom_controller.update(
+            pinch_distance,
+            hand_bbox_area,
+            time.time(),
+            blocked_by_gesture=blocked_by_gesture,
+        )
 
     @staticmethod
     def _pinch_distance_to_scale(pinch_distance: float) -> float:
@@ -499,19 +601,18 @@ class GestureDetector:
         return ZOOM_MIN_SCALE + t * (ZOOM_MAX_SCALE - ZOOM_MIN_SCALE)
 
     def _inactive_zoom_state(self) -> Dict[str, Any]:
-        return {
-            "gesture_code": GESTURE_PINCH_ZOOM,
-            "active": False,
-            "pinch_distance": None,
-            "target_scale": round(float(self._last_zoom_scale), 3),
-            "scale_ratio": round(float(self._last_zoom_scale), 3),
-            "confidence": 0.0,
-            "min_pinch_distance": ZOOM_MIN_PINCH_DISTANCE,
-            "max_pinch_distance": ZOOM_MAX_PINCH_DISTANCE,
-            "min_scale": ZOOM_MIN_SCALE,
-            "max_scale": ZOOM_MAX_SCALE,
-            "source": ["mediapipe_hands"],
-        }
+        return self._zoom_controller.inactive_state()
+
+    @staticmethod
+    def _hand_bbox_area(landmarks: Any) -> float:
+        try:
+            xs = [float(lm.x) for lm in landmarks]
+            ys = [float(lm.y) for lm in landmarks]
+            if not xs or not ys:
+                return 0.0
+            return max(0.0, max(xs) - min(xs)) * max(0.0, max(ys) - min(ys))
+        except Exception:
+            return 0.0
 
     def _cache_debug_snapshot(
         self,

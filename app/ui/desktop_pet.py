@@ -2001,8 +2001,8 @@ class _ArcMenuHideFilter(QObject):
 class Live2DWidget(QOpenGLWidget):
   """OpenGL 渲染 Live2D 模型。"""
 
-  def __init__(self, pet: "DesktopPet") -> None:
-    super().__init__()
+  def __init__(self, pet: "DesktopPet", parent: QWidget | None = None) -> None:
+    super().__init__(parent)
     self._pet = pet
     self._gl_ready = False
     self.setMouseTracking(True)
@@ -2046,6 +2046,28 @@ class Live2DWidget(QOpenGLWidget):
       pos = (int(event.position().x()), int(event.position().y()))
       self._pet._on_left_release(pos)
 
+  def shutdown(self) -> None:
+    self._gl_ready = False
+    try:
+      self.makeCurrent()
+      self.doneCurrent()
+    except RuntimeError:
+      pass
+    except Exception:
+      pass
+    try:
+      self.hide()
+    except RuntimeError:
+      pass
+    try:
+      self.close()
+    except RuntimeError:
+      pass
+    try:
+      self.deleteLater()
+    except RuntimeError:
+      pass
+
 
 class PetWindow(QWidget):
   """无边框透明桌宠主窗口。"""
@@ -2062,7 +2084,7 @@ class PetWindow(QWidget):
 
     layout = QVBoxLayout(self)
     layout.setContentsMargins(0, 0, 0, 0)
-    self._gl = Live2DWidget(pet)
+    self._gl = Live2DWidget(pet, self)
     layout.addWidget(self._gl)
     self._gl.lower()
 
@@ -2097,6 +2119,36 @@ class PetWindow(QWidget):
       self._pet._close_pet_window()
       return
     super().closeEvent(event)
+
+  def shutdown(self) -> None:
+    self._pet._cleaning_up = True
+    gl = getattr(self, "_gl", None)
+    if gl is not None:
+      shutdown = getattr(gl, "shutdown", None)
+      if callable(shutdown):
+        shutdown()
+    plane_player = getattr(self, "_plane_player", None)
+    if plane_player is not None:
+      try:
+        plane_player.hide()
+        plane_player.close()
+        plane_player.deleteLater()
+      except RuntimeError:
+        pass
+      except Exception:
+        pass
+    try:
+      self.hide()
+    except RuntimeError:
+      pass
+    try:
+      self.close()
+    except RuntimeError:
+      pass
+    try:
+      self.deleteLater()
+    except RuntimeError:
+      pass
 
   def mouseMoveEvent(self, event: QMouseEvent) -> None:
     if self._pet._is_flat_mode():
@@ -2166,6 +2218,7 @@ class DesktopPet:
     self._motion_index: dict[str, tuple[str, int]] = {}
     self._running = False
     self._cleaning_up = False
+    self._closed = False
     self.available_motions: list[str] = []
     self.motion_name_map = MOTION_NAME_MAP
 
@@ -3099,14 +3152,22 @@ class DesktopPet:
     new_h = int(new_w / self._aspect_ratio)
     self._apply_window_size(new_w, new_h)
 
-  def set_pet_scale(self, scale: float, min_scale: float = 0.6, max_scale: float = 1.8) -> None:
+  def set_pet_scale(self, scale: float, min_scale: float = 0.6, max_scale: float = 1.8) -> float:
     value = max(float(min_scale), min(float(max_scale), float(scale)))
     new_w = int(round(BASE_WINDOW_W * value))
     new_h = int(round(BASE_WINDOW_H * value))
     if abs(new_w - self._win_w) < 2 and abs(new_h - self._win_h) < 2:
-      return
+      return self.current_pet_scale()
     self._aspect_ratio = BASE_WINDOW_W / BASE_WINDOW_H
     self._apply_window_size(new_w, new_h, save_memory=False)
+    if self._window is not None:
+      self._window.update()
+    if self._is_flat_mode():
+      player = self._plane_player()
+      if player is not None:
+        player.update()
+    print(f"[DesktopPet] 缩放已应用: scale={value:.2f}, size={new_w}x{new_h}")
+    return self.current_pet_scale()
 
   def current_pet_scale(self) -> float:
     if self._win_w <= 0:
@@ -3154,9 +3215,17 @@ class DesktopPet:
           timer.stop()
         except RuntimeError:
           pass
+        try:
+          timer.deleteLater()
+        except RuntimeError:
+          pass
         setattr(self, attr, None)
     try:
       self._edge_hold_timer.stop()
+    except RuntimeError:
+      pass
+    try:
+      self._edge_hold_timer.deleteLater()
     except RuntimeError:
       pass
 
@@ -3204,15 +3273,24 @@ class DesktopPet:
     self._clear_overlay_refs()
     self._console = None
     self._window = None
+    self._hwnd = None
     if hasattr(self, "_vision_debug_panel"):
       self._vision_debug_panel = None
     self._chat_stream = None
 
-  def close(self) -> None:
-    self._cleaning_up = True
-    self._stop_runtime_timers()
-    self.stop_text_reading()
-    self._close_child_windows()
+  def _release_live2d_resources(self) -> None:
+    gl_widget = None
+    if self._window is not None:
+      gl_widget = getattr(self._window, "_gl", None)
+    made_current = False
+    if gl_widget is not None and self._widget_alive(gl_widget):
+      try:
+        gl_widget.makeCurrent()
+        made_current = True
+      except RuntimeError:
+        made_current = False
+      except Exception:
+        made_current = False
     self._model = None
     try:
       live2d.glRelease()
@@ -3222,7 +3300,23 @@ class DesktopPet:
       live2d.dispose()
     except Exception:
       pass
-    self._cleaning_up = False
+    if gl_widget is not None and made_current:
+      try:
+        gl_widget.doneCurrent()
+      except RuntimeError:
+        pass
+      except Exception:
+        pass
+
+  def close(self) -> None:
+    if self._closed:
+      return
+    self._closed = True
+    self._cleaning_up = True
+    self._stop_runtime_timers()
+    self.stop_text_reading()
+    self._release_live2d_resources()
+    self._close_child_windows()
 
   def cleanup(self, quit_app: bool = False) -> None:
     self.close()

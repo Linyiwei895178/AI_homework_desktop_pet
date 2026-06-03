@@ -133,7 +133,8 @@ class VisionDebugPanel(QWidget):
             self.info_label.setText(self._format_info(info, state, gesture_state))
             return
 
-        display_frame = self._draw_hand_overlay(frame, gesture_state)
+        display_frame = self._draw_face_overlay(frame, info, state)
+        display_frame = self._draw_hand_overlay(display_frame, gesture_state)
         self.set_frame(display_frame)
         self.info_label.setText(self._format_info(info, state, gesture_state))
 
@@ -160,10 +161,12 @@ class VisionDebugPanel(QWidget):
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt API name
         super().showEvent(event)
+        self.start()
         self.visibility_changed.emit(True)
 
     def hideEvent(self, event) -> None:  # noqa: N802 - Qt API name
         super().hideEvent(event)
+        self.stop()
         self.visibility_changed.emit(False)
 
     def _read_snapshot(self, detector: Any) -> dict:
@@ -201,6 +204,70 @@ class VisionDebugPanel(QWidget):
             return state if isinstance(state, dict) else None
         except Exception:
             return None
+
+    def _draw_face_overlay(self, frame: Any, info: dict, state: dict) -> Any:
+        try:
+            import cv2  # type: ignore
+        except Exception:
+            return frame
+
+        try:
+            canvas = frame.copy()
+            height, width = canvas.shape[:2]
+
+            bbox = info.get("bbox")
+            if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                x, y, bw, bh = [int(v) for v in bbox]
+                cv2.rectangle(canvas, (x, y), (x + bw, y + bh), (255, 0, 0), 2)
+
+            landmarks = info.get("landmarks")
+            if isinstance(landmarks, list):
+                for idx, landmark in enumerate(landmarks):
+                    if idx % 3 != 0 or not isinstance(landmark, dict):
+                        continue
+                    x = float(landmark.get("x", 0.0) or 0.0)
+                    y = float(landmark.get("y", 0.0) or 0.0)
+                    px = int(max(0.0, min(1.0, x)) * width)
+                    py = int(max(0.0, min(1.0, y)) * height)
+                    cv2.circle(canvas, (px, py), 1, (0, 255, 0), -1)
+
+            state_code = str(info.get("state_code") or state.get("state_code") or "unknown")
+            confidence = float(info.get("confidence", state.get("confidence", 0.0)) or 0.0)
+            source = info.get("source") or state.get("source") or []
+            if isinstance(source, list):
+                source_text = ",".join(str(item) for item in source)
+            else:
+                source_text = str(source)
+            face_text = "face: yes" if info.get("face_present") else "face: no"
+            lines = [
+                f"state: {state_code}  conf: {confidence:.2f}",
+                f"source: {source_text[:80]}",
+                (
+                    f"{face_text}  looking_down: {bool(info.get('looking_down'))}  "
+                    f"eyes_closed: {bool(info.get('eyes_closed'))}  "
+                    f"low_light: {bool(info.get('low_light'))}"
+                ),
+                f"brightness: {info.get('brightness', 0.0)}",
+            ]
+            if not info.get("face_present"):
+                lines.append("no face")
+
+            panel_height = min(height, 26 + len(lines) * 24)
+            cv2.rectangle(canvas, (0, 0), (width, panel_height), (0, 0, 0), -1)
+            for i, text in enumerate(lines):
+                cv2.putText(
+                    canvas,
+                    text,
+                    (12, 24 + i * 22),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.58,
+                    (0, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+            return canvas
+        except Exception:
+            return frame
 
     def _draw_hand_overlay(self, frame: Any, gesture_state: dict | None) -> Any:
         hands = []
@@ -282,7 +349,10 @@ class VisionDebugPanel(QWidget):
                     pinch_distance = zoom_state.get("pinch_distance")
                     scale_ratio = zoom_state.get("scale_ratio")
                     if pinch_distance is not None and scale_ratio is not None:
-                        zoom_label = f"pinch {float(pinch_distance):.3f}  scale {float(scale_ratio):.2f}"
+                        zoom_label = (
+                            f"pinch {float(pinch_distance):.3f}  "
+                            f"smooth {float(scale_ratio):.2f}"
+                        )
                         cv2.putText(
                             canvas,
                             zoom_label,
@@ -369,8 +439,10 @@ class VisionDebugPanel(QWidget):
                 f"gesture_confidence: {gesture_state.get('confidence', 0.0)}",
                 f"gesture_handedness: {gesture_state.get('handedness', 'Unknown')}",
                 f"hand_landmarks: {hand_count}",
-                f"zoom_active: {zoom.get('active', False)}",
                 f"pinch_distance: {zoom.get('pinch_distance')}",
+                f"target_scale: {zoom.get('target_scale')}",
+                f"smooth_scale: {zoom.get('smooth_scale')}",
+                f"applied_scale: {zoom.get('applied_scale')}",
                 f"scale_ratio: {zoom.get('scale_ratio')}",
                 f"gesture_source: {gesture_state.get('source', [])}",
             ])

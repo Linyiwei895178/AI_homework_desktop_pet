@@ -147,21 +147,25 @@ def main():
 
     # ====== 9. 初始化手势检测器 (队员B B-5) ======
     GESTURE_COOLDOWN_SECONDS = 3.0
-    GESTURE_ZOOM_APPLY_INTERVAL_SECONDS = 0.10
-    GESTURE_ZOOM_MIN_DELTA = 0.02
-    GESTURE_ZOOM_LOG_INTERVAL_SECONDS = 0.8
+    GESTURE_POLL_INTERVAL_MS = max(100, int(os.getenv("DESKTOP_PET_GESTURE_POLL_MS", "100") or 100))
+    GESTURE_DETECT_INTERVAL_SECONDS = max(
+        0.10,
+        float(os.getenv("DESKTOP_PET_GESTURE_DETECT_INTERVAL", "0.12") or 0.12),
+    )
+    GESTURE_ZOOM_APPLY_INTERVAL_SECONDS = max(0.15, GESTURE_POLL_INTERVAL_MS / 1000.0)
+    GESTURE_ZOOM_MIN_DELTA = 0.06
     gesture_detector = None
     gesture_timer = None
     gesture_last_response_at = {}
     gesture_zoom_last_scale = None
     gesture_zoom_last_apply_at = 0.0
-    gesture_zoom_last_log_at = 0.0
 
     if GESTURE_ENABLED:
         try:
             gesture_detector = GestureDetector(
                 enable_real=shared_camera is not None,
                 frame_provider=shared_camera,
+                detect_interval=GESTURE_DETECT_INTERVAL_SECONDS,
             )
             gesture_detector.start()
             pet._gesture_detector = gesture_detector
@@ -174,18 +178,21 @@ def main():
 
     def apply_gesture_zoom(gesture_state: dict) -> bool:
         """Apply pinch zoom from MediaPipe Hands without triggering speech."""
-        nonlocal gesture_zoom_last_scale, gesture_zoom_last_apply_at, gesture_zoom_last_log_at
+        nonlocal gesture_zoom_last_scale, gesture_zoom_last_apply_at
 
         zoom = gesture_state.get("zoom") if isinstance(gesture_state, dict) else None
-        if not isinstance(zoom, dict) or not zoom.get("active"):
-            return False
-
-        try:
-            scale = float(zoom.get("scale_ratio"))
-        except (TypeError, ValueError):
+        if not isinstance(zoom, dict):
             return False
 
         now = time.monotonic()
+        if not zoom.get("active"):
+            return False
+
+        try:
+            scale = float(zoom.get("scale_ratio", zoom.get("smooth_scale")))
+        except (TypeError, ValueError):
+            return False
+
         if now - gesture_zoom_last_apply_at < GESTURE_ZOOM_APPLY_INTERVAL_SECONDS:
             return True
         if gesture_zoom_last_scale is not None and abs(scale - gesture_zoom_last_scale) < GESTURE_ZOOM_MIN_DELTA:
@@ -193,17 +200,24 @@ def main():
 
         setter = getattr(pet, "set_pet_scale", None)
         if not callable(setter):
+            logger.warning("[队员B] 未找到桌宠缩放接口 set_pet_scale，跳过本次手势缩放。")
             return False
 
-        setter(scale)
-        gesture_zoom_last_scale = scale
+        applied_scale = setter(scale)
+        if applied_scale is None:
+            current_scale = getattr(pet, "current_pet_scale", lambda: scale)
+            applied_scale = current_scale() if callable(current_scale) else scale
+        try:
+            zoom["applied_scale"] = round(float(applied_scale), 3)
+            gesture_state["zoom"] = zoom
+        except Exception:
+            pass
+        gesture_zoom_last_scale = float(applied_scale)
         gesture_zoom_last_apply_at = now
-        if now - gesture_zoom_last_log_at >= GESTURE_ZOOM_LOG_INTERVAL_SECONDS:
-            gesture_zoom_last_log_at = now
-            logger.info(
-                "[队员B] 手势缩放: "
-                f"pinch_distance={zoom.get('pinch_distance')}, scale={scale:.2f}"
-            )
+        logger.info(
+            "[队员B] 手势缩放应用: "
+            f"pinch={zoom.get('pinch_distance')}, scale={float(applied_scale):.2f}"
+        )
         return True
 
     def check_gesture_state():
@@ -253,11 +267,14 @@ def main():
 
     if gesture_detector is not None:
         gesture_timer = QTimer()
-        gesture_timer.setInterval(100)
+        gesture_timer.setInterval(GESTURE_POLL_INTERVAL_MS)
         gesture_timer.timeout.connect(check_gesture_state)
         gesture_timer.start()
         pet._gesture_timer = gesture_timer
-        logger.info("[主循环] 手势检测轮询已启动（每100ms一次，同手势3秒冷却，支持pinch缩放）")
+        logger.info(
+            "[主循环] 手势检测轮询已启动"
+            f"（每{GESTURE_POLL_INTERVAL_MS}ms一次，同手势3秒冷却，支持pinch缩放）"
+        )
 
     camera_detection_enabled = bool(camera_needed)
     camera_toggle_in_progress = False
@@ -345,17 +362,21 @@ def main():
                 gesture_detector = GestureDetector(
                     enable_real=shared_camera is not None,
                     frame_provider=shared_camera,
+                    detect_interval=GESTURE_DETECT_INTERVAL_SECONDS,
                 )
                 gesture_detector.start()
                 pet._gesture_detector = gesture_detector
                 logger.info(f"[队员B] 手势检测器已启动(real={gesture_detector.is_real_active()})")
 
                 gesture_timer = QTimer()
-                gesture_timer.setInterval(100)
+                gesture_timer.setInterval(GESTURE_POLL_INTERVAL_MS)
                 gesture_timer.timeout.connect(check_gesture_state)
                 gesture_timer.start()
                 pet._gesture_timer = gesture_timer
-                logger.info("[主循环] 手势检测轮询已恢复（每100ms一次，支持pinch缩放）")
+                logger.info(
+                    "[主循环] 手势检测轮询已恢复"
+                    f"（每{GESTURE_POLL_INTERVAL_MS}ms一次，支持pinch缩放）"
+                )
             except Exception as exc:
                 gesture_detector = None
                 pet._gesture_detector = None
@@ -516,7 +537,6 @@ def main():
                 refresh_ms=150,
             )
             vision_debug_panel.hide()
-            vision_debug_panel.start()
             pet._vision_debug_panel = vision_debug_panel
             vision_debug_panel.visibility_changed.connect(lambda _visible: sync_vision_debug_controls())
             logger.info("[队员B] 视觉调试预览窗口已创建")
@@ -562,6 +582,7 @@ def main():
     last_speech_hint_text = ""
     last_speech_hint_at = 0.0
     last_user_state_response_at = {}
+    shutting_down = False
 
     def build_user_state_event(user_state: dict) -> dict:
         """把 B 模块 user_state 转成 C 模块可处理的主动状态事件。"""
@@ -594,8 +615,12 @@ def main():
         """定时检测用户状态，更新桌宠行为和对话"""
         nonlocal last_speech_hint_text, last_speech_hint_at
 
+        if shutting_down:
+            return
+
         if not USER_STATE_ENABLED:
-            QTimer.singleShot(3000, check_user_state)
+            if not shutting_down:
+                QTimer.singleShot(3000, check_user_state)
             return
 
         if not camera_detection_enabled:
@@ -677,7 +702,8 @@ def main():
                     # 注意：主动提示不计入对话字数，不更新状态
 
         # 6e. 定时循环（每 3 秒检测一次）
-        QTimer.singleShot(3000, check_user_state)
+        if not shutting_down:
+            QTimer.singleShot(3000, check_user_state)
 
     # 启动定时检测（延迟 1 秒后首次执行）
     QTimer.singleShot(1000, check_user_state)
@@ -692,6 +718,7 @@ def main():
     except Exception as e:
         logger.exception(f"运行时异常: {e}")
     finally:
+        shutting_down = True
         logger.info("[AI_Desktop_Pet] 正在清理子窗口和后台线程...")
         try:
             app.removeEventFilter(camera_toggle_key_filter)
@@ -712,6 +739,10 @@ def main():
                 gesture_timer.stop()
             except Exception:
                 pass
+            try:
+                gesture_timer.deleteLater()
+            except Exception:
+                pass
         if gesture_detector is not None:
             try:
                 gesture_detector.stop()
@@ -728,16 +759,47 @@ def main():
             except Exception as exc:
                 logger.warning(f"[队员B] 共享摄像头清理异常，已忽略: {exc}")
         try:
+            if vision_debug_panel is not None:
+                vision_debug_panel.shutdown()
+            logger.info("[AI_Desktop_Pet] 视觉调试窗口已关闭")
+        except Exception as exc:
+            logger.warning(f"[AI_Desktop_Pet] 视觉调试窗口清理异常，已忽略: {exc}")
+        try:
             if hasattr(pet, "cleanup"):
                 pet.cleanup(quit_app=False)
             else:
+                try:
+                    setattr(pet, "_cleaning_up", True)
+                except Exception:
+                    pass
                 pet.close()
+            logger.info("[AI_Desktop_Pet] DesktopPet 主窗口已关闭")
+            logger.info("[AI_Desktop_Pet] Live2D 窗口已释放")
         except Exception as exc:
             logger.warning(f"[AI_Desktop_Pet] 桌宠 UI 清理异常，已忽略: {exc}")
         try:
             for widget in list(app.topLevelWidgets()):
-                widget.hide()
-                widget.close()
+                try:
+                    widget.hide()
+                except Exception:
+                    pass
+                try:
+                    widget.close()
+                except Exception:
+                    pass
+                try:
+                    widget.deleteLater()
+                except Exception:
+                    pass
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            app.processEvents()
+            app.closeAllWindows()
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            app.processEvents()
+        except Exception:
+            pass
+        try:
+            app.quit()
         except Exception:
             pass
         logger.info("[AI_Desktop_Pet] 清理完成，程序退出。")
