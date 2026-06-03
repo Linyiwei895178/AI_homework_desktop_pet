@@ -155,10 +155,18 @@ BASE_WINDOW_H = 600
 # Some tall/slim full-body models (e.g. elf_count) need taller windows and tuning.
 LIVE2D_VIEW_OVERRIDES: dict[str, dict[str, Any]] = {
     "elf_count": {
-        "base_size": (450, 720),
-        "scale": 0.86,
-        "offset": (0.0, -0.10),
+        "base_size": (450, 820),
+        "scale": 0.72,
+        "offset": (0.0, 0.18),
     },
+    # --- Extreme test config for debugging ---
+    # Uncomment below and comment the above "elf_count" entry to test
+    # whether the model resource itself lacks lower body.
+    # "elf_count": {
+    #     "base_size": (450, 900),
+    #     "scale": 0.55,
+    #     "offset": (0.0, 0.25),
+    # },
 }
 MIN_ACTION_PLAY_MS = 1500
 ANIMATIONS_DIR = os.path.join(PROJECT_ROOT, "assets", "animations")
@@ -2532,15 +2540,18 @@ class DesktopPet:
         base_size = override.get("base_size")
         if base_size and len(base_size) == 2:
           bw, bh = int(base_size[0]), int(base_size[1])
-          # Apply custom size if current window is significantly shorter
-          if self._win_h < bh - 40:
+          # Always ensure window is tall enough for this model
+          if self._win_h < bh - 20 or self._win_w != bw:
             self._aspect_ratio = bw / bh
             self._apply_window_size(bw, bh, save_memory=False)
-            print(f"[DesktopPet] Applied {pet_id} custom window: {bw}x{bh}")
+            print(f"[DesktopPet] Applied {pet_id} custom window: {bw}x{bh} (was {self._win_w}x{self._win_h})")
       # Reload Live2D model
       model_path = pet.get("model_path") or ""
       if model_path and os.path.isfile(model_path):
         reload_live2d_model(self, model_path)
+      # Re-apply canvas fit after model reload
+      self._adjust_model_canvas_fit()
+      QTimer.singleShot(300, self._debug_save_elf_count_frame)
       self._start_idle_motion()
     self._update_mouse_passthrough(self._local_mouse_pos())
     self._show_switch_notice(name)
@@ -3616,6 +3627,7 @@ class DesktopPet:
     self._adjust_model_canvas_fit()
     self._build_motion_index()
     self._load_available_motions()
+    QTimer.singleShot(300, self._debug_save_elf_count_frame)
     self._start_idle_motion()
 
 
@@ -3642,8 +3654,20 @@ class DesktopPet:
       scale = float(override.get("scale", 1.0))
       ox, oy = override.get("offset", (0.0, 0.0))
       try:
+        # --- Attempt scale ---
+        scale_applied = False
         if hasattr(self._model, "SetScale"):
           self._model.SetScale(scale)
+          scale_applied = True
+        elif hasattr(self._model, "SetModelScale"):
+          self._model.SetModelScale(scale)
+          scale_applied = True
+        elif hasattr(self._model, "SetModelMatrix"):
+          self._model.SetModelMatrix(scale)
+          scale_applied = True
+        else:
+          print(f"[DesktopPet] WARNING: {type(self._model).__name__} has no SetScale/SetModelScale/SetModelMatrix")
+        # --- Always apply offset ---
         self._model.SetOffset(float(ox), float(oy))
         try:
           cw, ch = self._model.GetCanvasSize()
@@ -3652,11 +3676,24 @@ class DesktopPet:
         print(
           f"[DesktopPet] Live2D fit override: id={self._current_live2d_model_id()}, "
           f"win={self._win_w}x{self._win_h}, canvas={cw}x{ch}, "
-          f"scale={scale}, offset=({ox},{oy})"
+          f"scale={scale}(applied={scale_applied}), offset=({ox},{oy})"
         )
+        # --- Diagnostic: extreme params still not showing feet? ---
+        if scale <= 0.6 and self._win_h >= 880:
+          print("[DesktopPet] " + "=" * 40)
+          print("[DesktopPet] DIAGNOSTIC: Extremely small scale ({:.2f}) and tall window ({:.0f}x{:.0f})".format(scale, self._win_w, self._win_h))
+          print("[DesktopPet] If feet are STILL truncated, the problem is NOT")
+          print("[DesktopPet] window clipping or offset misconfiguration.")
+          print("[DesktopPet] The Live2D model resource (moc3/artmesh) likely")
+          print("[DesktopPet] has no complete foot geometry below the visible area.")
+          print("[DesktopPet] Check debug_elf_count_frame.png for confirmation.")
+          print("[DesktopPet] Solutions: re-export model in Cubism Editor with")
+          print("[DesktopPet] full body artmesh, or pad the canvas bottom.")
+          print("[DesktopPet] " + "=" * 40)
       except Exception as exc:
         print(f"[DesktopPet] Live2D fit override failed: {exc}")
       return
+    # --- Default fallback for models without override ---
     try:
       cw, ch = self._model.GetCanvasSize()
       if cw <= 0 or ch <= 0:
@@ -3664,15 +3701,35 @@ class DesktopPet:
       win_aspect = self._win_w / self._win_h
       canvas_aspect = cw / ch
       if canvas_aspect < win_aspect:
-        # Model canvas is taller than window -> fit by width, center vertically
-        # Shift upward slightly so feet are visible
         self._model.SetOffset(0.0, 0.08)
       else:
-        # Model canvas is wider or similar -> fit by height, center horizontally
-        # Minor offset to show feet
         self._model.SetOffset(0.0, 0.05)
     except Exception:
       pass
+
+  def _debug_save_elf_count_frame(self) -> None:
+    """Save a debug screenshot of the current GL frame for elf_count model."""
+    if self._model is None or self._window is None:
+      return
+    model_id = self._current_live2d_model_id()
+    if model_id != "elf_count":
+      return
+    try:
+      debug_dir = os.path.join(PROJECT_ROOT, "data")
+      os.makedirs(debug_dir, exist_ok=True)
+      out_path = os.path.join(debug_dir, "debug_elf_count_frame.png")
+      self._model.Update()
+      self._window._gl.update()
+      QApplication.processEvents()
+      pix = self._window._gl.grabFramebuffer()
+      if pix.isNull():
+        print("[DesktopPet] Debug frame grab returned null pixmap")
+        return
+      pix.save(out_path)
+      print(f"[DesktopPet] Debug frame saved: {out_path}")
+    except Exception as exc:
+      print(f"[DesktopPet] Failed to save debug frame: {exc}")
+
   def _capture_mao_pro_motion_preview(self) -> None:
     """mao_pro_zh：从首个 motion3 首帧生成预览图。"""
     if not is_mao_pro_zh_model(self.model_path) or self._model is None:
@@ -3930,9 +3987,9 @@ class DesktopPet:
       size = data.get("window_size")
       if last_id == "elf_count" and isinstance(size, (list, tuple)) and len(size) == 2:
         h = int(size[1])
-        if h < 680:
-          data["window_size"] = [450, 720]
-          print(f"[DesktopPet] Auto-fixed elf_count window size: {size} -> [450, 720]")
+        if h < 800:
+          data["window_size"] = [450, 820]
+          print(f"[DesktopPet] Auto-fixed elf_count window size: {size} -> [450, 820]")
           try:
             with open(PET_MEMORY_PATH, "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False, indent=2)
