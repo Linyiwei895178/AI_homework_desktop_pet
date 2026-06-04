@@ -1,15 +1,15 @@
 {
   "last_pet_id": "这狗",
-  "pin_top": true,
+  "pin_top": false,
   "hover_fade": false,
-  "status_bar": false,
-  "chat_open": true,
+  "status_bar": true,
+  "chat_open": false,
   "position": [
-    249,
-    102
+    313,
+    148
   ],
   "window_size": [
-    411,
-    547
+    313,
+    397
   ]
 }

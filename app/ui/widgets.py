@@ -145,7 +145,7 @@ class ScalableOverlay:
     _ui_scale: float = 1.0
 
     def apply_ui_scale(self, scale: float) -> None:
-        self._ui_scale = max(0.35, min(1.25, scale))
+        self._ui_scale = max(0.28, min(1.25, scale))
 
 
 def _app_font(size: int, bold: bool = False) -> QFont:
@@ -173,6 +173,65 @@ def _load_pixmap(path: str, size: QSize | None = None) -> QPixmap:
 # ---------------------------------------------------------------------------
 # 右键菜单 & 二级菜单（自绘 overlay）
 # ---------------------------------------------------------------------------
+
+
+class ConsoleDragBar(QFrame):
+    """设置面板顶部标题栏：可拖拽移动窗口。"""
+
+    def __init__(self, window: QMainWindow, title: str = "桌面宠物控制台") -> None:
+        super().__init__()
+        self._window = window
+        self._dragging = False
+        self._drag_offset = QPoint()
+        self.setObjectName("consoleDragBar")
+        self.setFixedHeight(40)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(16, 6, 8, 6)
+        self._title_lbl = QLabel(title)
+        self._title_lbl.setFont(_app_font(14, True))
+        lay.addWidget(self._title_lbl, 1)
+        for label, slot in (
+            ("—", window.showMinimized),
+            ("□", getattr(window, "_toggle_max", window.showMaximized)),
+            ("×", window.close),
+        ):
+            b = QPushButton(label)
+            b.setFixedSize(28, 28)
+            b.clicked.connect(slot)
+            lay.addWidget(b)
+        self.setStyleSheet(
+            "QFrame#consoleDragBar { background: rgba(255,255,255,235);"
+            " border-bottom: 1px solid rgba(226,232,240,200); }"
+        )
+
+    def _is_drag_area(self, pos: QPoint) -> bool:
+        child = self.childAt(pos)
+        if child is None or child is self._title_lbl:
+            return True
+        return False
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._is_drag_area(
+            event.position().toPoint()
+        ):
+            self._dragging = True
+            self._drag_offset = event.globalPosition().toPoint() - self._window.frameGeometry().topLeft()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._dragging and event.buttons() & Qt.MouseButton.LeftButton:
+            self._window.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        self._dragging = False
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().mouseReleaseEvent(event)
 
 
 class RightClickMenu(QFrame, ScalableOverlay):
@@ -204,6 +263,7 @@ class RightClickMenu(QFrame, ScalableOverlay):
         self.hover_index = -1
         self._selected: Optional[str] = None
         self._font = _app_font(16)
+        self._corner_radius = 16
         self.setMouseTracking(True)
         self.hide()
 
@@ -212,9 +272,13 @@ class RightClickMenu(QFrame, ScalableOverlay):
         self.WIDTH = _scaled_int(self._BASE_WIDTH, self._ui_scale, 120)
         self.ITEM_HEIGHT = _scaled_int(self._BASE_ITEM_HEIGHT, self._ui_scale, 28)
         self.PADDING = _scaled_int(self._BASE_PADDING, self._ui_scale, 4)
-        self._font = _app_font(_scaled_int(16, self._ui_scale, 11))
-        radius = _scaled_int(16, self._ui_scale, 10)
-        self.setStyleSheet(_glass_style(radius))
+        px = _scaled_int(16, self._ui_scale, 11)
+        self._font = _app_font(px)
+        self._corner_radius = _scaled_int(16, self._ui_scale, 10)
+        self.setStyleSheet(_glass_style(self._corner_radius))
+        if self.visible:
+            h = self.PADDING * 2 + len(self.ITEMS) * self.ITEM_HEIGHT
+            self.setGeometry(self.x, self.y, self.WIDTH, h)
 
     @property
     def rect(self) -> QRect:
@@ -294,18 +358,21 @@ class RightClickMenu(QFrame, ScalableOverlay):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setFont(self._font)
         bg = QPainterPath()
-        bg.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 16, 16)
+        r = float(self._corner_radius)
+        bg.addRoundedRect(QRectF(0, 0, self.width(), self.height()), r, r)
         p.fillPath(bg, QColor(255, 255, 255, 248))
         p.setPen(QPen(QColor(226, 232, 240, 220), 1))
         p.drawPath(bg)
+        pad_l = _scaled_int(16, self._ui_scale, 10)
+        hover_r = _scaled_int(8, self._ui_scale, 5)
         for i, label in enumerate(self.ITEMS):
             item_r = QRect(0, self.PADDING + i * self.ITEM_HEIGHT, self.WIDTH, self.ITEM_HEIGHT)
             if i == self.hover_index:
                 path = QPainterPath()
-                path.addRoundedRect(QRectF(item_r.adjusted(4, 2, -4, -2)), 8, 8)
+                path.addRoundedRect(QRectF(item_r.adjusted(4, 2, -4, -2)), hover_r, hover_r)
                 p.fillPath(path, QColor(220, 235, 255, 230))
             p.setPen(QColor(35, 35, 45))
-            p.drawText(item_r.adjusted(16, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, label)
+            p.drawText(item_r.adjusted(pad_l, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, label)
         p.end()
 
 
@@ -333,6 +400,7 @@ class SubMenu(QFrame, ScalableOverlay):
         self._selected: Optional[str] = None
         self.active_index = 1
         self._font = _app_font(15)
+        self._corner_radius = 12
         self.setMouseTracking(True)
         self.hide()
 
@@ -342,7 +410,11 @@ class SubMenu(QFrame, ScalableOverlay):
         self.ITEM_HEIGHT = _scaled_int(self._BASE_ITEM_HEIGHT, self._ui_scale, 26)
         self.PADDING = _scaled_int(self._BASE_PADDING, self._ui_scale, 4)
         self._font = _app_font(_scaled_int(15, self._ui_scale, 10))
-        self.setStyleSheet(_glass_style(_scaled_int(12, self._ui_scale, 8)))
+        self._corner_radius = _scaled_int(12, self._ui_scale, 8)
+        self.setStyleSheet(_glass_style(self._corner_radius))
+        if self.visible:
+            h = self.PADDING * 2 + len(self.ITEMS) * self.ITEM_HEIGHT
+            self.setGeometry(self.x, self.y, self.WIDTH, h)
 
     @property
     def rect(self) -> QRect:
@@ -422,19 +494,22 @@ class SubMenu(QFrame, ScalableOverlay):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setFont(self._font)
         bg = QPainterPath()
-        bg.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 12, 12)
+        r = float(self._corner_radius)
+        bg.addRoundedRect(QRectF(0, 0, self.width(), self.height()), r, r)
         p.fillPath(bg, QColor(255, 255, 255, 248))
         p.setPen(QPen(QColor(226, 232, 240, 220), 1))
         p.drawPath(bg)
+        pad_l = _scaled_int(12, self._ui_scale, 8)
+        hover_r = _scaled_int(8, self._ui_scale, 5)
         for i, label in enumerate(self.ITEMS):
             item_r = QRect(0, self.PADDING + i * self.ITEM_HEIGHT, self.WIDTH, self.ITEM_HEIGHT)
             color = QColor(150, 150, 160) if i == self.active_index else QColor(35, 35, 45)
             if i == self.hover_index and i != self.active_index:
                 path = QPainterPath()
-                path.addRoundedRect(QRectF(item_r.adjusted(4, 2, -4, -2)), 8, 8)
+                path.addRoundedRect(QRectF(item_r.adjusted(4, 2, -4, -2)), hover_r, hover_r)
                 p.fillPath(path, QColor(220, 235, 255, 230))
             p.setPen(color)
-            p.drawText(item_r.adjusted(12, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, label)
+            p.drawText(item_r.adjusted(pad_l, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, label)
         p.end()
 
 
@@ -605,6 +680,8 @@ RadialMenu = ArcMotionMenu
 
 
 class InfoBubble(QFrame, ScalableOverlay):
+    _BASE_MAX_WIDTH = 200
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("glass")
@@ -613,19 +690,55 @@ class InfoBubble(QFrame, ScalableOverlay):
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.visible = False
         self.mood, self.affection, self.energy = 85, 72, 90
+        self._max_outer_w = 0
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(12, 12, 12, 12)
         self._lbl = QLabel()
         self._lbl.setFont(_app_font(15))
+        self._lbl.setWordWrap(True)
+        self._lbl.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding
+        )
         self._lay.addWidget(self._lbl)
         self.hide()
+
+    def set_max_width(self, max_outer_w: int) -> None:
+        self._max_outer_w = max(80, max_outer_w)
+        self._sync_label_geometry()
+
+    def _bubble_outer_width(self) -> int:
+        base = _scaled_int(self._BASE_MAX_WIDTH, self._ui_scale, 100)
+        if self._max_outer_w > 0:
+            return min(base, self._max_outer_w)
+        return base
+
+    def _sync_label_geometry(self) -> None:
+        margins = self._lay.contentsMargins()
+        outer_w = self._bubble_outer_width()
+        inner_w = max(60, outer_w - margins.left() - margins.right())
+        self._lbl.setFixedWidth(inner_w)
+        text_h = self._lbl.heightForWidth(inner_w)
+        if text_h <= 0:
+            self._lbl.adjustSize()
+            text_h = self._lbl.sizeHint().height()
+        h = text_h + margins.top() + margins.bottom() + 4
+        self.setFixedSize(outer_w, max(h, _scaled_int(52, self._ui_scale, 36)))
 
     def apply_ui_scale(self, scale: float) -> None:
         super().apply_ui_scale(scale)
         m = _scaled_int(12, self._ui_scale, 6)
         self._lay.setContentsMargins(m, m, m, m)
-        self._lbl.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
+        font_px = _scaled_int(15, self._ui_scale, 9)
+        self._lbl.setFont(_app_font(font_px))
+        self._lbl.setStyleSheet(
+            f"font-size: {font_px}px; color: #23232d; background: transparent;"
+        )
         self.setStyleSheet(_glass_style(_scaled_int(14, self._ui_scale, 8)))
+        if self.visible:
+            self._lbl.setText(
+                f"心情❤️{self.mood}\n好感度⭐{self.affection}\n能量⚡{self.energy}"
+            )
+            self._sync_label_geometry()
 
     @property
     def rect(self) -> QRect:
@@ -635,7 +748,7 @@ class InfoBubble(QFrame, ScalableOverlay):
         self._lbl.setText(
             f"心情❤️{self.mood}\n好感度⭐{self.affection}\n能量⚡{self.energy}"
         )
-        self.adjustSize()
+        self._sync_label_geometry()
         self.move(x, y)
         self.visible = True
         super().show()
@@ -656,27 +769,57 @@ class ChatBubble(QFrame, ScalableOverlay):
         super().__init__(parent)
         self.setObjectName("glass")
         self.setStyleSheet(_glass_style(self.RADIUS))
-        self.setFixedWidth(self.WIDTH)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.visible = False
         self.text = ""
+        self._max_outer_w = 0
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(14, 14, 14, 14)
         self._lbl = QLabel()
         self._lbl.setFont(_app_font(15))
         self._lbl.setWordWrap(True)
+        self._lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self._lbl.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.MinimumExpanding
+        )
         self._lay.addWidget(self._lbl)
         self.hide()
 
+    def set_max_width(self, max_outer_w: int) -> None:
+        self._max_outer_w = max(100, max_outer_w)
+        self._sync_label_geometry()
+
+    def _bubble_outer_width(self) -> int:
+        base = _scaled_int(self._BASE_WIDTH, self._ui_scale, 120)
+        if self._max_outer_w > 0:
+            return min(base, self._max_outer_w)
+        return base
+
+    def _sync_label_geometry(self) -> None:
+        margins = self._lay.contentsMargins()
+        self.WIDTH = self._bubble_outer_width()
+        inner_w = max(48, self.WIDTH - margins.left() - margins.right())
+        self._lbl.setFixedWidth(inner_w)
+        text_h = self._lbl.heightForWidth(inner_w)
+        if text_h <= 0:
+            self._lbl.adjustSize()
+            text_h = self._lbl.sizeHint().height()
+        total_h = text_h + margins.top() + margins.bottom() + 4
+        self.setFixedSize(self.WIDTH, max(total_h, _scaled_int(36, self._ui_scale, 28)))
+
     def apply_ui_scale(self, scale: float) -> None:
         super().apply_ui_scale(scale)
-        self.WIDTH = _scaled_int(self._BASE_WIDTH, self._ui_scale, 160)
-        self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 12)
-        self.setFixedWidth(self.WIDTH)
-        m = _scaled_int(14, self._ui_scale, 8)
+        self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 10)
+        m = _scaled_int(14, self._ui_scale, 6)
         self._lay.setContentsMargins(m, m, m, m)
-        self._lbl.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
+        font_px = _scaled_int(15, self._ui_scale, 9)
+        self._lbl.setFont(_app_font(font_px))
+        self._lbl.setStyleSheet(
+            f"font-size: {font_px}px; color: #23232d; background: transparent;"
+        )
         self.setStyleSheet(_glass_style(self.RADIUS))
+        if self.text or self.visible:
+            self._sync_label_geometry()
 
     @property
     def rect(self) -> QRect:
@@ -685,10 +828,10 @@ class ChatBubble(QFrame, ScalableOverlay):
     def set_text(self, text: str) -> None:
         self.text = text
         self._lbl.setText(text)
+        self._sync_label_geometry()
 
     def show(self, x: int, y: int, text: str) -> None:
         self.set_text(text)
-        self.adjustSize()
         self.move(x, y)
         self.visible = True
         super().show()
@@ -743,7 +886,22 @@ class InputBox(QFrame, ScalableOverlay):
             _scaled_int(8, self._ui_scale, 4),
             _scaled_int(4, self._ui_scale, 2),
         )
-        self._field.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
+        font_px = _scaled_int(15, self._ui_scale, 10)
+        btn_px = max(9, font_px - 1)
+        self._field.setFont(_app_font(font_px))
+        self._field.setStyleSheet(
+            f"QLineEdit {{ font-size: {font_px}px; background: transparent; border: none; color: #23232d; }}"
+            f"QLineEdit::placeholder {{ color: #94a3b8; font-size: {font_px}px; }}"
+        )
+        self._btn.setFont(_app_font(btn_px))
+        pad_v = _scaled_int(8, self._ui_scale, 4)
+        pad_h = _scaled_int(14, self._ui_scale, 8)
+        self._btn.setStyleSheet(
+            f"QPushButton {{ background-color: #1e293b; color: white; border: none;"
+            f" border-radius: {_scaled_int(12, self._ui_scale, 8)}px;"
+            f" padding: {pad_v}px {pad_h}px; font-size: {btn_px}px; }}"
+            f"QPushButton:hover {{ background-color: #334155; }}"
+        )
         self.setStyleSheet(_glass_style(self.RADIUS))
 
     @property
@@ -926,8 +1084,16 @@ def motion_label_from_filename(filename: str) -> str:
     base = os.path.splitext(os.path.basename(filename))[0]
     m = re.search(r"anim_(.+)$", base, re.IGNORECASE)
     if m:
-        return m.group(1)
+        name = m.group(1)
+        if re.search(r"_\d{3}$", name):
+            name = re.sub(r"_\d{3}$", "", name)
+        return name
     return base
+
+
+def motion_display_name_from_file(filename: str) -> str:
+    """动作映射/展示用显示名（anim_ 后文字或用户动作名）。"""
+    return motion_label_from_filename(filename)
 
 
 def resolve_mao_pro_motion_preview(model_path: str) -> str:
@@ -1050,15 +1216,19 @@ def apply_zhegou_idle_thumb(project_root: str, pet: dict) -> dict:
     images_dir = os.path.join(project_root, "assets", "images")
     os.makedirs(images_dir, exist_ok=True)
     out = os.path.join(images_dir, "这狗_idle_frame.png")
+    portrait = os.path.join(images_dir, "这狗_image.png")
     if _gif_first_frame_to_png(gif, out):
-        pet["thumb"] = out
         pet["idle_image"] = out
         pet["idle_gif"] = gif
+    if os.path.isfile(portrait):
+        pet["thumb"] = portrait
+    elif os.path.isfile(out):
+        pet["thumb"] = out
     return pet
 
 
-def scan_flat_pets(project_root: str) -> list[dict]:
-    """扫描 assets 下 GIF/PNG 与静态图，生成平面角色列表。"""
+def scan_flat_pets(project_root: str, *, include_custom: bool = False) -> list[dict]:
+    """扫描 assets 下 GIF/PNG 与静态图；默认排除自定义上传角色。"""
     assets_dir = os.path.join(project_root, "assets")
     images_dir = os.path.join(assets_dir, "images")
     anims_dir = os.path.join(assets_dir, "animations")
@@ -1125,12 +1295,20 @@ def scan_flat_pets(project_root: str) -> list[dict]:
                 return path
         return ""
 
+    custom_ids = set(load_custom_pet_ids(project_root))
+
     pets: list[dict] = []
     for pet_id in sorted(pet_ids):
-        thumb = portrait_by_pet.get(pet_id, "")
-        idle_gif = _pick_idle_gif(pet_id)
+        if not include_custom and pet_id in custom_ids:
+            continue
         gifs = gifs_by_pet.get(pet_id, {})
         png_actions = png_by_pet.get(pet_id, {})
+        # 平面素材库：仅收录 assets/animations 中确有动作文件的角色
+        if not gifs and not png_actions:
+            if not (include_custom and pet_id in custom_ids):
+                continue
+        thumb = portrait_by_pet.get(pet_id, "")
+        idle_gif = _pick_idle_gif(pet_id)
         all_actions = sorted(set(gifs.keys()) | set(png_actions.keys()))
         motions: list[dict] = []
         for action in all_actions:
@@ -1510,7 +1688,7 @@ def validate_live2d_model(model_path: str) -> tuple[bool, str]:
 
 
 class ActionMappingDialog(QDialog):
-    """为 D 动作类型选择对应素材文件（支持多选）。"""
+    """为 D 动作类型选择对应素材（下拉显示动作名，保存文件名）。"""
 
     def __init__(
         self,
@@ -1527,27 +1705,28 @@ class ActionMappingDialog(QDialog):
         initial = initial or {}
         outer = QVBoxLayout(self)
         outer.addWidget(QLabel(f"<h3>为「{pet_name}」配置动作映射</h3>"))
-        outer.addWidget(QLabel("为 happy / sad / hungry / angry / idle 选择动作文件；未映射将播放待机。"))
+        outer.addWidget(QLabel("为 happy / sad / hungry / angry / idle 选择动作；下拉显示动作名。"))
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         inner = QWidget()
         lay = QVBoxLayout(inner)
-        self._lists: dict[str, QListWidget] = {}
+        self._combos: dict[str, QComboBox] = {}
         for code in D_ACTION_CODES:
-            row = QVBoxLayout()
-            row.addWidget(QLabel(f"<b>{D_ACTION_LABELS.get(code, code)}</b> ({code})"))
-            lw = QListWidget()
-            lw.setMinimumHeight(72)
-            lw.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"<b>{D_ACTION_LABELS.get(code, code)}</b>"))
+            combo = QComboBox()
+            combo.addItem("（不映射）", "")
             for fname in motion_files:
-                lw.addItem(fname)
-            selected = set(initial.get(code, []))
-            for i in range(lw.count()):
-                item = lw.item(i)
-                if item and item.text() in selected:
-                    item.setSelected(True)
-            self._lists[code] = lw
-            row.addWidget(lw)
+                combo.addItem(motion_display_name_from_file(fname), fname)
+            pick = (initial.get(code) or [""])[0] if initial.get(code) else ""
+            if pick:
+                idx = combo.findData(pick)
+                if idx < 0:
+                    idx = combo.findText(pick)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+            self._combos[code] = combo
+            row.addWidget(combo, 1)
             lay.addLayout(row)
         lay.addStretch()
         scroll.setWidget(inner)
@@ -1559,10 +1738,10 @@ class ActionMappingDialog(QDialog):
 
     def mapping(self) -> dict[str, list[str]]:
         out: dict[str, list[str]] = {}
-        for code, lw in self._lists.items():
-            selected = [item.text() for item in lw.selectedItems()]
-            if selected:
-                out[code] = selected
+        for code, combo in self._combos.items():
+            fname = combo.currentData()
+            if fname:
+                out[code] = [str(fname)]
         return out
 
 
@@ -1662,7 +1841,15 @@ class FlatUploadDialog(QDialog):
         self._personality = QLineEdit()
         lay.addWidget(QLabel("性格描述（可选）"))
         lay.addWidget(self._personality)
-        self._hint = QLabel("准备上传动作…")
+        self._thumb_path = ""
+        thumb_row = QHBoxLayout()
+        self._thumb_lbl = QLabel("未上传贴图（将用首帧自动生成）")
+        thumb_btn = QPushButton("上传平面贴图（可选）")
+        thumb_btn.clicked.connect(self._pick_thumb)
+        thumb_row.addWidget(self._thumb_lbl, 1)
+        thumb_row.addWidget(thumb_btn)
+        lay.addLayout(thumb_row)
+        self._hint = QLabel("")
         lay.addWidget(self._hint)
         upload_btn = QPushButton("上传当前动作")
         upload_btn.clicked.connect(self._upload_one)
@@ -1673,36 +1860,70 @@ class FlatUploadDialog(QDialog):
         lay.addWidget(btns)
         self._action_index = 1
         self._result_pet: dict | None = None
+        self._refresh_upload_hint()
+
+    def _refresh_upload_hint(self) -> None:
+        self._hint.setText(f"这是动作{self._action_index}，请选择 GIF 或多张 PNG 序列帧")
+
+    def _pick_thumb(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择平面贴图", self._root, "图片 (*.png *.jpg *.jpeg *.webp)"
+        )
+        if path:
+            self._thumb_path = path
+            self._thumb_lbl.setText(os.path.basename(path))
 
     def _upload_one(self) -> None:
         name = self._name.text().strip()
         if not name:
             QMessageBox.warning(self, "提示", "请先填写角色姓名")
             return
-        self._hint.setText(f"这是动作{self._action_index}，请选择 GIF 或多张 PNG 序列帧")
-        gif_path, _ = QFileDialog.getOpenFileName(self, "选择 GIF", self._root, "GIF (*.gif)")
-        dest_dir = os.path.join(self._root, "assets", "animations", name)
+        self._refresh_upload_hint()
+        pet_id = re.sub(r"\s+", "_", name)
+        action_name, ok = QInputDialog.getText(
+            self, "动作名称", f"为动作{self._action_index}命名（如：爱你、开心）："
+        )
+        if not ok or not action_name.strip():
+            return
+        action_name = re.sub(r"\s+", "_", action_name.strip())
+        dest_dir = os.path.join(self._root, "assets", "animations")
         os.makedirs(dest_dir, exist_ok=True)
-        if gif_path:
-            dest = os.path.join(dest_dir, os.path.basename(gif_path))
-            shutil.copy2(gif_path, dest)
-            self._uploaded_files.append(os.path.basename(dest))
-            self._action_index += 1
-            cont = QMessageBox.question(self, "继续", "是否继续添加动作？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if cont == QMessageBox.StandardButton.No:
-                self._finish()
+
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            f"动作{self._action_index} - 选择 GIF 或 PNG 序列（PNG 可多选）",
+            self._root,
+            "动画 (*.gif *.png);;GIF (*.gif);;PNG (*.png)",
+        )
+        if not paths:
             return
-        png_paths, _ = QFileDialog.getOpenFileNames(self, "选择 PNG 序列帧", self._root, "PNG (*.png)")
-        if not png_paths:
+        paths = sorted(paths, key=lambda p: (os.path.dirname(p), p.lower()))
+        gifs = [p for p in paths if p.lower().endswith(".gif")]
+        pngs = [p for p in paths if p.lower().endswith(".png")]
+        if gifs and pngs:
+            QMessageBox.warning(self, "提示", "请勿同时选择 GIF 与 PNG，请分开上传。")
             return
-        png_paths.sort()
-        prefix = _stem_no_ext(png_paths[0])
-        for i, src in enumerate(png_paths, 1):
-            dest = os.path.join(dest_dir, f"{prefix}_{i:03d}.png")
-            shutil.copy2(src, dest)
+        if len(gifs) == 1:
+            dest = os.path.join(dest_dir, f"{pet_id}_anim_{action_name}.gif")
+            shutil.copy2(gifs[0], dest)
             self._uploaded_files.append(os.path.basename(dest))
+        elif len(gifs) > 1:
+            QMessageBox.warning(self, "提示", "一次只能上传一个 GIF 文件。")
+            return
+        elif pngs:
+            for i, src in enumerate(pngs, 1):
+                dest = os.path.join(dest_dir, f"{pet_id}_anim_{action_name}_{i:03d}.png")
+                shutil.copy2(src, dest)
+                self._uploaded_files.append(os.path.basename(dest))
+        else:
+            QMessageBox.warning(self, "提示", "请选择 GIF 或 PNG 文件。")
+            return
         self._action_index += 1
-        cont = QMessageBox.question(self, "继续", "是否继续添加动作？", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        self._refresh_upload_hint()
+        cont = QMessageBox.question(
+            self, "继续", "是否继续添加动作？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
         if cont == QMessageBox.StandardButton.No:
             self._finish()
 
@@ -1719,17 +1940,29 @@ class FlatUploadDialog(QDialog):
         if map_dlg.exec() != QDialog.DialogCode.Accepted:
             return
         save_pet_action_mapping(self._root, pet_id, map_dlg.mapping())
+        ids = load_custom_pet_ids(self._root)
+        if pet_id not in ids:
+            ids.append(pet_id)
+            save_custom_pet_ids(self._root, ids)
         images_dir = os.path.join(self._root, "assets", "images")
         os.makedirs(images_dir, exist_ok=True)
-        thumb = os.path.join(images_dir, f"{name}_image.png")
-        dest_dir = os.path.join(self._root, "assets", "animations", name)
-        if os.path.isdir(dest_dir):
-            for fname in sorted(os.listdir(dest_dir)):
+        thumb = os.path.join(images_dir, f"{pet_id}_image.png")
+        anims_dir = os.path.join(self._root, "assets", "animations")
+        if self._thumb_path and os.path.isfile(self._thumb_path):
+            shutil.copy2(self._thumb_path, thumb)
+        elif os.path.isdir(anims_dir):
+            for fname in sorted(os.listdir(anims_dir)):
+                if not fname.startswith(f"{pet_id}_anim_"):
+                    continue
+                full = os.path.join(anims_dir, fname)
                 if fname.lower().endswith(".gif"):
-                    _gif_first_frame_to_png(os.path.join(dest_dir, fname), thumb)
+                    if _gif_first_frame_to_png(full, thumb):
+                        break
+                elif fname.lower().endswith(".png") and fname.endswith("_001.png"):
+                    shutil.copy2(full, thumb)
                     break
         self._result_pet = {
-            "id": name,
+            "id": pet_id,
             "name": name,
             "personality": self._personality.text().strip(),
             "thumb": thumb if os.path.isfile(thumb) else "",
@@ -1737,7 +1970,7 @@ class FlatUploadDialog(QDialog):
             "is_flat": True,
             "is_custom": True,
             "motions": [],
-            "anim_dir": dest_dir,
+            "anim_dir": anims_dir,
         }
         self.accept()
 
@@ -1802,27 +2035,71 @@ class ControlConsole(QMainWindow):
             ]
         self._flat = [
             apply_zhegou_idle_thumb(project_root, p)
-            for p in scan_flat_pets(project_root)
+            for p in scan_flat_pets(project_root, include_custom=False)
         ]
         self._custom_pets = self._build_custom_pet_list()
         self._current_pet_id = self._live2d[0]["id"] if self._live2d else (self._flat[0]["id"] if self._flat else "")
         self._chats: list[dict] = []
         self._load_chat_histories()
         self._build_ui()
+        self._console_scale_widgets: list[tuple[QWidget, int]] = []
+        self._collect_console_scale_targets()
+        QTimer.singleShot(0, self._apply_console_ui_scale)
+
+    def _collect_console_scale_targets(self) -> None:
+        self._console_scale_widgets = []
+        for lbl in self.findChildren(QLabel):
+            px = lbl.font().pointSize()
+            if px > 0:
+                self._console_scale_widgets.append((lbl, px))
+        for btn in self.findChildren(QPushButton):
+            px = btn.font().pointSize()
+            if px > 0:
+                self._console_scale_widgets.append((btn, px))
+        for tab in self.findChildren(QTabWidget):
+            px = tab.font().pointSize()
+            if px > 0:
+                self._console_scale_widgets.append((tab, px))
+        for combo in self.findChildren(QComboBox):
+            px = combo.font().pointSize()
+            if px > 0:
+                self._console_scale_widgets.append((combo, px))
+
+    def _console_ui_scale(self) -> float:
+        return max(0.82, min(1.2, self.width() / 800))
+
+    def _apply_console_ui_scale(self) -> None:
+        scale = self._console_ui_scale()
+        for widget, base_px in self._console_scale_widgets:
+            px = max(9, int(round(base_px * scale)))
+            f = widget.font()
+            f.setPointSize(px)
+            widget.setFont(f)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_console_ui_scale()
+
+    def closeEvent(self, event) -> None:
+        event.ignore()
+        self.hide()
 
     def _rescan_flat_pets(self) -> None:
         self._flat = [
             apply_zhegou_idle_thumb(self._project_root, p)
-            for p in scan_flat_pets(self._project_root)
+            for p in scan_flat_pets(self._project_root, include_custom=False)
         ]
 
     def _build_custom_pet_list(self) -> list[dict]:
+        all_by_id = {p["id"]: p for p in scan_flat_pets(self._project_root, include_custom=True)}
         pets: list[dict] = []
-        for p in self._flat:
-            if p.get("id") in self._custom_ids:
-                p = self._enrich_pet_motions(dict(p))
-                p["is_custom"] = True
-                pets.append(p)
+        for cid in self._custom_ids:
+            raw = all_by_id.get(cid)
+            if not raw:
+                continue
+            p = self._enrich_pet_motions(dict(raw))
+            p["is_custom"] = True
+            pets.append(apply_zhegou_idle_thumb(self._project_root, p))
         return pets
 
     def _flat_library_pets(self) -> list[dict]:
@@ -1881,13 +2158,32 @@ class ControlConsole(QMainWindow):
         chat = self._chats[self._ai_i]
         self._chat_store.save(chat["name"], chat["msgs"])
 
+    def bring_to_front(self) -> None:
+        """显示并置顶设置面板（重复打开时仍到最前）。"""
+        state = self.windowState() & ~Qt.WindowState.WindowMinimized
+        self.setWindowState(state)
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
     def _build_ui(self) -> None:
         self.setWindowTitle("桌面宠物控制台")
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowType.Window
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.resize(800, 600)
         self.setMinimumSize(720, 540)
         central = QWidget()
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self._drag_bar = ConsoleDragBar(self, "桌面宠物控制台")
+        outer.addWidget(self._drag_bar)
+
+        root = QHBoxLayout()
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
@@ -1919,14 +2215,6 @@ class ControlConsole(QMainWindow):
         root.addWidget(sidebar)
 
         right = QVBoxLayout()
-        chrome = QHBoxLayout()
-        chrome.addStretch()
-        for label, slot in (("—", self.showMinimized), ("□", self._toggle_max), ("×", self.close)):
-            b = QPushButton(label)
-            b.setFixedSize(28, 28)
-            b.clicked.connect(slot)
-            chrome.addWidget(b)
-        right.addLayout(chrome)
         self._stack = QStackedWidget()
         self._stack.addWidget(self._page_dashboard())
         self._stack.addWidget(self._page_characters())
@@ -1936,6 +2224,7 @@ class ControlConsole(QMainWindow):
         self._stack.addWidget(self._page_pet_main())
         right.addWidget(self._stack, 1)
         root.addLayout(right, 1)
+        outer.addLayout(root, 1)
         self._nav("dashboard")
 
     def _toggle_max(self) -> None:
@@ -2053,6 +2342,9 @@ class ControlConsole(QMainWindow):
         pet = self._current_pet()
         if not pet or not hasattr(self, "_dash_pet_pic"):
             return
+        desk = getattr(self, "_desk", None)
+        if pet.get("is_flat") and desk is not None:
+            pet = desk.build_pet_record(pet.get("id", "")) or pet
         thumb = pet.get("thumb") or self._pet_idle_path(pet)
         self._dash_pet_pic.setPixmap(_load_pixmap(thumb, QSize(100, 100)))
         self._dash_pet_name.setText(f"<b>{pet['name']}</b>")
@@ -2169,7 +2461,10 @@ class ControlConsole(QMainWindow):
         self._tabs.addTab(self._char_grid(self._flat_library_pets(), add_plus=False), "平面素材库")
         custom_wrap = QWidget()
         custom_lay = QVBoxLayout(custom_wrap)
-        custom_lay.addWidget(self._char_grid(self._custom_pets, add_plus=False), 1)
+        custom_lay.addWidget(
+            self._char_grid(self._custom_pets, add_plus=False, empty_hint="暂无自定义素材"),
+            1,
+        )
         up_row = QHBoxLayout()
         up_row.addStretch()
         up = QPushButton("上传平面素材")
@@ -2194,15 +2489,21 @@ class ControlConsole(QMainWindow):
         pets: list[dict],
         add_plus: bool = False,
         on_plus: Callable[[], None] | None = None,
+        *,
+        empty_hint: str | None = None,
     ) -> QWidget:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         inner = QWidget()
         grid = QGridLayout(inner)
         if not pets and not add_plus:
-            hint = QLabel("暂无平面素材\n请将 {pet_id}_image.png 放入 assets/images/\n动图放入 assets/animations/")
+            hint_text = empty_hint or (
+                "暂无平面素材\n请将 {pet_id}_image.png 放入 assets/images/\n"
+                "动图放入 assets/animations/"
+            )
+            hint = QLabel(hint_text)
             hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hint.setStyleSheet("color:#94a3b8;padding:32px;")
+            hint.setStyleSheet("color:#94a3b8;padding:32px;font-size:13px;")
             grid.addWidget(hint, 0, 0, 1, 4)
         for i, pet in enumerate(pets):
             cell = self._pet_cell(pet)
@@ -2267,7 +2568,10 @@ class ControlConsole(QMainWindow):
         self._tabs.addTab(self._char_grid(self._flat_library_pets(), add_plus=False), "平面素材库")
         custom_wrap = QWidget()
         custom_lay = QVBoxLayout(custom_wrap)
-        custom_lay.addWidget(self._char_grid(self._custom_pets, add_plus=False), 1)
+        custom_lay.addWidget(
+            self._char_grid(self._custom_pets, add_plus=False, empty_hint="暂无自定义素材"),
+            1,
+        )
         up_row = QHBoxLayout()
         up_row.addStretch()
         up = QPushButton("上传平面素材")
@@ -2315,30 +2619,7 @@ class ControlConsole(QMainWindow):
         self._detail_pic = pic
         self._detail_lay.addWidget(pic)
         self._detail_lay.addWidget(QLabel(f"<b>{pet['name']}</b>"))
-        self._detail_lay.addWidget(QLabel(pet["personality"]))
-        self._detail_lay.addWidget(QLabel("动作展示"))
-        row = QHBoxLayout()
-        motions = [m for m in pet.get("motions", []) if self._motion_playable(m) or not pet.get("is_flat")]
-        if not motions:
-            b = QPushButton("暂无动作")
-            b.setEnabled(False)
-            b.setStyleSheet(BTN_GLASS)
-            row.addWidget(b)
-        else:
-            for m in motions:
-                b = QPushButton(m["label"][:8])
-                b.setStyleSheet(BTN_GLASS)
-                if self._motion_playable(m):
-                    b.clicked.connect(
-                        lambda _=False, motion=m, p=pet, label=pic: self._play_motion(
-                            motion, label, self._pet_idle_path(p), QSize(260, 170)
-                        )
-                    )
-                elif self.on_play_motion:
-                    b.clicked.connect(lambda _=False, mid=m["id"]: self.on_play_motion(mid))
-                row.addWidget(b)
-        row.addStretch()
-        self._detail_lay.addLayout(row)
+        self._detail_lay.addWidget(QLabel(pet.get("personality", "")))
         self._detail.show()
 
     def _page_pet_main(self) -> QWidget:
@@ -2375,14 +2656,6 @@ class ControlConsole(QMainWindow):
         row.addLayout(tx)
         ll.addLayout(row)
         body.addWidget(left, 1)
-        right = QVBoxLayout()
-        right.addWidget(QLabel("<h3>动作展示</h3>"))
-        self._pet_main_motions_widget = QWidget()
-        self._pet_main_motions_lay = QVBoxLayout(self._pet_main_motions_widget)
-        self._pet_main_motions_lay.setContentsMargins(0, 0, 0, 0)
-        right.addWidget(self._pet_main_motions_widget)
-        right.addStretch()
-        body.addLayout(right, 1)
         lay.addLayout(body)
         lay.addWidget(QLabel("<h3>宠物状态</h3>"))
         stats = QHBoxLayout()
@@ -2400,29 +2673,6 @@ class ControlConsole(QMainWindow):
         self._pet_main_name.setText(f"<h2>{pet['name']}</h2>")
         self._pet_main_desc.setText(pet.get("personality", ""))
         self._pet_main_pic.setPixmap(_load_pixmap(idle_path, QSize(120, 120)))
-        while self._pet_main_motions_lay.count():
-            item = self._pet_main_motions_lay.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        motions = [m for m in pet.get("motions", []) if self._motion_playable(m) or not pet.get("is_flat")]
-        if not motions:
-            b = QPushButton("暂无动作")
-            b.setEnabled(False)
-            b.setStyleSheet(BTN_GLASS)
-            self._pet_main_motions_lay.addWidget(b)
-        else:
-            for m in motions:
-                b = QPushButton(m["label"])
-                b.setStyleSheet(BTN_GLASS)
-                if self._motion_playable(m):
-                    b.clicked.connect(
-                        lambda _=False, motion=m, p=pet: self._play_motion(
-                            motion, self._pet_main_pic, self._pet_idle_path(p), QSize(120, 120)
-                        )
-                    )
-                elif self.on_play_motion:
-                    b.clicked.connect(lambda _=False, mid=m["id"]: self.on_play_motion(mid))
-                self._pet_main_motions_lay.addWidget(b)
 
     def _page_ai(self) -> QWidget:
         w = QWidget()
