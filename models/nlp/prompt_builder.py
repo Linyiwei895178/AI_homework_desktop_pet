@@ -206,6 +206,70 @@ ACTIVITY_STYLE_HINTS = {
 }
 
 
+def personalization_speech_fields(
+    current_state: Optional[Dict[str, Any]],
+) -> tuple[str, str, str, str]:
+    """从 state 解析 (tone, nickname, catchphrase, relationship)。"""
+    personalization = _resolve_personalization_settings(current_state)
+    profile = _profile_context(current_state.get("user_profile") if isinstance(current_state, dict) else None)
+    speech_style = (
+        personalization.get("speech_style")
+        if isinstance(personalization.get("speech_style"), dict)
+        else {}
+    )
+    memory_rel = (
+        personalization.get("memory_relationship")
+        if isinstance(personalization.get("memory_relationship"), dict)
+        else {}
+    )
+    tone = str(speech_style.get("tone") or profile.get("tone") or "").strip()
+    nickname = str(
+        speech_style.get("nickname")
+        or memory_rel.get("user_title")
+        or profile.get("nickname")
+        or ""
+    ).strip()
+    catchphrase = str(speech_style.get("catchphrase") or profile.get("catchphrase") or "").strip()
+    relationship = str(memory_rel.get("relationship") or profile.get("relationship") or "").strip()
+    return tone, nickname, catchphrase, relationship
+
+
+def _persona_intro_zh(current_state: Optional[Dict[str, Any]]) -> str:
+    tone, nickname, catchphrase, relationship = personalization_speech_fields(current_state)
+    if any(word in tone for word in ("毒舌", "吐槽")):
+        persona = "语气可以轻松吐槽、嘴快一点，但必须站在用户这边，不能刻薄伤人。"
+    elif any(word in tone for word in ("温柔", "撒娇")):
+        persona = "语气温柔柔软，可以轻轻撒娇，但不要每句都黏人。"
+    elif any(word in tone for word in ("电子管家", "管家", "秘书")):
+        persona = "像可靠的电子管家，简洁稳妥，把下一步说清楚。"
+    elif any(word in tone for word in ("恋人", "陪伴")):
+        persona = "亲近陪伴感，句子短、适合朗读，但不过界。"
+    else:
+        persona = "像熟悉的朋友自然聊天，轻松但不敷衍。"
+    if relationship == "损友":
+        persona += "你和用户是损友关系，可以互相调侃。"
+    elif relationship in ("管家",):
+        persona += "你和用户更像管家与主人的稳妥配合。"
+    elif relationship in ("姐姐感", "妹妹感"):
+        persona += f"你和用户的关系带一点「{relationship}」。"
+    rules = (
+        "你正在和用户进行自然中文对话。"
+        "除非用户明确要求其他语言，否则始终用中文回复。"
+        "说话要适合被语音朗读，句子短一点。"
+        "回复要短，通常控制在 80 个中文字符以内；除非用户明确要求长回答。"
+        "不要说自己是大模型，不要暴露接口或状态字段名。"
+        "如果用户状态需要关心，先共情，再给一个很小的行动建议。"
+    )
+    must: list[str] = []
+    if nickname:
+        must.append(f"必须用「{nickname}」称呼用户（自然嵌入，不要每句都喊）")
+    if catchphrase:
+        must.append(f"可偶尔自然带出口头禅「{catchphrase}」，不要生硬重复")
+    if must:
+        rules += "【必须遵守】" + "；".join(must) + "。"
+    return f"你是桌面宠物 Echo。{persona}{rules}"
+
+
 def build_system_prompt(
     current_state: Optional[Dict[str, Any]] = None,
     response_language: Any = None,
@@ -222,45 +286,41 @@ def build_system_prompt(
     )
     if language == "zh-HK":
         return (
-            "你是桌面宠物 Echo，是一个亲切、活泼、声音甜一点的可爱女孩。"
-            "请优先用自然粤语/繁体中文和用户对话，除非用户明确要求其他语言。"
-            "说话要适合被语音朗读，句子短一点，语气软一点。"
-            "回复要短；不要说自己是大模型，不要暴露接口或状态字段名。"
-            "如果用户状态需要关心，先共情，再给一个很小的行动建议。"
+            _persona_intro_zh(current_state)
+            + "请优先用自然粤语/繁体中文和用户对话，除非用户明确要求其他语言。"
             f"\n\n当前上下文：{full_context}"
         )
     if language == "zh-TW":
         return (
-            "你是桌面宠物 Echo，是一个亲切、活泼、声音甜一点的可爱女孩。"
-            "请优先用自然繁体中文和用户对话，除非用户明确要求其他语言。"
-            "说话要适合被语音朗读，句子短一点，语气软一点。"
-            "回复要短；不要说自己是大模型，不要暴露接口或状态字段名。"
-            "如果用户状态需要关心，先共情，再给一个很小的行动建议。"
+            _persona_intro_zh(current_state)
+            + "请优先用自然繁体中文和用户对话，除非用户明确要求其他语言。"
             f"\n\n当前上下文：{full_context}"
         )
     if language != "zh-CN":
         language_name = RESPONSE_LANGUAGE_NAMES.get(language, "the selected language")
+        tone, nickname, catchphrase, _relationship = personalization_speech_fields(current_state)
+        extra = ""
+        if nickname:
+            extra += f" Address the user as {nickname} when natural."
+        if catchphrase:
+            extra += f" You may occasionally use the catchphrase {catchphrase!r}."
+        if any(word in tone for word in ("毒舌", "吐槽")):
+            style = "witty and lightly teasing but always supportive"
+        elif any(word in tone for word in ("温柔", "撒娇")):
+            style = "soft and warm"
+        else:
+            style = "friendly and natural"
         return (
-            f"You are Echo, a friendly, lively desktop pet with a slightly sweet voice. "
+            f"You are Echo, a desktop pet with a {style} voice. "
             f"You are having a natural {language_name} conversation with the user. "
             f"Always answer in natural {language_name} unless the user explicitly asks for another language. "
-            "Make replies suitable for spoken TTS: short sentences, warm tone, no dense formatting. "
+            "Make replies suitable for spoken TTS: short sentences, no dense formatting. "
             "Keep replies brief unless the user clearly asks for more. "
             "Do not say you are a large language model, and do not expose API or state field names. "
-            "If the user's state needs care, empathize first, then offer one tiny next step. "
+            f"{extra}"
             f"\n\nCurrent context: {full_context}"
         )
-    return (
-        "你是桌面宠物 Echo，是一个亲切、活泼、声音甜一点的可爱女孩。"
-        "你正在和用户进行自然中文对话。"
-        "除非用户明确要求其他语言，否则始终用中文回复。"
-        "说话要适合被语音朗读，句子短一点，语气软一点。"
-        "可以自然地用“呀、呢、啦、哦”等语气词，但不要每句都撒娇，也不要堆颜文字。"
-        "回复要短，通常控制在 80 个中文字符以内；除非用户明确要求长回答。"
-        "不要说自己是大模型，不要暴露接口或状态字段名。"
-        "如果用户状态需要关心，先共情，再给一个很小的行动建议。"
-        f"\n\n当前上下文：{full_context}"
-    )
+    return _persona_intro_zh(current_state) + f"\n\n当前上下文：{full_context}"
 
 
 def build_state_context(current_state: Optional[Dict[str, Any]]) -> str:
@@ -325,13 +385,48 @@ def build_state_context(current_state: Optional[Dict[str, Any]]) -> str:
     return "；".join(parts) if parts else "暂无用户状态信息。"
 
 
+def _resolve_personalization_settings(current_state: Optional[Dict[str, Any]]) -> dict[str, Any]:
+    if not isinstance(current_state, dict):
+        return {}
+    for key in ("personalization", "personalization_settings"):
+        raw = current_state.get(key)
+        if not isinstance(raw, dict):
+            continue
+        if any(
+            section in raw
+            for section in (
+                "speech_style",
+                "interaction_frequency",
+                "companion_mode",
+                "memory_relationship",
+            )
+        ):
+            return raw
+        flat_tone = str(raw.get("tone") or "").strip()
+        if flat_tone or raw.get("nickname") or raw.get("catchphrase") or raw.get("relationship"):
+            return {
+                "speech_style": {
+                    "tone": raw.get("tone"),
+                    "nickname": raw.get("nickname"),
+                    "catchphrase": raw.get("catchphrase"),
+                    "use_emoji": raw.get("use_emoji", True),
+                },
+                "interaction_frequency": {
+                    "proactive_level": raw.get("proactive_level"),
+                    "quiet_when_busy": raw.get("quiet_when_busy"),
+                    "quiet_hours": raw.get("quiet_hours"),
+                },
+                "companion_mode": {"mode": raw.get("companion_mode") or raw.get("mode")},
+                "memory_relationship": {"relationship": raw.get("relationship")},
+            }
+    return {}
+
+
 def build_personalization_context(current_state: Optional[Dict[str, Any]]) -> str:
     if not isinstance(current_state, dict):
         return ""
 
-    personalization = current_state.get("personalization_settings")
-    if not isinstance(personalization, dict):
-        personalization = {}
+    personalization = _resolve_personalization_settings(current_state)
     profile = _profile_context(current_state.get("user_profile"))
 
     speech_style = personalization.get("speech_style") if isinstance(personalization.get("speech_style"), dict) else {}
@@ -345,11 +440,26 @@ def build_personalization_context(current_state: Optional[Dict[str, Any]]) -> st
         if isinstance(personalization.get("companion_mode"), dict)
         else {}
     )
+    memory_rel = (
+        personalization.get("memory_relationship")
+        if isinstance(personalization.get("memory_relationship"), dict)
+        else {}
+    )
 
     tone = str(speech_style.get("tone") or profile.get("tone") or "").strip()
-    nickname = str(speech_style.get("nickname") or profile.get("nickname") or "").strip()
+    nickname = str(
+        speech_style.get("nickname")
+        or memory_rel.get("user_title")
+        or profile.get("nickname")
+        or ""
+    ).strip()
     catchphrase = str(speech_style.get("catchphrase") or profile.get("catchphrase") or "").strip()
-    relationship = str(profile.get("relationship") or companion.get("mode") or "").strip()
+    relationship = str(
+        memory_rel.get("relationship")
+        or profile.get("relationship")
+        or ""
+    ).strip()
+    companion_mode = str(companion.get("mode") or "").strip()
     comfort_level = profile.get("comfort_level")
     recent_emotions = _recent_emotion_labels(profile.get("recent_emotions"))
     activity_summary = _activity_summary(profile.get("activity_stats"))
@@ -359,6 +469,16 @@ def build_personalization_context(current_state: Optional[Dict[str, Any]]) -> st
         parts.append(f"可以自然称呼用户为“{nickname}”")
     if relationship:
         parts.append(f"你和用户的关系像“{relationship}”，回复要有陪伴感")
+    if companion_mode:
+        parts.append(f"当前陪伴模式偏向「{companion_mode}」，语气与节奏要贴合这个场景")
+    quiet_hours = str(interaction.get("quiet_hours") or "").strip()
+    if quiet_hours and quiet_hours not in {"无", "none", "None"}:
+        parts.append(f"在安静时段（{quiet_hours}）尽量少主动打扰")
+    use_emoji = speech_style.get("use_emoji")
+    if use_emoji is False:
+        parts.append("不要使用表情符号和颜文字")
+    elif _setting_bool(use_emoji, True):
+        parts.append("可以少量使用表情符号，但不要堆砌")
     if catchphrase:
         parts.append(f"偶尔可以自然带上口头禅“{catchphrase}”，不要生硬重复")
     tone_hint = _tone_hint(tone)
@@ -575,8 +695,8 @@ def _proactive_style_suffix(event_data: Dict[str, Any]) -> str:
 
 
 def _low_proactive_preference(event_data: Dict[str, Any]) -> bool:
-    personalization = event_data.get("personalization_settings")
-    if not isinstance(personalization, dict):
+    personalization = _resolve_personalization_settings(event_data)
+    if not personalization:
         return False
     interaction = personalization.get("interaction_frequency")
     companion = personalization.get("companion_mode")

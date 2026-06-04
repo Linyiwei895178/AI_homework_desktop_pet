@@ -1,9 +1,9 @@
 {
-  "last_pet_id": "elf_count",
+  "last_pet_id": "monkey",
   "pin_top": true,
   "hover_fade": false,
-  "status_bar": false,
-  "chat_open": false,
+  "status_bar": true,
+  "chat_open": true,
   "voice_pack_id": "",
   "tts_settings": {
     "enabled": true,
@@ -33,11 +33,11 @@
     "tts_volume": ""
   },
   "position": [
-    585,
-    51
+    415,
+    199
   ],
   "window_size": [
-    501,
-    921
+    262,
+    349
   ]
 }

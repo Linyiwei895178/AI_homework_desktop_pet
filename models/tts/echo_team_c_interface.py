@@ -10,6 +10,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+from app.ui.ui_settings_store import merge_personalization_into_state
 from models.nlp.deepseek_api import DeepSeekClient
 from models.nlp.emotion_analyzer import analyze_chat_emotion
 from models.tts.ai_voice_assistant import AIChatVoiceAssistant
@@ -61,6 +62,7 @@ class EchoTeamCInterface:
             return thread
 
         def run() -> None:
+            state = merge_personalization_into_state(current_state)
             try:
                 history = getattr(self.assistant, "get_memory_messages", lambda: [])()
             except Exception as exc:
@@ -70,7 +72,7 @@ class EchoTeamCInterface:
             try:
                 reply = self.assistant.chat_with_context(
                     value,
-                    current_state=current_state,
+                    current_state=state,
                     callback_ui=ui_callback,
                 )
                 self._notify_logic_callback(

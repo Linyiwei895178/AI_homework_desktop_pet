@@ -48,6 +48,11 @@
 					"File": "motions/mtn_01.motion3.json"
 				}
 			],
+			"Walk": [
+				{
+					"File": "motions/walk.motion3.json"
+				}
+			],
 			"": [
 				{
 					"File": "motions/mtn_02.motion3.json"

@@ -7,7 +7,12 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from models.nlp.prompt_builder import RESPONSE_LANGUAGE_NAMES, build_system_prompt, normalize_response_language
+from models.nlp.prompt_builder import (
+    RESPONSE_LANGUAGE_NAMES,
+    build_system_prompt,
+    normalize_response_language,
+    personalization_speech_fields,
+)
 from utils.config import config
 
 
@@ -307,10 +312,10 @@ class DeepSeekClient:
             base = self._mock_game_companion_reply(text, user_state=user_state)
         elif _contains_any(text, ("电脑状态是 看剧", "正在看剧", "正在看视频", "一起追剧", "看剧/视频中")):
             base = self._mock_watching_companion_reply(text, user_state=user_state)
-        elif _contains_any(text, ("你好", "嗨", "在吗", "早上好", "晚上好")):
-            base = f"在呢在呢，我听到你说“{text}”啦。今天想让我陪你做点什么？"
+        elif _contains_any(text, ("你好", "嗨", "在吗", "早上好", "晚上好", "叫我")):
+            base = self._mock_greeting_reply(text, user_state=user_state)
         elif _contains_any(text, ("喜欢你", "喜欢我", "爱你", "爱我", "想你", "抱抱", "亲亲")):
-            base = self._mock_affection_reply(text)
+            base = self._mock_affection_reply(text, user_state=user_state)
         elif _contains_any(text, ("困", "睡觉", "睡了", "晚安", "休息")):
             base = f"困了就别硬撑啦。你刚说“{text}”，我会把声音放轻一点，陪你安心休息。"
         elif _contains_any(text, ("电影", "动漫", "游戏", "音乐", "故事")):
@@ -543,7 +548,23 @@ class DeepSeekClient:
 
         return "我看到状态变化啦，会用轻一点的声音陪着你。"
 
-    def _mock_affection_reply(self, text: str) -> str:
+    def _mock_greeting_reply(self, text: str, user_state: Optional[dict] = None) -> str:
+        tone, nickname, catchphrase, relationship = personalization_speech_fields(user_state)
+        name_bit = f"{nickname}，" if nickname else ""
+        if any(word in tone for word in ("毒舌", "吐槽")) or relationship == "损友":
+            return f"哟，{name_bit}你说「{text}」？行啊，我听着呢。"
+        if any(word in tone for word in ("电子管家", "管家")):
+            return f"{name_bit}收到：{text}。需要我陪你处理哪一步？"
+        if any(word in tone for word in ("温柔", "撒娇", "恋人")):
+            tail = f"偶尔带一句「{catchphrase}」" if catchphrase else "今天想让我陪你做点什么"
+            return f"在呢在呢，{name_bit}我听到你说「{text}」啦。{tail}。"
+        return f"在呢在呢，{name_bit}我听到你说「{text}」啦。今天想让我陪你做点什么？"
+
+    def _mock_affection_reply(self, text: str, user_state: Optional[dict] = None) -> str:
+        tone, nickname, _, _ = personalization_speech_fields(user_state)
+        name_bit = f"{nickname}，" if nickname else ""
+        if any(word in tone for word in ("毒舌", "吐槽")):
+            return f"行行行，{name_bit}我听到了，别肉麻过度啊。"
         if _contains_any(text, ("喜欢我", "爱我")) and _contains_any(text, ("吗", "嘛", "？", "?")):
             return "当然喜欢呀。不是敷衍地应一声，是想认真陪着你、听你说话的喜欢。"
         if _contains_any(text, ("喜欢你", "爱你")):

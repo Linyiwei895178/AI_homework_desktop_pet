@@ -99,6 +99,12 @@ from models.tts.language_match import (
 )
 from utils.config import config
 from utils.logger import get_logger
+from app.ui.cloud_panel import CloudPanel
+from app.ui.ui_settings_store import (
+    DEFAULT_PERSONALIZATION_SETTINGS,
+    load_ui_settings,
+    save_ui_settings,
+)
 
 # ---------------------------------------------------------------------------
 # 样式常量
@@ -124,6 +130,51 @@ D_ACTION_LABELS = {
 
 def _glass_style(radius: int) -> str:
     return GLASS_FRAME.format(radius=radius)
+
+
+FOLLOW_MOUSE_MODE_OPTIONS: tuple[tuple[int, str], ...] = (
+    (0, "关闭"),
+    (1, "轻微跟随"),
+    (2, "紧密跟随"),
+)
+
+
+def build_follow_mouse_mode_setting(
+    current_mode: int,
+    on_mode_changed: Callable[[int], None],
+    parent: QWidget | None = None,
+) -> tuple[QFrame, QComboBox]:
+    """桌宠设置页：追鼠标三档下拉框。"""
+    frame = QFrame(parent)
+    frame.setStyleSheet(_glass_style(16))
+    row = QHBoxLayout(frame)
+    row.setContentsMargins(12, 10, 12, 10)
+    row.addWidget(QLabel("追鼠标"))
+    combo = QComboBox()
+    for _mode, label in FOLLOW_MOUSE_MODE_OPTIONS:
+        combo.addItem(label, _mode)
+    mode = max(0, min(2, int(current_mode)))
+    combo.blockSignals(True)
+    for i in range(combo.count()):
+        if combo.itemData(i) == mode:
+            combo.setCurrentIndex(i)
+            break
+    combo.blockSignals(False)
+
+    def _on_index_changed(index: int) -> None:
+        if index < 0:
+            return
+        raw = combo.itemData(index)
+        try:
+            mode = int(raw)
+        except (TypeError, ValueError):
+            mode = index
+        on_mode_changed(max(0, min(2, mode)))
+
+    combo.currentIndexChanged.connect(_on_index_changed)
+    row.addWidget(combo, 1)
+    return frame, combo
+
 
 BTN_GLASS = """
 QPushButton {
@@ -209,72 +260,7 @@ DEFAULT_TTS_UI_SETTINGS: dict[str, Any] = {
     "tts_volume": "",
 }
 
-DEFAULT_PET_PERSONALIZATION_SETTINGS: dict[str, dict[str, Any]] = {
-    "speech_style": {
-        "tone": "朋友感",
-        "nickname": "用户",
-        "catchphrase": "我在呢",
-        "use_emoji": True,
-    },
-    "interaction_frequency": {
-        "proactive_level": 45,
-        "quiet_when_busy": True,
-        "quiet_hours": "23:00-08:00",
-    },
-    "desktop_access": {
-        "foreground_observation_authorized": False,
-        "proactive_comment_enabled": True,
-        "include_window_title": True,
-        "comment_interval_seconds": 150,
-    },
-    "appearance_actions": {
-        "theme_color": "樱花粉",
-        "idle_action": "轻轻晃动",
-        "transparency": 92,
-    },
-    "companion_mode": {
-        "mode": "学习陪伴",
-        "auto_switch": True,
-        "focus_silence": True,
-    },
-    "emotion_system": {
-        "enable_emotion": True,
-        "mood_sensitivity": 60,
-        "intimacy_growth": 50,
-    },
-    "reminders": {
-        "water": True,
-        "rest": True,
-        "pomodoro": False,
-        "meal": False,
-        "sleep": True,
-        "style": "温柔提醒",
-    },
-    "memory_relationship": {
-        "relationship": "朋友",
-        "remember_preferences": True,
-        "remember_projects": True,
-        "user_title": "用户",
-    },
-    "voice_expression": {
-        "voice_enabled": True,
-        "voice_style": "台湾口音",
-        "speech_rate": 55,
-        "bubble_density": 50,
-    },
-    "desktop_behavior": {
-        "activity_range": "屏幕边缘和空白处",
-        "avoid_windows": True,
-        "follow_mouse": False,
-        "multi_screen": True,
-    },
-    "boundaries": {
-        "no_disturb_when_fullscreen": True,
-        "safe_topics": "不过度亲密、不讨论隐私",
-        "comfort_level": "轻度安慰",
-        "allow_close_expression": False,
-    },
-}
+DEFAULT_PET_PERSONALIZATION_SETTINGS = DEFAULT_PERSONALIZATION_SETTINGS
 
 PET_PERSONALIZATION_SECTIONS: tuple[dict[str, Any], ...] = (
     {
@@ -3280,9 +3266,11 @@ class ControlConsole(QMainWindow):
         on_read_text: Callable[..., None] | None = None,
         on_stop_read_text: Callable[[], None] | None = None,
         on_pet_settings_changed: Callable[[dict[str, dict[str, Any]]], None] | None = None,
+        get_local_pet_status: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         super().__init__()
         self._project_root = project_root
+        self._get_local_pet_status_fn = get_local_pet_status
         self.model_path = model_path
         self.available_motions = available_motions
         self.motion_name_map = motion_name_map
@@ -3302,13 +3290,9 @@ class ControlConsole(QMainWindow):
         self._read_documents: list[BookDocument] = []
         self._tts_settings = normalize_tts_settings(current_tts_settings)
         self._tts_control_syncing = False
-        self._pet_settings_path = os.path.join(
-            self._project_root,
-            "data",
-            "pet_personalization_settings.json",
-        )
         self._pet_settings = self._load_pet_personalization_settings()
         self._pet_setting_controls: dict[tuple[str, str], QWidget] = {}
+        self._pet_settings_autosave_pending = False
         self._char_tab = 0
         self._ai_i = -1
         self._detail_pic: QLabel | None = None
@@ -3455,6 +3439,7 @@ class ControlConsole(QMainWindow):
         self._menu_btns: dict[str, QPushButton] = {}
         for pid, icon, label in (
             ("pet_settings", "⚙️", "桌宠设置"),
+            ("cloud_share", "☁️", "云端共享"),
             ("dashboard", "📊", "仪表盘"),
             ("characters", "👤", "角色选择"),
             ("ai_settings", "💬", "AI对话"),
@@ -3482,6 +3467,7 @@ class ControlConsole(QMainWindow):
         right.addLayout(chrome)
         self._stack = QStackedWidget()
         self._stack.addWidget(self._page_pet_settings())
+        self._stack.addWidget(self._page_cloud_share())
         self._stack.addWidget(self._page_dashboard())
         self._stack.addWidget(self._page_characters())
         self._stack.addWidget(self._page_ai())
@@ -3502,12 +3488,13 @@ class ControlConsole(QMainWindow):
         self._page = page
         idx = {
             "pet_settings": 0,
-            "dashboard": 1,
-            "characters": 2,
-            "ai_settings": 3,
-            "permissions": 4,
-            "theme": 5,
-            "pet_main": 6,
+            "cloud_share": 1,
+            "dashboard": 2,
+            "characters": 3,
+            "ai_settings": 4,
+            "permissions": 5,
+            "theme": 6,
+            "pet_main": 7,
         }.get(page, 0)
         self._stack.setCurrentIndex(idx)
         for pid, btn in self._menu_btns.items():
@@ -3663,12 +3650,10 @@ class ControlConsole(QMainWindow):
 
     def _load_pet_personalization_settings(self) -> dict[str, dict[str, Any]]:
         data = self._default_pet_personalization_settings()
-        if not os.path.isfile(self._pet_settings_path):
-            return data
         try:
-            with open(self._pet_settings_path, encoding="utf-8") as f:
-                loaded = json.load(f)
-        except (OSError, json.JSONDecodeError) as exc:
+            bundle = load_ui_settings(self._project_root)
+            loaded = bundle.get("personalization_settings")
+        except Exception as exc:
             self._log(f"读取桌宠设置失败，使用默认值: {exc}")
             return data
         if not isinstance(loaded, dict):
@@ -3686,13 +3671,17 @@ class ControlConsole(QMainWindow):
 
     def _save_pet_personalization_settings(self) -> bool:
         try:
-            os.makedirs(os.path.dirname(self._pet_settings_path), exist_ok=True)
-            with open(self._pet_settings_path, "w", encoding="utf-8") as f:
-                json.dump(self._pet_settings, f, ensure_ascii=False, indent=2)
-            return True
-        except OSError as exc:
+            ok = save_ui_settings(
+                {"personalization_settings": self._pet_settings},
+                self._project_root,
+            )
+        except Exception as exc:
             QMessageBox.warning(self, "保存失败", f"无法保存桌宠设置：{exc}")
             return False
+        if not ok:
+            QMessageBox.warning(self, "保存失败", "无法写入 data/pet_ui_settings.json")
+            return False
+        return True
 
     def _pet_setting_value(self, section_key: str, field_key: str) -> Any:
         section = self._pet_settings.get(section_key, {})
@@ -3800,6 +3789,33 @@ class ControlConsole(QMainWindow):
                     data[section_key][field_key] = self._read_pet_setting_control(control)
         return data
 
+    def _bind_pet_setting_control_autosave(self, control: QWidget) -> None:
+        if isinstance(control, QComboBox):
+            control.currentTextChanged.connect(self._on_pet_setting_control_changed)
+        elif isinstance(control, QCheckBox):
+            control.toggled.connect(self._on_pet_setting_control_changed)
+        elif isinstance(control, QSlider):
+            control.valueChanged.connect(self._on_pet_setting_control_changed)
+        elif isinstance(control, QLineEdit):
+            control.editingFinished.connect(self._on_pet_setting_control_changed)
+            control.textChanged.connect(self._on_pet_setting_control_changed)
+
+    def _on_pet_setting_control_changed(self, *_args: Any) -> None:
+        if self._pet_settings_autosave_pending:
+            return
+        self._pet_settings_autosave_pending = True
+        QTimer.singleShot(120, self._autosave_pet_personalization_settings)
+
+    def _autosave_pet_personalization_settings(self) -> None:
+        self._pet_settings_autosave_pending = False
+        self._pet_settings = self._collect_pet_personalization_controls()
+        if not self._save_pet_personalization_settings():
+            return
+        if self.on_pet_settings_changed:
+            self.on_pet_settings_changed(dict(self._pet_settings))
+        if hasattr(self, "_pet_settings_status"):
+            self._pet_settings_status.setText("已自动保存")
+
     def _save_pet_personalization_from_controls(self) -> None:
         self._pet_settings = self._collect_pet_personalization_controls()
         if self._save_pet_personalization_settings():
@@ -3853,10 +3869,43 @@ class ControlConsole(QMainWindow):
                 self._pet_setting_value(section_key, field_key),
             )
             self._pet_setting_controls[(section_key, field_key)] = control
+            self._bind_pet_setting_control_autosave(control)
             grid.addWidget(label, row, 0)
             grid.addWidget(widget, row, 1)
         lay.addLayout(grid)
         return frame
+
+    def _resolve_local_pet_status(self) -> dict[str, Any]:
+        fn = getattr(self, "_get_local_pet_status_fn", None)
+        if callable(fn):
+            try:
+                data = fn()
+                if isinstance(data, dict):
+                    return data
+            except Exception as exc:
+                self._log(f"读取宠物状态失败: {exc}")
+        try:
+            from models.state.echo_team_d_interface import EchoTeamDInterface
+            from models.state.pet_state import PetState
+
+            pet = PetState()
+            try:
+                pet.load_state()
+            except Exception:
+                pass
+            return EchoTeamDInterface(pet).api_get_pet_status()
+        except Exception as exc:
+            self._log(f"读取宠物状态失败: {exc}")
+            return {}
+
+    def _page_cloud_share(self) -> QWidget:
+        panel = CloudPanel(get_local_pet_status=self._resolve_local_pet_status)
+        try:
+            panel._join_btn.setStyleSheet(BTN_GLASS)
+            panel._sync_btn.setStyleSheet(BTN_PRIMARY)
+        except Exception:
+            pass
+        return panel
 
     def _page_pet_settings(self) -> QWidget:
         w = QWidget()
@@ -3888,9 +3937,11 @@ class ControlConsole(QMainWindow):
         inner_lay.setContentsMargins(0, 0, 8, 0)
         inner_lay.setSpacing(12)
         self._pet_setting_controls.clear()
+        self._pet_settings_autosave_pending = True
         for index, section in enumerate(PET_PERSONALIZATION_SECTIONS, start=1):
             inner_lay.addWidget(self._build_pet_setting_section(index, section))
         inner_lay.addStretch()
+        self._pet_settings_autosave_pending = False
         scroll.setWidget(inner)
         lay.addWidget(scroll, 1)
         return w

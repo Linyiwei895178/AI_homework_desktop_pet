@@ -1,1 +1,50 @@
-[]
+[
+  {
+    "role": "user",
+    "content": "你好"
+  },
+  {
+    "role": "assistant",
+    "content": "在呢在呢，我听到你说“你好”啦。今天想让我陪你做点什么？"
+  },
+  {
+    "role": "user",
+    "content": "你好"
+  },
+  {
+    "role": "assistant",
+    "content": "在呢在呢，我听到你说“你好”啦。今天想让我陪你做点什么？"
+  },
+  {
+    "role": "user",
+    "content": "宝宝"
+  },
+  {
+    "role": "assistant",
+    "content": "我们接着刚才的话聊“宝宝”吧。你最在意的那个点，我会顺着它陪你说下去。"
+  },
+  {
+    "role": "user",
+    "content": "你叫我什么呀"
+  },
+  {
+    "role": "assistant",
+    "content": "关于“你叫我什么呀”，我先给你一个短短的想法：可以从最容易确认的一点开始。"
+  },
+  {
+    "role": "user",
+    "content": "1"
+  },
+  {
+    "role": "assistant",
+    "content": "我们接着刚才的话聊“1”吧。你最在意的那个点，我会顺着它陪你说下去。"
+  },
+  {
+    "role": "user",
+    "content": "你好，叫我一声"
+  },
+  {
+    "role": "assistant",
+    "content": "在呢在呢，我听到你说“你好，叫我一声”啦。今天想让我陪你做点什么？"
+  }
+]

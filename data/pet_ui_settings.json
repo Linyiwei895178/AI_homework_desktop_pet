@@ -1,9 +1,13 @@
 {
   "pin_top": true,
   "hover_fade": false,
-  "status_bar": false,
-  "chat_open": false,
+  "status_bar": true,
+  "chat_open": true,
   "voice_pack_id": "",
+  "desktop_behavior": {
+    "auto_walk": false,
+    "follow_mouse_mode": 0
+  },
   "tts_settings": {
     "enabled": true,
     "provider": "auto",
@@ -30,5 +34,71 @@
     "openvoice_device": "auto",
     "tts_rate": "",
     "tts_volume": ""
+  },
+  "personalization_settings": {
+    "speech_style": {
+      "tone": "电子管家",
+      "nickname": "主人",
+      "catchphrase": "我在呢",
+      "use_emoji": true
+    },
+    "interaction_frequency": {
+      "proactive_level": 45,
+      "quiet_when_busy": true,
+      "quiet_hours": "00:00-09:00"
+    },
+    "desktop_access": {
+      "foreground_observation_authorized": false,
+      "proactive_comment_enabled": true,
+      "include_window_title": true,
+      "comment_interval_seconds": 150
+    },
+    "appearance_actions": {
+      "theme_color": "天空蓝",
+      "idle_action": "小步走动",
+      "transparency": 92
+    },
+    "companion_mode": {
+      "mode": "学习陪伴",
+      "auto_switch": true,
+      "focus_silence": true
+    },
+    "emotion_system": {
+      "enable_emotion": true,
+      "mood_sensitivity": 39,
+      "intimacy_growth": 50
+    },
+    "reminders": {
+      "water": true,
+      "rest": true,
+      "pomodoro": false,
+      "meal": false,
+      "sleep": true,
+      "style": "温柔提醒"
+    },
+    "memory_relationship": {
+      "relationship": "朋友",
+      "remember_preferences": true,
+      "remember_projects": true,
+      "user_title": "用户"
+    },
+    "voice_expression": {
+      "voice_enabled": true,
+      "voice_style": "御姐音",
+      "speech_rate": 46,
+      "bubble_density": 50
+    },
+    "desktop_behavior": {
+      "activity_range": "跟随活跃窗口",
+      "avoid_windows": true,
+      "follow_mouse": false,
+      "multi_screen": true
+    },
+    "boundaries": {
+      "no_disturb_when_fullscreen": true,
+      "safe_topics": "不过度亲密、不讨论隐私",
+      "comfort_level": "明显关心",
+      "allow_close_expression": false
+    }
   }
 }

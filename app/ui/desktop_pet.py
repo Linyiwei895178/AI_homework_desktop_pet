@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import math
 import os
 import random
 import re
@@ -31,6 +32,7 @@ from PySide6.QtGui import QColor, QCursor, QFont, QImage, QKeyEvent, QMouseEvent
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
 from PySide6.QtWidgets import (
   QApplication,
+  QCheckBox,
   QComboBox,
   QFrame,
   QHBoxLayout,
@@ -39,6 +41,7 @@ from PySide6.QtWidgets import (
   QListWidget,
   QProgressBar,
   QPushButton,
+  QScrollArea,
   QTextEdit,
   QVBoxLayout,
   QWidget,
@@ -61,6 +64,7 @@ from app.ui.widgets import (
     _glass_style,
     _load_pixmap,
     apply_zhegou_idle_thumb,
+    build_follow_mouse_mode_setting,
     is_mao_pro_zh_model,
     load_custom_pet_ids,
     motion_label_from_filename,
@@ -73,7 +77,16 @@ from models.vision.computer_activity_detector import (
     build_companion_event,
     build_local_companion_comment,
 )
-from app.ui.ui_settings_store import load_ui_settings
+from app.ui.pet_motion import (
+    AUTO_WALK_ARRIVE_EPS,
+    clamp_window_position,
+    random_auto_walk_target,
+)
+from app.ui.ui_settings_store import (
+    desktop_behavior_from_settings,
+    load_ui_settings,
+    merge_ui_settings,
+)
 from app.ui.feedback_bubble import show_feedback_message
 from models.state.user_profile import UserProfile
 from utils.config import config
@@ -167,6 +180,8 @@ HEAD_CENTER_Y_OFFSET = 60
 ANGLE_X_MIN, ANGLE_X_MAX = -30.0, 30.0
 ANGLE_Y_MIN, ANGLE_Y_MAX = -20.0, 20.0
 WIN32_TRANSPARENT_COLORKEY = 0x0000FF00
+# OpenGL 清屏色须与色键一致（纯绿），由 Windows LWA_COLORKEY 抠成透明底。
+LIVE2D_CLEAR_COLOR = (0.0, 1.0, 0.0, 1.0)
 
 _SETTINGS_DIR = os.path.join(
     PROJECT_ROOT,
@@ -979,6 +994,7 @@ class PetControlConsole(ControlConsole):
     self._reload_flat_tab()
     self._setup_console_nav()
     self.sync_dashboard_stats()
+    self._desk._inject_desktop_behavior_settings(self)
 
   def _setup_console_nav(self) -> None:
     self.resize(800, 600)
@@ -2088,8 +2104,8 @@ class Live2DWidget(QOpenGLWidget):
   def paintGL(self) -> None:
     if self._pet._model is None:
       return
-    glClearColor(0.0, 1.0, 0.0, 1.0)
-    live2d.clearBuffer(0.0, 1.0, 0.0, 1.0)
+    glClearColor(0.0, 0.0, 0.0, 0.0)
+    live2d.clearBuffer(0.0, 0.0, 0.0, 0.0)
     self._pet._model.Draw()
 
   def mouseMoveEvent(self, event: QMouseEvent) -> None:
@@ -2338,6 +2354,18 @@ class DesktopPet:
     self._active_pet: dict | None = None
     self._console: PetControlConsole | None = None
     self._chat_stream: ChatStreamBridge | None = None
+    self._auto_walk_enabled = False
+    self._auto_walk_timer: Optional[QTimer] = None
+    self._auto_walk_target_x = 0.0
+    self._auto_walk_target_y = 0.0
+    self._auto_walk_wait_timer: Optional[QTimer] = None
+    self._auto_walk_has_target = False
+    self._auto_walk_motion_state: Optional[str] = None
+    self._follow_timer: Optional[QTimer] = None
+    self._follow_enabled = False
+    self._follow_mode = 0
+    self._auto_walk_checkbox: QCheckBox | None = None
+    self._follow_mouse_combo: QComboBox | None = None
     self._companion_bubble_active = False
     self._companion_bubble_token = 0
 
@@ -2907,18 +2935,31 @@ class DesktopPet:
 
     QTimer.singleShot(2500, _restore)
 
-  def play_motion(self, motion_name: str) -> bool:
+  def play_motion(self, motion_name: str, *, auto_walk: bool = False) -> bool:
     key = motion_name.strip()
+    if auto_walk and (not self._auto_walk_enabled or self._motion_should_pause()):
+      return False
+
     if self._is_flat_mode():
       player = self._plane_player()
       if player is None:
         return False
       if key.lower() in ("idle", "待机"):
         player.show_idle()
+        if auto_walk:
+          return True
         print(f"[DesktopPet] 平面角色回到待机")
+        return True
+      if auto_walk and key.lower() == "walk":
+        if player.play_motion(key):
+          return True
+        player.show_idle()
         return True
       if player.play_motion(key):
         print(f"[DesktopPet] 播放平面动作: {key}")
+        return True
+      if auto_walk:
+        player.show_idle()
         return True
       print(f"[DesktopPet] 未找到平面动作: {key}")
       return False
@@ -2926,20 +2967,35 @@ class DesktopPet:
       return False
     group, index = self._resolve_motion(motion_name)
     if group is None:
+      if auto_walk and key.lower() in ("idle", "待机"):
+        self._start_idle_motion()
+        return True
+      if auto_walk:
+        return False
       print(f"[DesktopPet] 未找到动作: {motion_name}")
       return False
+
+    if auto_walk and key.lower() in ("idle", "待机"):
+      self._start_idle_motion()
+      return True
+
     self._model.StopAllMotions()
+    if auto_walk and key.lower() == "walk":
+      self._model.StartMotion(group, index, MotionPriority.NORMAL)
+      return True
+
     self._model.StartMotion(
       group,
       index,
       MotionPriority.FORCE,
       onFinishMotionHandler=self._start_idle_motion,
     )
-    try:
+    if not auto_walk:
+      try:
         self._model.SetExpression(motion_name)
-    except Exception:
+      except Exception:
         pass
-    print(f"[DesktopPet] 播放动作: {motion_name}")
+      print(f"[DesktopPet] 播放动作: {motion_name}")
     return True
 
   def set_expression(self, emotion: str) -> bool:
@@ -3035,9 +3091,13 @@ class DesktopPet:
     self._timer.timeout.connect(self._tick)
     self._timer.start(16)
 
+    self._init_auto_walk_timer()
+    self._init_follow_timer()
+
     self._start_computer_companion()
     self._start_state_speech_hints()
     QTimer.singleShot(0, self._restore_last_pet)
+    QTimer.singleShot(200, self._after_restore_last_pet_motion_sync)
 
     self._app.exec()
     if self._running:
@@ -3259,6 +3319,375 @@ class DesktopPet:
       self._layout_bubbles()
     if save_memory:
       self._save_pet_memory()
+  def _after_restore_last_pet_motion_sync(self) -> None:
+    """换模型/恢复位置后确保游走与跟随定时器运行。"""
+    self._ensure_auto_walk_timer_running()
+    self._ensure_follow_timer_running()
+    if self._auto_walk_enabled and not self._follow_enabled and not self._auto_walk_has_target:
+      self._start_auto_walk_target()
+
+  def _init_auto_walk_timer(self) -> None:
+    """独立自由游走定时器（与追鼠标解耦）。"""
+    if self._auto_walk_timer is not None:
+      try:
+        self._auto_walk_timer.stop()
+        self._auto_walk_timer.deleteLater()
+      except RuntimeError:
+        pass
+    parent = self._app if self._app is not None else self._window
+    self._auto_walk_timer = QTimer(parent)
+    self._auto_walk_timer.setTimerType(Qt.TimerType.CoarseTimer)
+    self._auto_walk_timer.timeout.connect(self._auto_walk_tick)
+    self._auto_walk_timer.start(33)
+    if self._auto_walk_enabled and not self._follow_enabled:
+      self._start_auto_walk_target()
+
+  def _ensure_auto_walk_timer_running(self) -> None:
+    if not self._running or self._closed:
+      return
+    if self._auto_walk_timer is None:
+      self._init_auto_walk_timer()
+      return
+    try:
+      if not self._auto_walk_timer.isActive():
+        self._auto_walk_timer.start(33)
+    except RuntimeError:
+      self._auto_walk_timer = None
+      self._init_auto_walk_timer()
+
+  def _auto_walk_should_pause(self) -> bool:
+    return bool(
+      self._dragging
+      or self._resizing_corner
+      or self._chat_open
+      or self._any_menu_open()
+      or (self._follow_enabled and self._follow_mode > 0)
+    )
+
+  def _auto_walk_is_waiting(self) -> bool:
+    timer = self._auto_walk_wait_timer
+    if timer is None:
+      return False
+    try:
+      return bool(timer.isActive())
+    except RuntimeError:
+      self._auto_walk_wait_timer = None
+      return False
+
+  def _stop_auto_walk_wait(self) -> None:
+    timer = self._auto_walk_wait_timer
+    if timer is None:
+      return
+    try:
+      timer.stop()
+      timer.deleteLater()
+    except RuntimeError:
+      pass
+    self._auto_walk_wait_timer = None
+
+  def _start_auto_walk_target(self) -> None:
+    """随机生成屏幕内目标点（避开边缘）。"""
+    screen = QApplication.primaryScreen()
+    if screen is None:
+      return
+    geo = screen.availableGeometry()
+    tx, ty = random_auto_walk_target(
+      float(geo.x()),
+      float(geo.y()),
+      float(geo.width()),
+      float(geo.height()),
+      float(self._win_w),
+      float(self._win_h),
+    )
+    self._auto_walk_target_x = tx
+    self._auto_walk_target_y = ty
+    self._auto_walk_has_target = True
+
+  def _on_auto_walk_wait_finished(self) -> None:
+    if not self._auto_walk_enabled or self._auto_walk_should_pause():
+      return
+    self._start_auto_walk_target()
+
+  def _start_auto_walk_wait(self) -> None:
+    self._stop_auto_walk_wait()
+    dwell_ms = int(random.uniform(2.0, 3.0) * 1000)
+    parent = self._app if self._app is not None else self._window
+    self._auto_walk_wait_timer = QTimer(parent)
+    self._auto_walk_wait_timer.setSingleShot(True)
+    self._auto_walk_wait_timer.timeout.connect(self._on_auto_walk_wait_finished)
+    self._auto_walk_wait_timer.start(dwell_ms)
+
+  def _set_auto_walk_motion(self, state: str) -> None:
+    if self._auto_walk_motion_state == state:
+      return
+    self._auto_walk_motion_state = state
+    self.play_motion(state, auto_walk=True)
+
+  def _auto_walk_tick(self) -> None:
+    """独立自由游走帧更新。"""
+    if not self._auto_walk_enabled:
+      return
+    if self._auto_walk_should_pause():
+      return
+    if self._auto_walk_is_waiting():
+      return
+    if self._window is None:
+      return
+
+    wx, wy = self._get_pet_window_xy()
+    if not self._auto_walk_has_target:
+      self._start_auto_walk_target()
+
+    dx = self._auto_walk_target_x - wx
+    dy = self._auto_walk_target_y - wy
+    dist = math.hypot(dx, dy)
+    if dist < AUTO_WALK_ARRIVE_EPS:
+      self._auto_walk_has_target = False
+      self._set_auto_walk_motion("idle")
+      self._start_auto_walk_wait()
+      return
+
+    speed = 0.05
+    ratio = min(1.0, max(0.8, dist * speed) / dist) if dist >= 1e-4 else 0.0
+    new_x = wx + dx * ratio
+    new_y = wy + dy * ratio
+    screen = QApplication.primaryScreen()
+    if screen is not None:
+      geo = screen.availableGeometry()
+      new_x, new_y = clamp_window_position(
+        new_x,
+        new_y,
+        float(geo.x()),
+        float(geo.y()),
+        float(geo.width()),
+        float(geo.height()),
+        float(self._win_w),
+        float(self._win_h),
+      )
+    self._set_auto_walk_motion("walk")
+    self._move_pet_window(new_x, new_y)
+
+  def _init_follow_timer(self) -> None:
+    """独立追鼠标定时器（与游走 / 主循环解耦）。"""
+    if self._follow_timer is not None:
+      try:
+        self._follow_timer.stop()
+        self._follow_timer.deleteLater()
+      except RuntimeError:
+        pass
+    parent = self._app if self._app is not None else self._window
+    self._follow_timer = QTimer(parent)
+    self._follow_timer.setTimerType(Qt.TimerType.CoarseTimer)
+    self._follow_timer.timeout.connect(self._follow_tick)
+    self._follow_timer.start(33)
+
+  def _ensure_follow_timer_running(self) -> None:
+    if not self._running or self._closed:
+      return
+    if self._follow_timer is None:
+      self._init_follow_timer()
+      return
+    try:
+      if not self._follow_timer.isActive():
+        self._follow_timer.start(33)
+    except RuntimeError:
+      self._follow_timer = None
+      self._init_follow_timer()
+
+  def _get_pet_window_xy(self) -> tuple[float, float]:
+    if self._window is None:
+      return float(self.position[0]), float(self.position[1])
+    if win32gui and self._hwnd:
+      try:
+        left, top, _right, _bottom = win32gui.GetWindowRect(self._hwnd)
+        return float(left), float(top)
+      except Exception:
+        pass
+    geo = self._window.frameGeometry()
+    return float(geo.x()), float(geo.y())
+
+  def _clamp_follow_position(self, x: float, y: float) -> tuple[float, float]:
+    screen = QApplication.primaryScreen()
+    if screen is None:
+      return x, y
+    geo = screen.availableGeometry()
+    min_x = float(geo.x())
+    min_y = float(geo.y())
+    max_x = min_x + float(geo.width()) - float(self._win_w)
+    max_y = min_y + float(geo.height()) - float(self._win_h)
+    return (
+      max(min_x, min(max_x, x)),
+      max(min_y, min(max_y, y)),
+    )
+
+  def _follow_tick(self) -> None:
+    """独立追鼠标帧更新（仅本定时器驱动）。"""
+    if not self._follow_enabled or self._follow_mode == 0:
+      return
+    if self._dragging or self._any_menu_open() or self._chat_open:
+      return
+    if self._window is None:
+      return
+
+    mouse = QCursor.pos()
+    mx, my = float(mouse.x()), float(mouse.y())
+    wx, wy = self._get_pet_window_xy()
+    cx = wx + self._win_w * 0.5
+    cy = wy + self._win_h * 0.5
+    dx = cx - mx
+    dy = cy - my
+    dist = math.hypot(dx, dy)
+
+    if self._follow_mode == 1:
+      keep = 60.0
+      if dist <= keep:
+        return
+      if dist < 1e-4:
+        return
+      target_cx = mx + dx / dist * keep
+      target_cy = my + dy / dist * keep
+      target_x = target_cx - self._win_w * 0.5
+      target_y = target_cy - self._win_h * 0.5
+      offset_x = target_x - wx
+      offset_y = target_y - wy
+      gap = math.hypot(offset_x, offset_y)
+      if gap < 0.5:
+        return
+      speed = 0.12
+      ratio = min(1.0, max(0.8, gap * speed) / gap)
+      new_x = wx + offset_x * ratio
+      new_y = wy + offset_y * ratio
+    elif self._follow_mode == 2:
+      target_x = mx - self._win_w * 0.5
+      target_y = my - self._win_h * 0.5
+      offset_x = target_x - wx
+      offset_y = target_y - wy
+      gap = math.hypot(offset_x, offset_y)
+      if gap < 0.5:
+        return
+      speed = 0.12
+      ratio = min(1.0, max(0.8, gap * speed) / gap)
+      new_x = wx + offset_x * ratio
+      new_y = wy + offset_y * ratio
+    else:
+      return
+
+    new_x, new_y = self._clamp_follow_position(new_x, new_y)
+    self._move_pet_window(new_x, new_y)
+
+  def _move_pet_window(self, x: float, y: float) -> None:
+    """移动桌宠窗口（优先 Win32 SetWindowPos，避免分层窗口 move 不生效）。"""
+    if self._window is None:
+      return
+    ix, iy = int(round(x)), int(round(y))
+    self.position = [ix, iy]
+    moved = False
+    if win32gui and self._hwnd:
+      try:
+        win32gui.SetWindowPos(
+          self._hwnd,
+          0,
+          ix,
+          iy,
+          0,
+          0,
+          win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+        )
+        moved = True
+      except Exception:
+        pass
+    if not moved:
+      self._window.move(ix, iy)
+    if self._status_bar_enabled or self._chat_open:
+      self._layout_bubbles()
+
+  def _motion_should_pause(self) -> bool:
+    console_open = False
+    if self._console is not None:
+      try:
+        console_open = self._console.isVisible()
+      except RuntimeError:
+        console_open = False
+    return bool(
+      self._dragging
+      or self._resizing_corner
+      or self._chat_open
+      or self._any_menu_open()
+      or console_open
+    )
+
+  def set_follow_mouse_mode(self, mode: int) -> None:
+    self._follow_mode = max(0, min(2, int(mode)))
+    self._follow_enabled = self._follow_mode > 0
+    if self._follow_mouse_combo is not None:
+      self._follow_mouse_combo.blockSignals(True)
+      for i in range(self._follow_mouse_combo.count()):
+        raw = self._follow_mouse_combo.itemData(i)
+        try:
+          item_mode = int(raw)
+        except (TypeError, ValueError):
+          item_mode = i
+        if item_mode == self._follow_mode:
+          self._follow_mouse_combo.setCurrentIndex(i)
+          break
+      self._follow_mouse_combo.blockSignals(False)
+    self._save_settings()
+    self._ensure_follow_timer_running()
+    if self._follow_enabled:
+      self._stop_auto_walk_wait()
+      self._auto_walk_has_target = False
+    elif self._auto_walk_enabled and not self._auto_walk_has_target and not self._auto_walk_is_waiting():
+      self._start_auto_walk_target()
+
+  def set_auto_walk_enabled(self, enabled: bool) -> None:
+    self._auto_walk_enabled = bool(enabled)
+    if self._auto_walk_enabled and not self._follow_enabled:
+      if not self._auto_walk_has_target and not self._auto_walk_is_waiting():
+        self._start_auto_walk_target()
+    else:
+      self._stop_auto_walk_wait()
+      self._auto_walk_has_target = False
+      self._auto_walk_motion_state = None
+      self.play_motion("idle", auto_walk=True)
+    if self._auto_walk_checkbox is not None:
+      self._auto_walk_checkbox.blockSignals(True)
+      self._auto_walk_checkbox.setChecked(self._auto_walk_enabled)
+      self._auto_walk_checkbox.blockSignals(False)
+    self._ensure_auto_walk_timer_running()
+    self._save_settings()
+
+  def _inject_desktop_behavior_settings(self, console: PetControlConsole) -> None:
+    """在设置面板「桌宠设置」页顶部插入游走 / 追鼠标控件。"""
+    stack = getattr(console, "_stack", None)
+    if stack is None or stack.count() < 1:
+      return
+    page = stack.widget(0)
+    if page is None:
+      return
+    scroll = page.findChild(QScrollArea)
+    if scroll is None:
+      return
+    inner = scroll.widget()
+    inner_lay = inner.layout() if inner is not None else None
+    if inner_lay is None:
+      return
+    frame = QFrame()
+    frame.setStyleSheet(_glass_style(16))
+    flay = QVBoxLayout(frame)
+    flay.addWidget(QLabel("<b>桌面行为（实时）</b>"))
+    chk = QCheckBox("自由游走（空闲时在桌面缓慢平移）")
+    chk.setChecked(self._auto_walk_enabled)
+    chk.toggled.connect(self.set_auto_walk_enabled)
+    flay.addWidget(chk)
+    self._auto_walk_checkbox = chk
+    follow_frame, follow_combo = build_follow_mouse_mode_setting(
+      self._follow_mode,
+      self.set_follow_mouse_mode,
+      frame,
+    )
+    flay.addWidget(follow_frame)
+    self._follow_mouse_combo = follow_combo
+    inner_lay.insertWidget(0, frame)
 
   def _ui_scale_factor(self) -> float:
     return max(0.35, min(1.25, self._win_w / BASE_WINDOW_W))
@@ -3351,8 +3780,10 @@ class DesktopPet:
       pass
 
   def _stop_runtime_timers(self) -> None:
+    """仅程序退出时停止定时器；运行中勿调用。"""
     self._running = False
-    for attr in ("_timer", "_computer_comment_timer", "_speech_hint_timer"):
+    self._stop_auto_walk_wait()
+    for attr in ("_timer", "_auto_walk_timer", "_follow_timer", "_computer_comment_timer", "_speech_hint_timer"):
       timer = getattr(self, attr, None)
       if timer is not None:
         try:
@@ -3478,14 +3909,15 @@ class DesktopPet:
       if not self._dragging:
         self._update_hover_alpha((mx, my))
     else:
-      if self._model is None:
-        return
-      self._update_gaze(mx, my)
-      if not self._dragging:
+      if self._model is not None:
+        self._update_gaze(mx, my)
+        if not self._dragging:
+          self._update_hover_alpha((mx, my))
+        self._model.Update()
+        if self._window and self._window._gl:
+          self._window._gl.update()
+      elif not self._dragging:
         self._update_hover_alpha((mx, my))
-      self._model.Update()
-      if self._window and self._window._gl:
-        self._window._gl.update()
     if self.arc_menu:
       self.arc_menu.tick(1.0 / 60.0)
     self._poll_right_button_menu()
@@ -4118,9 +4550,12 @@ class DesktopPet:
     data: dict[str, Any] = dict(defaults)
     try:
       with open(SETTINGS_PATH, encoding="utf-8") as f:
-        data.update(json.load(f))
+        loaded = json.load(f)
+      if isinstance(loaded, dict):
+        data.update(loaded)
     except (OSError, json.JSONDecodeError, TypeError):
       pass
+    data = merge_ui_settings(data)
     mem = self._load_pet_memory()
     if mem:
       data.update({k: mem[k] for k in defaults if k in mem})
@@ -4138,17 +4573,36 @@ class DesktopPet:
     self._chat_open = bool(data.get("chat_open", defaults["chat_open"]))
     self._voice_pack_id = str(data.get("voice_pack_id", defaults["voice_pack_id"]) or "").strip()
     self._tts_settings = normalize_tts_settings(data.get("tts_settings", defaults["tts_settings"]))
+    behavior = desktop_behavior_from_settings(data)
+    self._auto_walk_enabled = bool(behavior.get("auto_walk", False))
+    self._follow_mode = max(0, min(2, int(behavior.get("follow_mouse_mode", 0))))
+    self._follow_enabled = self._follow_mode > 0
     self._sync_team_c_voice_context()
 
   def _save_settings(self) -> None:
-    data = {
+    data: dict[str, Any] = {}
+    try:
+      if os.path.isfile(SETTINGS_PATH):
+        with open(SETTINGS_PATH, encoding="utf-8") as f:
+          loaded = json.load(f)
+        if isinstance(loaded, dict):
+          data = loaded
+    except (OSError, json.JSONDecodeError, TypeError):
+      pass
+    data.update({
       "pin_top": self._pin_top,
       "hover_fade": self._hover_fade_enabled,
       "status_bar": self._status_bar_enabled,
       "chat_open": self._chat_open,
       "voice_pack_id": self._voice_pack_id,
       "tts_settings": self._tts_settings,
-    }
+    })
+    behavior = data.get("desktop_behavior")
+    if not isinstance(behavior, dict):
+      behavior = {}
+    behavior["auto_walk"] = self._auto_walk_enabled
+    behavior["follow_mouse_mode"] = self._follow_mode
+    data["desktop_behavior"] = behavior
     try:
       os.makedirs(_SETTINGS_DIR, exist_ok=True)
       with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
@@ -4301,7 +4755,9 @@ class DesktopPet:
       return
     dx = screen_x - self._drag_start_screen[0]
     dy = screen_y - self._drag_start_screen[1]
-    self._window.move(self._drag_start_win[0] + dx, self._drag_start_win[1] + dy)
+    nx = self._drag_start_win[0] + dx
+    ny = self._drag_start_win[1] + dy
+    self._move_pet_window(nx, ny)
     if self._status_bar_enabled or self._chat_open:
       self._layout_bubbles()
     self._save_pet_memory()
@@ -4381,6 +4837,8 @@ class DesktopPet:
     self._click_start = pos
     self._click_moved = False
     self._dragging = True
+    if self._auto_walk_enabled:
+      self._set_auto_walk_motion("idle")
     self._drag_start_screen = self._screen_pos()
     if self._window:
       self._drag_start_win = (self._window.x(), self._window.y())
@@ -4765,6 +5223,7 @@ class DesktopPet:
       personalization = ui_settings.get("personalization_settings")
       if isinstance(personalization, dict):
         state["personalization_settings"] = personalization
+        state["personalization"] = personalization
     except Exception as exc:
       print(f"[DesktopPet] Load personalization settings failed: {exc}")
     try:

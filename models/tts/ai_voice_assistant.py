@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
-from app.ui.ui_settings_store import load_ui_settings
+from app.ui.ui_settings_store import load_ui_settings, merge_personalization_into_state
 from models.nlp.chat_memory import ChatMemory
 from models.nlp.deepseek_api import DeepSeekClient
 from models.nlp.prompt_builder import (
@@ -203,11 +203,10 @@ class AIChatVoiceAssistant:
 
     @staticmethod
     def _inject_personalization_context(state: Dict[str, Any]) -> None:
-        if "personalization_settings" not in state:
-            settings = load_ui_settings()
-            personalization = settings.get("personalization_settings")
-            if isinstance(personalization, dict):
-                state["personalization_settings"] = personalization
+        try:
+            merge_personalization_into_state(state)
+        except Exception as exc:
+            print(f"[AIChatVoiceAssistant] 加载桌宠个性化设置失败: {exc}")
         if "user_profile" not in state:
             try:
                 state["user_profile"] = UserProfile.load().to_prompt_context()

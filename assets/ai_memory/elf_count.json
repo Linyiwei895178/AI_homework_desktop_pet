@@ -1,1 +1,26 @@
-[]
+[
+  {
+    "role": "user",
+    "content": "你好"
+  },
+  {
+    "role": "assistant",
+    "content": "在呢在呢，我听到你说“你好”啦。今天想让我陪你做点什么？"
+  },
+  {
+    "role": "user",
+    "content": "你在干嘛"
+  },
+  {
+    "role": "assistant",
+    "content": "你是在对我说“你在干嘛”呀，我听到了，也会认真回应你，不只是放进记忆里。"
+  },
+  {
+    "role": "user",
+    "content": "你叫我什么"
+  },
+  {
+    "role": "assistant",
+    "content": "关于“你叫我什么”，我先给你一个短短的想法：可以从最容易确认的一点开始。"
+  }
+]
