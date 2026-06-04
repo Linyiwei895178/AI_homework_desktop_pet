@@ -1,0 +1,44 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "懒羊羊3.moc3",
+    "Textures": [
+      "懒羊羊3.1024/texture_00.png"
+    ],
+    "Physics": "懒羊羊3.physics3.json",
+    "DisplayInfo": "懒羊羊3.cdi3.json",
+    "Expressions": [
+      {
+        "Name": "喝点可口可乐",
+        "File": "喝点可口可乐.exp3.json"
+      },
+      {
+        "Name": "大哭",
+        "File": "大哭.exp3.json"
+      },
+      {
+        "Name": "委屈",
+        "File": "委屈.exp3.json"
+      },
+      {
+        "Name": "打游戏",
+        "File": "打游戏.exp3.json"
+      },
+      {
+        "Name": "星星眼",
+        "File": "星星眼.exp3.json"
+      },
+      {
+        "Name": "生气",
+        "File": "生气.exp3.json"
+      }
+    ]
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": []
+    }
+  ]
+}
