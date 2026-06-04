@@ -2852,7 +2852,7 @@ class DesktopPet:
         "value": m,
         "kind": "motion",
       })
-    # Add all expressions (no truncation)
+    # Add expressions, limited to 16
     exp_items = []
     for e in self.available_expressions:
       exp_items.append({
@@ -3106,74 +3106,6 @@ class DesktopPet:
 
   def _head_center(self) -> tuple[int, int]:
     return (self._win_w // 2, max(40, self._win_h // 2 - HEAD_CENTER_Y_OFFSET))
-
-  def _arc_menu_anchor_local(self) -> tuple[int, int]:
-    """Return a local-window coordinate that sits near the character's head.
-
-    For Live2D models the anchor is estimated by grid-sampling HitAreaHead /
-    HitAreaBody.  For flat (plane) characters the anchor is derived from the
-    visible pixmap rect.  Fallback values are used when sampling fails.
-    """
-    # ----- Live2D path --------------------------------------------------------
-    if self._model is not None:
-      head_points: list[tuple[int, int]] = []
-      body_points: list[tuple[int, int]] = []
-      step = max(8, min(self._win_w, self._win_h) // 60)
-      for x in range(0, self._win_w + 1, step):
-        for y in range(0, self._win_h + 1, step):
-          try:
-            if self._model.HitTest("HitAreaHead", x, y):
-              head_points.append((x, y))
-            elif self._model.HitTest("HitAreaBody", x, y):
-              body_points.append((x, y))
-          except Exception:
-            pass  # some models raise on unrecognised hit areas
-      if head_points:
-        xs = [p[0] for p in head_points]
-        ys = [p[1] for p in head_points]
-        anchor_x = (min(xs) + max(xs)) // 2
-        anchor_y = int(min(ys) + (max(ys) - min(ys)) * 0.55)
-        mode = "live2d(Head)"
-      elif body_points:
-        xs = [p[0] for p in body_points]
-        ys = [p[1] for p in body_points]
-        anchor_x = (min(xs) + max(xs)) // 2
-        anchor_y = int(min(ys) + (max(ys) - min(ys)) * 0.18)
-        mode = "live2d(Body)"
-      else:
-        anchor_x = self._win_w // 2
-        anchor_y = max(70, int(self._win_h * 0.18))
-        mode = "live2d(fallback)"
-      print(
-        f"[DesktopPet] arc anchor local=({anchor_x},{anchor_y}), "
-        f"win={self._win_w}x{self._win_h}, mode={mode}"
-      )
-      return anchor_x, anchor_y
-    # ----- Flat / plane path --------------------------------------------------
-    if self._is_flat_mode():
-      player = self._plane_player()
-      if player and not player._pixmap_rect.isEmpty():
-        rect = player._pixmap_rect
-        anchor_x = rect.center().x()
-        anchor_y = rect.top() + int(rect.height() * 0.25)
-        mode = "flat(pixmap)"
-      else:
-        anchor_x = self._win_w // 2
-        anchor_y = max(55, int(self._win_h * 0.22))
-        mode = "flat(fallback)"
-      print(
-        f"[DesktopPet] arc anchor local=({anchor_x},{anchor_y}), "
-        f"win={self._win_w}x{self._win_h}, mode={mode}"
-      )
-      return anchor_x, anchor_y
-    # ----- No model / no flat fallback ----------------------------------------
-    anchor_x = self._win_w // 2
-    anchor_y = max(70, int(self._win_h * 0.18))
-    print(
-      f"[DesktopPet] arc anchor local=({anchor_x},{anchor_y}), "
-      f"win={self._win_w}x{self._win_h}, mode=fallback"
-    )
-    return anchor_x, anchor_y
 
   def _character_layout(self) -> tuple[int, int, int]:
     """返回 (center_x, head_top_y, body_bottom_y)。"""
@@ -4744,16 +4676,12 @@ class DesktopPet:
     if item == "设置面板":
       self._open_settings_panel()
     elif item == "动作展示":
-      center = self._arc_menu_anchor_local()
+      center = self._head_center()
       items = self._current_arc_motion_items()
       if not items:
         print("[DesktopPet] 当前角色没有可用动作")
         return
-      if self._window:
-        global_center = self._window.mapToGlobal(QPoint(center[0], center[1]))
-        self.arc_menu.show(global_center.x(), global_center.y(), items)
-      else:
-        self.arc_menu.show(center[0], center[1], items)
+      self.arc_menu.show(center[0], center[1], items)
       self.arc_menu.raise_()
       if self._window:
         self._lower_character_layer()

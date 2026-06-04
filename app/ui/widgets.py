@@ -962,14 +962,8 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.visible = False
         self.center_x = self.center_y = 0
         self.items: list[dict[str, Any]] = []
@@ -986,85 +980,18 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
         self.RING_GAP = _scaled_int(self._BASE_RING_GAP, self._ui_scale, 52)
         self._font = _app_font(_scaled_int(12, self._ui_scale, 9))
 
-    def _reset_layout_metrics(self) -> None:
-        self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 60)
-        self.BUTTON_SIZE = _scaled_int(self._BASE_BUTTON_SIZE, self._ui_scale, 28)
-        self.RING_GAP = _scaled_int(self._BASE_RING_GAP, self._ui_scale, 52)
-        self._font = _app_font(_scaled_int(12, self._ui_scale, 9))
-
-    def _button_center_global_for(self, index: int, center_x: int, center_y: int) -> tuple[int, int]:
-        """Return the screen-global centre of the button for the given item index."""
-        ring_index, idx_in_r, cnt_in_r = self._ring_for_index(index)
-        radius = self.RADIUS + ring_index * self.RING_GAP
-        deg = math.radians(self._angle_deg_in_ring(idx_in_r, cnt_in_r))
-        gx = center_x + int(radius * math.sin(deg))
-        gy = center_y - int(radius * math.cos(deg))
-        return gx, gy
-
-    def _menu_bounds_for_center(self, center_x: int, center_y: int) -> QRect:
-        """Calculate the minimal bounding rect for all buttons around the given centre."""
-        if not self.items:
-            return QRect(center_x - 40, center_y - 40, 80, 80)
-        margin = int(self.BUTTON_SIZE * self.HOVER_SCALE / 2) + 18
-        xs: list[int] = []
-        ys: list[int] = []
-        for i in range(len(self.items)):
-            bx, by = self._button_center_global_for(i, center_x, center_y)
-            xs.append(bx)
-            ys.append(by)
-        left = min(xs) - margin
-        right = max(xs) + margin
-        top = min(ys) - margin
-        bottom = max(ys) + margin
-        return QRect(left, top, max(1, right - left), max(1, bottom - top))
-
     def show_menu(self, center_x: int, center_y: int, items: list[dict[str, Any]]) -> None:
-        self._reset_layout_metrics()
+        self.center_x, self.center_y = center_x, center_y
         self.items = list(items)
         self.visible = True
         self.hover_index = -1
         self._elapsed = 0.0
-        screen = QApplication.screenAt(QPoint(center_x, center_y)) or QApplication.primaryScreen()
-        area = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
-        # Compute initial bounding box
-        bounds = self._menu_bounds_for_center(center_x, center_y)
-        max_w = int(area.width() * 0.92)
-        max_h = int(area.height() * 0.86)
-        # Shrink if the bounding box is too large for the screen
-        if bounds.width() > max_w or bounds.height() > max_h:
-            shrink = min(max_w / max(1, bounds.width()), max_h / max(1, bounds.height()))
-            shrink = max(0.60, min(1.0, shrink))
-            self.RADIUS = max(95, int(self.RADIUS * shrink))
-            self.RING_GAP = max(48, int(self.RING_GAP * shrink))
-            self.BUTTON_SIZE = max(38, int(self.BUTTON_SIZE * shrink))
-            self._font = _app_font(max(9, int(12 * shrink)))
-            bounds = self._menu_bounds_for_center(center_x, center_y)
-        # Gentle shift if bubbles still partly outside screen; do NOT snap to screen centre
-        dx = 0
-        dy = 0
-        margin = 8
-        if bounds.left() < area.left() + margin:
-            dx = area.left() + margin - bounds.left()
-        elif bounds.right() > area.right() - margin:
-            dx = area.right() - margin - bounds.right()
-        if bounds.top() < area.top() + margin:
-            dy = area.top() + margin - bounds.top()
-        elif bounds.bottom() > area.bottom() - margin:
-            dy = area.bottom() - margin - bounds.bottom()
-        center_x += dx
-        center_y += dy
-        bounds = self._menu_bounds_for_center(center_x, center_y)
-        # Store global centre and set window geometry to exactly wrap all buttons
-        self.center_x, self.center_y = center_x, center_y
-        self.setGeometry(bounds)
+        ring_count = len(self._rings())
+        max_radius = self.RADIUS + max(0, ring_count - 1) * self.RING_GAP
+        pad = max_radius + self.BUTTON_SIZE + 36
+        self.setGeometry(center_x - pad, center_y - pad, pad * 2, pad * 2)
         super().show()
         self.raise_()
-        print(
-            f"[ArcMotionMenu] show center_global=({center_x},{center_y}), "
-            f"bounds=({bounds.x()},{bounds.y()},{bounds.width()}x{bounds.height()}), "
-            f"items={len(self.items)}, rings={len(self._rings())}, "
-            f"radius={self.RADIUS}, gap={self.RING_GAP}, btn={self.BUTTON_SIZE}"
-        )
 
     def show(self, center_x: int, center_y: int, items: list[dict[str, Any]]) -> None:
         self.show_menu(center_x, center_y, items)
@@ -1114,9 +1041,12 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
         return self._angle_deg_in_ring(idx_in_r, cnt_in_r)
 
     def _btn_center(self, index: int) -> tuple[int, int]:
-        """Return the button centre in local (widget) coordinates."""
-        gx, gy = self._button_center_global_for(index, self.center_x, self.center_y)
-        return gx - self.geometry().x(), gy - self.geometry().y()
+        ring_index, idx_in_r, cnt_in_r = self._ring_for_index(index)
+        radius = self.RADIUS + ring_index * self.RING_GAP
+        deg = math.radians(self._angle_deg_in_ring(idx_in_r, cnt_in_r))
+        x = self.center_x + int(radius * math.sin(deg))
+        y = self.center_y - int(radius * math.cos(deg))
+        return x - self.x(), y - self.y()
 
     def _pop_scale(self, index: int) -> float:
         start = index * self.STAGGER
