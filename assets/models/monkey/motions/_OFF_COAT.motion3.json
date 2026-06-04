@@ -1,0 +1,20 @@
+{
+  "Version": 3,
+  "Meta": {
+    "Duration": 99999.0,
+    "FadeInTime": 0.3,
+    "FadeOutTime": 0.3
+  },
+  "Curves": [
+    {
+      "Target": "Parameter",
+      "Id": "COAT",
+      "Segments": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    }
+  ]
+}

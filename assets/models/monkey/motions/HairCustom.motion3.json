@@ -1,0 +1,58 @@
+{
+  "Version": 3,
+  "Meta": {
+    "Duration": 2.0,
+    "Fps": 30.0,
+    "FadeInTime": 0.3,
+    "FadeOutTime": 0.3,
+    "Loop": false,
+    "AreBeziersRestricted": true,
+    "CurveCount": 4,
+    "TotalSegmentCount": 4,
+    "TotalPointCount": 8,
+    "UserDataCount": 0,
+    "TotalUserDataSize": 0
+  },
+  "Curves": [
+    {
+      "Target": "Parameter",
+      "Id": "HAIR",
+      "Segments": [
+        0.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "RYGB",
+      "Segments": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "COLOR",
+      "Segments": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "BackHair",
+      "Segments": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ]
+    }
+  ]
+}

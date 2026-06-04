@@ -1,0 +1,71 @@
+{
+  "format": "pet_buddy_live2d_parametric_presets_v1",
+  "presets": {
+    "default": {
+      "label": "默认白膜",
+      "params": {}
+    },
+    "cute_round": {
+      "label": "圆润幼态",
+      "params": {
+        "head_size": 108,
+        "head_width": 104,
+        "head_height": 98,
+        "torso_width": 98,
+        "torso_height": 96,
+        "arm_length": 96,
+        "leg_length": 96,
+        "leg_thickness": 104,
+        "eye_spacing": 165,
+        "eye_width": 112,
+        "eye_height": 105,
+        "eye_y": -10,
+        "nose_size": 85,
+        "mouth_width": 88,
+        "mouth_curve": 45
+      }
+    },
+    "tall_slim": {
+      "label": "修长白膜",
+      "params": {
+        "head_size": 96,
+        "head_height": 102,
+        "neck_length": 108,
+        "torso_width": 94,
+        "torso_height": 110,
+        "arm_length": 106,
+        "arm_thickness": 92,
+        "leg_length": 112,
+        "leg_thickness": 92,
+        "leg_spread": 6,
+        "eye_spacing": 140,
+        "eye_width": 90,
+        "eye_height": 86,
+        "mouth_width": 76,
+        "mouth_curve": 10
+      }
+    },
+    "wide_face_small_body": {
+      "label": "宽脸小身体",
+      "params": {
+        "head_size": 110,
+        "head_width": 110,
+        "head_height": 96,
+        "head_y": -12,
+        "torso_width": 92,
+        "torso_height": 92,
+        "arm_length": 92,
+        "hand_size": 94,
+        "leg_length": 92,
+        "leg_thickness": 98,
+        "eye_spacing": 172,
+        "eye_width": 112,
+        "eye_height": 94,
+        "nose_y": 8,
+        "mouth_y": 12,
+        "mouth_width": 96,
+        "mouth_curve": 35
+      }
+    }
+  }
+}

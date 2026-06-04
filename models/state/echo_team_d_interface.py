@@ -26,10 +26,12 @@ EchoTeamDInterface - State / 行为决策 接口管理层
 """
 
 import threading
+import time
 from typing import Callable, Dict, Any, Optional
 
 from models.state.pet_state import PetState
 from models.state.behavior_rules import BehaviorRules
+from models.state.user_profile import UserProfile
 
 
 class EchoTeamDInterface:
@@ -49,6 +51,7 @@ class EchoTeamDInterface:
         """
         self.pet_state = pet_state_instance
         self.rules = BehaviorRules(pet_state_instance)
+        self.user_profile = UserProfile.load()
 
         # 队员C注册的状态变化监听器
         self._status_change_listener: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -111,6 +114,8 @@ class EchoTeamDInterface:
                 "event_type": "user_state_alert",
                 "state_code": user_state.get("state_code", "unknown"),
                 "suggestion": user_state.get("suggestion", ""),
+                "action": self.api_decide_action(),
+                "pet_id": self.pet_state.pet_id,
                 "mood": self.pet_state.mood,
                 "energy": self.pet_state.energy,
                 "intimacy": self.pet_state.intimacy,
@@ -171,9 +176,80 @@ class EchoTeamDInterface:
             event_data = {
                 "event_type": "chat_finished",
                 "word_count": word_count,
+                "action": self.api_decide_action(),
+                "pet_id": self.pet_state.pet_id,
                 "mood": self.pet_state.mood,
                 "energy": self.pet_state.energy,
                 "intimacy": self.pet_state.intimacy,
+            }
+            threading.Thread(
+                target=self._status_change_listener, args=(event_data,), daemon=True
+            ).start()
+
+    def api_update_from_chat_emotion(self, emotion_result: Dict[str, Any]) -> None:
+        """
+        【队员C专用】根据聊天情绪分析结果更新用户画像和桌宠状态。
+
+        `emotion_result` 可以是 analyze_chat_emotion 的结果，也可以是
+        Team C 发出的 user_chat 事件字典，其中包含 emotion_result 字段。
+        """
+        result = emotion_result.get("emotion_result") if isinstance(emotion_result, dict) else None
+        if not isinstance(result, dict):
+            result = emotion_result if isinstance(emotion_result, dict) else {}
+        if not result:
+            return
+
+        self.user_profile.update_from_chat_emotion(result)
+        try:
+            self.user_profile.save()
+        except OSError as exc:
+            print(f"[EchoTeamDInterface] 用户画像保存失败: {exc}")
+
+        label = str(result.get("emotion_label") or "neutral").strip()
+        confidence = _safe_float(result.get("confidence"), 0.0)
+        need_care = bool(result.get("need_care"))
+        ps = self.pet_state
+
+        if label == "positive":
+            ps.mood = "happy"
+            ps.intimacy = min(100, ps.intimacy + 2)
+            ps.energy = max(0, ps.energy - 1)
+        elif label == "angry":
+            ps.mood = "angry"
+            ps.energy = max(0, ps.energy - 2)
+        elif label in {"stress", "sad", "tired", "confused"}:
+            ps.mood = "sad"
+            ps.energy = max(0, ps.energy - (2 if label in {"stress", "tired"} else 1))
+            if need_care and confidence >= 0.55:
+                ps.intimacy = min(100, ps.intimacy + 1)
+        else:
+            if ps.mood == "angry":
+                ps.mood = "neutral"
+
+        if hasattr(ps, "_history"):
+            ps._history.append(
+                {
+                    "event": f"chat_emotion:{label}",
+                    "mood": ps.mood,
+                    "energy": ps.energy,
+                    "intimacy": ps.intimacy,
+                    "emotion_result": dict(result),
+                    "timestamp": time.time(),
+                }
+            )
+
+        if need_care and self._status_change_listener:
+            event_data = {
+                "event_type": "chat_emotion_alert",
+                "emotion_result": dict(result),
+                "state_code": label,
+                "suggestion": result.get("suggestion", ""),
+                "action": self.api_decide_action(),
+                "pet_id": self.pet_state.pet_id,
+                "mood": self.pet_state.mood,
+                "energy": self.pet_state.energy,
+                "intimacy": self.pet_state.intimacy,
+                "user_profile": self.user_profile.to_prompt_context(),
             }
             threading.Thread(
                 target=self._status_change_listener, args=(event_data,), daemon=True
@@ -216,6 +292,13 @@ class EchoTeamDInterface:
         """
         return self.rules.get_pet_id()
 
+    def api_set_pet_id(self, pet_id: str) -> None:
+        """
+        【队员A/队员C专用】同步当前桌宠 ID，供动作决策和音色选择使用。
+        """
+        if hasattr(self.pet_state, "set_pet_id"):
+            self.pet_state.set_pet_id(pet_id)
+
     # =========================================================================
     # 接口 10：提供给 【队员C (NLP/TTS)】 —— 注册状态变化监听
     # =========================================================================
@@ -228,7 +311,6 @@ class EchoTeamDInterface:
 
         :param callback: 签名为 callback(event_dict) 的回调函数
         """
-        self.rules.api_register_logic_callback(callback)
         self._status_change_listener = callback
         print("[EchoTeamDInterface] 队员C的状态监听器已成功绑定。")
 
@@ -268,3 +350,10 @@ class EchoTeamDInterface:
         :param filepath: 读取路径，默认 logs/pet_state.json
         """
         self.pet_state.load_state(filepath)
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default

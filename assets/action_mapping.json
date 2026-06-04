@@ -16,5 +16,14 @@
     "idle": [
       "这狗_anim_idle.gif"
     ]
+  },
+  "winter": {},
+  "我的Live2D角色": {
+    "idle": [
+      "我的Live2D角色/我的Live2D角色_anim_idle.gif"
+    ],
+    "happy": [
+      "我的Live2D角色/我的Live2D角色_anim_happy.gif"
+    ]
   }
 }

@@ -1,0 +1,14 @@
+{
+  "format": "pet_buddy_live2d_action_showcase_v1",
+  "size": 7,
+  "owner_id": "",
+  "action_ids": [
+    "live2d_pose_002_upright_front_or_back_02",
+    "live2d_pose_004_upright_front_or_back_04",
+    "live2d_pose_005_upright_front_or_back_05",
+    "",
+    "",
+    "",
+    ""
+  ]
+}

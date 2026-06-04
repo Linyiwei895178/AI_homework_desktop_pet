@@ -1,0 +1,131 @@
+{
+  "format": "pet_buddy_live2d_pose_rig_spec_v1",
+  "goal": "Turn the male/female anatomy line-art bases into Live2D-ready layered source art with pose-aware deformation.",
+  "conversion_feasibility": {
+    "status": "feasible_with_layer_cutting",
+    "summary": "The anatomy line art is good enough as a design base, but it is not yet a finished Live2D model. It must be split into transparent overlapping parts, given rotation pivots, and painted with hidden overlap areas before Cubism rigging.",
+    "strong_fit": [
+      "neutral stance",
+      "breathing",
+      "small body tilt",
+      "head turn",
+      "shoulder sway",
+      "hip sway",
+      "subtle contrapposto",
+      "moderate arm/leg motions"
+    ],
+    "needs_alternate_art": [
+      "full kneel or crouch",
+      "large run or jump silhouette",
+      "deep side profile",
+      "strong foreshortening",
+      "arms fully crossing the face or torso",
+      "front-to-back 180 degree body turn"
+    ]
+  },
+  "recommended_layer_split": [
+    {
+      "id": "head_group",
+      "layers": ["head", "face_guides", "jaw_shadow", "neck_front", "neck_back"],
+      "notes": "Head must rotate independently from neck. Keep neck overlap under chin."
+    },
+    {
+      "id": "torso_group",
+      "layers": ["upper_chest", "left_pectoral_or_breast", "right_pectoral_or_breast", "rib_cage", "abdomen", "left_oblique", "right_oblique", "pelvis", "crotch_cover"],
+      "notes": "Do not keep torso as one flat layer. Chest, abdomen, and pelvis need separate deformation because PDF poses show rib cage and pelvis counter-tilting."
+    },
+    {
+      "id": "shoulder_arm_group",
+      "layers": ["left_deltoid_cover", "left_upper_arm", "left_elbow_cover", "left_forearm", "left_wrist", "left_hand", "right_deltoid_cover", "right_upper_arm", "right_elbow_cover", "right_forearm", "right_wrist", "right_hand"],
+      "notes": "Raised-arm poses require deltoid and armpit correction layers. Elbow cover layers hide gaps during bending."
+    },
+    {
+      "id": "leg_group",
+      "layers": ["left_hip_cover", "left_thigh", "left_knee_cover", "left_shin", "left_ankle", "left_foot", "right_hip_cover", "right_thigh", "right_knee_cover", "right_shin", "right_ankle", "right_foot"],
+      "notes": "Single-leg and lunge poses need separate thigh, shin, knee, and foot pivots. Hip covers are needed for leg spread and step poses."
+    },
+    {
+      "id": "muscle_detail_group",
+      "layers": ["pectorals_detail", "abdomen_detail", "arm_detail_left", "arm_detail_right", "leg_detail_left", "leg_detail_right", "construction_lines"],
+      "notes": "Keep muscle detail partly separate so definition can strengthen or fade without tearing the silhouette."
+    }
+  ],
+  "pivot_anchors": {
+    "head": "between ears, slightly above eye line",
+    "neck": "base of throat",
+    "upper_chest": "sternum top",
+    "rib_cage": "sternum center",
+    "abdomen": "navel",
+    "pelvis": "center of hip bowl",
+    "upper_arm": "shoulder ball",
+    "forearm": "elbow joint",
+    "hand": "wrist",
+    "thigh": "hip socket",
+    "shin": "knee center",
+    "foot": "ankle"
+  },
+  "live2d_parameters": [
+    {"id": "ParamAngleX", "range": [-30, 30], "purpose": "head yaw"},
+    {"id": "ParamAngleY", "range": [-20, 20], "purpose": "head pitch"},
+    {"id": "ParamAngleZ", "range": [-18, 18], "purpose": "head tilt"},
+    {"id": "ParamBodyAngleX", "range": [-18, 18], "purpose": "rib cage yaw / side turn"},
+    {"id": "ParamBodyAngleY", "range": [-14, 14], "purpose": "torso pitch / spine curl"},
+    {"id": "ParamBodyAngleZ", "range": [-16, 16], "purpose": "torso tilt"},
+    {"id": "ParamHipShiftX", "range": [-1, 1], "purpose": "contrapposto weight shift"},
+    {"id": "ParamHipTiltZ", "range": [-1, 1], "purpose": "pelvis counter-tilt"},
+    {"id": "ParamShoulderTiltZ", "range": [-1, 1], "purpose": "shoulder counter-tilt"},
+    {"id": "ParamSpineCurve", "range": [-1, 1], "purpose": "S-curve compression/stretch"},
+    {"id": "ParamArmLRaise", "range": [0, 1], "purpose": "left arm lift"},
+    {"id": "ParamArmRRaise", "range": [0, 1], "purpose": "right arm lift"},
+    {"id": "ParamElbowLBend", "range": [0, 1], "purpose": "left elbow bend"},
+    {"id": "ParamElbowRBend", "range": [0, 1], "purpose": "right elbow bend"},
+    {"id": "ParamLegLStep", "range": [-1, 1], "purpose": "left leg forward/back"},
+    {"id": "ParamLegRStep", "range": [-1, 1], "purpose": "right leg forward/back"},
+    {"id": "ParamKneeLBend", "range": [0, 1], "purpose": "left knee bend"},
+    {"id": "ParamKneeRBend", "range": [0, 1], "purpose": "right knee bend"},
+    {"id": "ParamMuscleDefinition", "range": [0, 1], "purpose": "strengthen/fade muscle line layers"},
+    {"id": "ParamConstructionLines", "range": [0, 1], "purpose": "show/hide construction line layer"}
+  ],
+  "pose_presets": [
+    {
+      "id": "idle_contrapposto",
+      "based_on_pose_family": "contrapposto_s_curve",
+      "parameters": {
+        "ParamHipShiftX": 0.35,
+        "ParamHipTiltZ": -0.25,
+        "ParamShoulderTiltZ": 0.18,
+        "ParamSpineCurve": 0.25
+      }
+    },
+    {
+      "id": "arms_overhead",
+      "based_on_pose_family": "arms_overhead",
+      "parameters": {
+        "ParamArmLRaise": 0.85,
+        "ParamArmRRaise": 0.85,
+        "ParamElbowLBend": 0.35,
+        "ParamElbowRBend": 0.35,
+        "ParamShoulderTiltZ": 0.08
+      },
+      "requires": ["deltoid_cover", "armpit_cover", "upper_arm_overlap"]
+    },
+    {
+      "id": "walking_step",
+      "based_on_pose_family": "lunge_fight_run",
+      "parameters": {
+        "ParamLegLStep": 0.45,
+        "ParamLegRStep": -0.35,
+        "ParamKneeLBend": 0.22,
+        "ParamKneeRBend": 0.10,
+        "ParamHipShiftX": 0.18
+      }
+    },
+    {
+      "id": "low_kneel_alt_art",
+      "based_on_pose_family": "kneel_crouch_sit",
+      "requires_alternate_art": true,
+      "reason": "The torso/thigh/calf overlap and foreshortening are too large for the standing base alone."
+    }
+  ],
+  "next_build_step": "Create cut-layer PNG/PSD for male and female using the recommended_layer_split, then bind these parameters in Cubism or a compatible runtime."
+}

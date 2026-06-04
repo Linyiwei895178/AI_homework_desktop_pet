@@ -4,6 +4,7 @@ Live2D 桌宠动画播放器（PySide6 + live2d-py）
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import random
 import re
@@ -12,7 +13,8 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
 
 import live2d.v3 as live2d
 from live2d.v3 import MotionPriority
@@ -49,7 +51,7 @@ from app.ui.widgets import (
     ChatBubble,
     ChatHistoryStore,
     ControlConsole,
-    D_ACTION_CODES,
+    DEFAULT_TTS_UI_SETTINGS,
     InfoBubble,
     InputBox,
     MAO_PRO_ZH_DISPLAY,
@@ -62,8 +64,20 @@ from app.ui.widgets import (
     is_mao_pro_zh_model,
     load_custom_pet_ids,
     motion_label_from_filename,
+    normalize_tts_settings,
     scan_flat_pets,
 )
+from models.vision.computer_activity_detector import (
+    ComputerActivityDetector,
+    build_activity_suggestion,
+    build_companion_event,
+    build_local_companion_comment,
+)
+from app.ui.ui_settings_store import load_ui_settings
+from app.ui.feedback_bubble import show_feedback_message
+from models.state.user_profile import UserProfile
+from utils.config import config
+from app.model_switcher import reload_live2d_model
 
 try:
     import win32api
@@ -74,9 +88,14 @@ except ImportError:
     win32gui = None  # type: ignore
     win32con = None  # type: ignore
 
-MODEL_PATH = (
-    r"C:\Users\lenovo\AI_homework_desktop_pet\assets\models\mao_pro_zh"
-    r"\mao_pro_zh\runtime\mao_pro.model3.json"
+MODEL_PATH = os.path.join(
+    PROJECT_ROOT,
+    "assets",
+    "models",
+    "mao_pro_zh",
+    "mao_pro_zh",
+    "runtime",
+    "mao_pro.model3.json",
 )
 
 EMOTION_TO_EXPRESSION: dict[str, str] = {
@@ -111,31 +130,89 @@ MOTION_NAME_MAP: dict[str, str] = {
     "special_03": "特殊三",
 }
 
+# --- Chinese name mapping for expression labels (used in arc menu / dashboard) ---
+EXPRESSION_NAME_MAP: dict[str, str] = {
+    "不安": "不安",
+    "不安嘴": "不安(嘴)",
+    "发型": "发型",
+    "发色": "发色",
+    "披风隐藏": "披风",
+    "星星眼": "星星眼",
+    "爱心眼": "爱心眼",
+    "白眼": "白眼",
+    "白眼嘴": "白眼嘴",
+    "眼镜": "眼镜",
+    "瞳色": "瞳色",
+    "耳朵": "耳朵",
+    "脸红": "脸红",
+    "脸黑": "脸黑",
+    "豆豆眼": "豆豆眼",
+    "酒杯": "酒杯",
+    "麦克风": "麦克风",
+    "exp_01": "微笑",
+    "exp_02": "开心",
+    "exp_03": "难过",
+    "exp_04": "生气",
+    "exp_05": "惊讶",
+    "exp_06": "平静",
+    "exp_07": "害羞",
+    "exp_08": "困倦",
+}
+
 HIT_AREAS = ("HitAreaHead", "HitAreaBody")
 CHAT_GREETING = "你好呀！我是小黑，有什么可以帮我的吗？"
 DRAG_THRESHOLD = 5
 HOVER_FADE_ALPHA = int(255 * 0.7)
 HEAD_CENTER_Y_OFFSET = 60
-LIVE2D_HEAD_Y_RATIO = 0.24
-LIVE2D_BUBBLE_LIFT_BASE = 52
 ANGLE_X_MIN, ANGLE_X_MAX = -30.0, 30.0
 ANGLE_Y_MIN, ANGLE_Y_MAX = -20.0, 20.0
 WIN32_TRANSPARENT_COLORKEY = 0x0000FF00
 
 _SETTINGS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+    PROJECT_ROOT,
     "data",
 )
 SETTINGS_PATH = os.path.join(_SETTINGS_DIR, "pet_ui_settings.json")
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ACTION_MAPPING_PATH = os.path.join(PROJECT_ROOT, "assets", "action_mapping.json")
 PET_MEMORY_PATH = os.path.join(PROJECT_ROOT, "assets", "pet_memory.json")
 SYNONYMS_PATH = os.path.join(PROJECT_ROOT, "assets", "synonyms.json")
 BASE_WINDOW_W = 450
 BASE_WINDOW_H = 600
+
+# --- Live2D model-specific display overrides ---
+# Some tall/slim full-body models (e.g. elf_count) need taller windows and tuning.
+# --- Per-character Live2D view profiles ---
+# Each profile defines base window size, model scale, and vertical offset.
+# Scale shrinks the model inside the window; offset (positive y=up) adjusts vertical centering.
+LIVE2D_VIEW_OVERRIDES: dict[str, dict[str, Any]] = {
+    # Tall full-body character: elf_count
+    "elf_count": {
+        "base_size": (500, 920),
+        "scale": 0.66,
+        "offset": (0.0, 0.18),
+    },
+    # Wide/chibi character: Doro
+    "doro": {
+        "base_size": (720, 560),
+        "scale": 0.72,
+        "offset": (0.0, 0.0),
+    },
+    # Human-proportioned Live2D: xiaomonv / mao_pro_zh
+    "mao_pro_zh": {
+        "base_size": (450, 600),
+        "scale": 1.0,
+        "offset": (0.0, 0.05),
+    },
+}
+
+# Default profile for any Live2D model not in LIVE2D_VIEW_OVERRIDES
+DEFAULT_LIVE2D_VIEW_PROFILE: dict[str, Any] = {
+    "base_size": (450, 600),
+    "scale": 1.0,
+    "offset": (0.0, 0.05),
+}
 MIN_ACTION_PLAY_MS = 1500
-CHAT_BUBBLE_IDLE_MS = 30000
 ANIMATIONS_DIR = os.path.join(PROJECT_ROOT, "assets", "animations")
 IMAGES_DIR = os.path.join(PROJECT_ROOT, "assets", "images")
 MODELS_DIR = os.path.join(PROJECT_ROOT, "assets", "models")
@@ -180,6 +257,45 @@ MOOD_STAT_VALUES: dict[str, int] = {
 SYSTEM_VOICE_ON_CLICK = "喵～你好呀，我是你的桌面小伙伴！"
 
 
+def _config_bool(key: str, default: bool = False) -> bool:
+  value = config.get(key, str(default).lower())
+  return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _config_float(key: str, default: float) -> float:
+  try:
+    return float(config.get(key, default))
+  except (TypeError, ValueError):
+    return float(default)
+
+
+def _config_int(key: str, default: int) -> int:
+  try:
+    return int(float(config.get(key, default)))
+  except (TypeError, ValueError):
+    return int(default)
+
+
+def _setting_bool(value: Any, default: bool = False) -> bool:
+  if value is None:
+    return default
+  if isinstance(value, str):
+    text = value.strip().lower()
+    if text in {"1", "true", "yes", "y", "on", "开启", "允许", "记住"}:
+      return True
+    if text in {"0", "false", "no", "n", "off", "关闭", "禁止"}:
+      return False
+    return default
+  return bool(value)
+
+
+def _setting_float(value: Any, default: float) -> float:
+  try:
+    return float(value)
+  except (TypeError, ValueError):
+    return float(default)
+
+
 # ---------------------------------------------------------------------------
 # 队员 C / D 接口（Mock + 真实实现自动切换）
 # ---------------------------------------------------------------------------
@@ -190,6 +306,9 @@ class MockTeamC:
 
   def __init__(self) -> None:
     self._logic_callback: Callable[[dict[str, Any]], None] | None = None
+    self.pet_id = ""
+    self.voice_pack_id = ""
+    self.tts_settings: dict[str, Any] = {}
 
   def api_user_speak(
     self,
@@ -221,12 +340,49 @@ class MockTeamC:
 
     threading.Thread(target=_run, daemon=True).start()
 
-  def api_play_system_voice(self, text: str, state: str = "neutral", action: str = "speak") -> None:
+  def api_play_system_voice(
+    self,
+    text: str,
+    state: str = "neutral",
+    action: str = "speak",
+    current_state: dict[str, Any] | None = None,
+  ) -> None:
     print(f"[MockTeamC] api_play_system_voice: {text} (state={state}, action={action})")
+
+  def api_read_long_text(
+    self,
+    text: str,
+    current_state: dict[str, Any] | None = None,
+    title: str = "",
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+  ) -> None:
+    value = str(text or "").strip()
+    if progress_callback:
+      progress_callback({"event_type": "long_text_started", "title": title, "total": 1 if value else 0})
+    print(f"[MockTeamC] api_read_long_text: {title or '未命名'} ({len(value)} chars)")
+    if progress_callback:
+      progress_callback({"event_type": "long_text_finished", "title": title, "total": 1 if value else 0})
+
+  def api_stop_long_text(self) -> None:
+    print("[MockTeamC] api_stop_long_text")
 
   def api_register_logic_callback(self, callback: Callable[[dict[str, Any]], None]) -> None:
     self._logic_callback = callback
     print("[MockTeamC] 队员D逻辑回调已绑定（Mock）")
+
+  def api_set_pet_id(self, pet_id: str) -> None:
+    self.pet_id = (pet_id or "").strip()
+    if not self.voice_pack_id:
+      self.voice_pack_id = self.pet_id
+    print(f"[MockTeamC] pet_id={self.pet_id}, voice_pack_id={self.voice_pack_id}")
+
+  def api_set_voice_pack_id(self, pack_id: str) -> None:
+    self.voice_pack_id = (pack_id or "").strip() or self.pet_id
+    print(f"[MockTeamC] voice_pack_id={self.voice_pack_id}")
+
+  def api_set_tts_settings(self, settings: dict[str, Any] | None) -> None:
+    self.tts_settings = dict(settings or {})
+    print(f"[MockTeamC] tts_settings={self.tts_settings}")
 
 
 class MockTeamD:
@@ -380,8 +536,8 @@ class ActionMappingStore:
 
 
 def scan_flat_pet_list(project_root: str = PROJECT_ROOT) -> list[dict]:
-  """扫描预设平面角色（不含自定义上传）。"""
-  return scan_flat_pets(project_root, include_custom=False)
+  """扫描平面角色：以 animations GIF 与 images 头像合并。"""
+  return scan_flat_pets(project_root)
 
 
 class SynonymStore:
@@ -755,6 +911,8 @@ class ChatStreamBridge(QObject):
   """将队员 C 后台线程的流式文字块安全投递到主线程 UI。"""
 
   chunk_received = Signal(str)
+  comment_finished = Signal()
+  chat_reply_finished = Signal(str, str)
 
 
 class StatusHistoryViewer(QWidget):
@@ -807,23 +965,19 @@ class PetControlConsole(ControlConsole):
       motion_name_map=motion_name_map,
       on_play_motion=desktop_pet.play_motion,
       on_pet_changed=desktop_pet.switch_to_pet,
+      on_voice_pack_changed=desktop_pet.switch_voice_pack,
+      current_voice_pack_id=desktop_pet.current_voice_pack_id(),
+      on_tts_settings_changed=desktop_pet.update_tts_settings,
+      current_tts_settings=desktop_pet.current_tts_settings(),
+      on_read_text=desktop_pet.read_text_aloud,
+      on_stop_read_text=desktop_pet.stop_text_reading,
+      on_pet_settings_changed=desktop_pet.update_pet_personalization_settings,
     )
-    from app.ui.widgets import apply_zhegou_idle_thumb, scan_flat_pets
-
-    self._flat = [
-      apply_zhegou_idle_thumb(project_root, p)
-      for p in scan_flat_pets(project_root, include_custom=False)
-    ]
+    self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+    self._flat = desktop_pet.list_flat_pets_enriched()
     self._history_viewer: StatusHistoryViewer | None = None
     self._reload_flat_tab()
     self._setup_console_nav()
-    active = desktop_pet._active_pet
-    if active:
-      self._current_pet_id = active.get("id", "")
-    elif desktop_pet._last_pet_id:
-      self._current_pet_id = desktop_pet._last_pet_id
-    elif self._flat:
-      self._current_pet_id = self._flat[0]["id"]
     self.sync_dashboard_stats()
 
   def _setup_console_nav(self) -> None:
@@ -831,14 +985,8 @@ class PetControlConsole(ControlConsole):
     self.setMinimumSize(720, 540)
 
   def _reload_flat_tab(self) -> None:
-    from app.ui.widgets import apply_zhegou_idle_thumb, scan_flat_pets
-
-    self._flat = [
-      apply_zhegou_idle_thumb(self._project_root, p)
-      for p in scan_flat_pets(self._project_root, include_custom=False)
-    ]
+    self._flat = self._desk.list_flat_pets_enriched()
     self._custom_ids = load_custom_pet_ids(self._project_root)
-    self._custom_pets = self._build_custom_pet_list()
     self._reload_character_tabs()
 
   def _open_pet_main(self, pet: dict) -> None:
@@ -861,6 +1009,37 @@ class PetControlConsole(ControlConsole):
     if hasattr(self, "_dash_pet_pic"):
       self._refresh_dashboard()
 
+  def _vision_debug_visible(self) -> bool:
+    getter = getattr(self._desk, "_vision_debug_is_visible", None)
+    if not callable(getter):
+      return False
+    try:
+      return bool(getter())
+    except Exception:
+      return False
+
+  def sync_vision_debug_state(self, visible: bool | None = None) -> None:
+    btn = getattr(self, "_vision_debug_btn", None)
+    if btn is None:
+      return
+    if visible is None:
+      visible = self._vision_debug_visible()
+    btn.blockSignals(True)
+    btn.setChecked(bool(visible))
+    btn.setText("视觉预览：开启" if visible else "视觉预览：关闭")
+    btn.blockSignals(False)
+
+  def _toggle_vision_debug_preview(self, checked: bool) -> None:
+    setter = getattr(self._desk, "_vision_debug_set_visible", None)
+    if callable(setter):
+      try:
+        setter(bool(checked))
+      except Exception as exc:
+        self._log(f"视觉调试预览切换失败: {exc}")
+    else:
+      self._log("视觉调试预览入口尚未初始化")
+    self.sync_vision_debug_state()
+
   def _current_pet(self) -> dict | None:
     return self._get_pet(self._current_pet_id)
 
@@ -868,8 +1047,6 @@ class PetControlConsole(ControlConsole):
     pet = self._current_pet()
     if not pet or not hasattr(self, "_dash_pet_pic"):
       return
-    if pet.get("is_flat"):
-      pet = self._desk.build_pet_record(pet.get("id", "")) or pet
     thumb = pet.get("thumb") or self._pet_idle_path(pet)
     self._dash_pet_pic.setPixmap(_load_pixmap(thumb, QSize(100, 100)))
     self._dash_pet_name.setText(f"<b>{pet['name']}</b>")
@@ -899,6 +1076,23 @@ class PetControlConsole(ControlConsole):
     tool_row.addWidget(hist_btn)
     tool_row.addStretch()
     lay.addLayout(tool_row)
+    vision = QFrame()
+    vision.setStyleSheet(_glass_style(14))
+    vl = QVBoxLayout(vision)
+    vl.setContentsMargins(14, 12, 14, 12)
+    vl.setSpacing(8)
+    vl.addWidget(QLabel("<h3>视觉调试</h3>"))
+    desc = QLabel("显示B模块摄像头画面、FaceLandmarker关键点和用户状态调试信息。")
+    desc.setWordWrap(True)
+    desc.setStyleSheet("color:#64748b;")
+    vl.addWidget(desc)
+    self._vision_debug_btn = QPushButton("视觉预览：关闭")
+    self._vision_debug_btn.setCheckable(True)
+    self._vision_debug_btn.setStyleSheet(BTN_GLASS)
+    self._vision_debug_btn.clicked.connect(self._toggle_vision_debug_preview)
+    vl.addWidget(self._vision_debug_btn)
+    lay.addWidget(vision)
+    self.sync_vision_debug_state()
     lay.addWidget(QLabel("<h3>当前宠物简介</h3>"))
     intro = QFrame()
     intro.setStyleSheet(_glass_style(14))
@@ -948,6 +1142,26 @@ class PetControlConsole(ControlConsole):
     self._pet_main_name.setText(f"<h2>{pet['name']}</h2>")
     self._pet_main_desc.setText(pet.get("personality", ""))
     self._pet_main_pic.setPixmap(_load_pixmap(idle_path, QSize(120, 120)))
+    while self._pet_main_motions_lay.count():
+      item = self._pet_main_motions_lay.takeAt(0)
+      if item.widget():
+        item.widget().deleteLater()
+    motions = self._desk.motions_for_dashboard(pet)
+    if not motions:
+      b = QPushButton("暂无动作")
+      b.setEnabled(False)
+      b.setStyleSheet(BTN_GLASS)
+      self._pet_main_motions_lay.addWidget(b)
+    else:
+      for m in motions:
+        b = QPushButton(m.get("label", m.get("id", "动作")))
+        b.setStyleSheet(BTN_GLASS)
+        b.clicked.connect(
+          lambda _=False, motion=m, p=pet: self._desk.play_flat_motion(
+            motion, self._pet_main_pic, self._pet_idle_path(p), QSize(120, 120)
+          )
+        )
+        self._pet_main_motions_lay.addWidget(b)
 
 
 def _resolve_asset_path(path: str) -> str:
@@ -1366,9 +1580,9 @@ _THEME_PINK_BG_START = "#FCE4EC"
 _THEME_PINK_BG_END = "#FFF5F8"
 _THEME_TEXT = "#333333"
 _THEME_TEXT_MUTED = "#757575"
-_THEME_BORDER = "rgba(255, 141, 161, 0.18)"
-_THEME_CARD = "rgba(255, 255, 255, 0.88)"
-_THEME_GLASS = "rgba(255, 255, 255, 0.78)"
+_THEME_BORDER = "rgba(255, 141, 161, 46)"
+_THEME_CARD = "rgba(255, 255, 255, 224)"
+_THEME_GLASS = "rgba(255, 255, 255, 199)"
 _FONT_STACK = '"Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif'
 
 _PRIMARY_BTN_TEXTS = frozenset({
@@ -1413,10 +1627,20 @@ def _glass_qss(radius: int = 20) -> str:
   """
 
 
+def _bubble_qss(radius: int = 20) -> str:
+  return f"""
+    QFrame#glass {{
+      background-color: {_THEME_GLASS};
+      border: none;
+      border-radius: {radius}px;
+    }}
+  """
+
+
 def _btn_glass_qss(radius: int = 24) -> str:
   return f"""
     QPushButton {{
-      background-color: rgba(255, 255, 255, 0.92);
+      background-color: rgba(255, 255, 255, 235);
       border: 1px solid {_THEME_BORDER};
       border-radius: {radius}px;
       padding: 10px 18px;
@@ -1426,7 +1650,7 @@ def _btn_glass_qss(radius: int = 24) -> str:
     }}
     QPushButton:hover {{
       background-color: {_THEME_PINK_LIGHT};
-      border-color: rgba(255, 141, 161, 0.35);
+      border-color: rgba(255, 141, 161, 89);
     }}
     QPushButton:pressed {{
       background-color: #FFD0DC;
@@ -1434,20 +1658,20 @@ def _btn_glass_qss(radius: int = 24) -> str:
     QPushButton:checked {{
       background-color: {_THEME_PINK_LIGHT};
       color: {_THEME_PINK};
-      border-color: rgba(255, 141, 161, 0.45);
+      border-color: rgba(255, 141, 161, 115);
       font-weight: 600;
     }}
   """
 
 
-def _btn_primary_qss(radius: int = 24) -> str:
+def _btn_primary_qss(radius: int = 24, padding: str = "10px 22px") -> str:
   return f"""
     QPushButton {{
       background-color: {_THEME_PINK};
       color: white;
       border: none;
       border-radius: {radius}px;
-      padding: 10px 22px;
+      padding: {padding};
       font-family: {_FONT_STACK};
       font-size: 14px;
       font-weight: 600;
@@ -1467,7 +1691,7 @@ QLabel {{
   font-size: 14px;
 }}
 QLineEdit, QTextEdit {{
-  background-color: rgba(255, 255, 255, 0.92);
+  background-color: rgba(255, 255, 255, 235);
   border: 1px solid {_THEME_BORDER};
   border-radius: 20px;
   padding: 10px 16px;
@@ -1476,14 +1700,14 @@ QLineEdit, QTextEdit {{
   selection-background-color: {_THEME_PINK_LIGHT};
 }}
 QLineEdit:focus, QTextEdit:focus {{
-  border: 1px solid rgba(255, 141, 161, 0.55);
+  border: 1px solid rgba(255, 141, 161, 140);
 }}
 QTabWidget::pane {{
   border: none;
   background: transparent;
 }}
 QTabBar::tab {{
-  background: rgba(255, 255, 255, 0.6);
+  background: rgba(255, 255, 255, 153);
   border: 1px solid {_THEME_BORDER};
   border-radius: 16px;
   padding: 8px 18px;
@@ -1512,12 +1736,12 @@ QScrollBar:vertical {{
   margin: 4px 2px;
 }}
 QScrollBar::handle:vertical {{
-  background: rgba(255, 141, 161, 0.35);
+  background: rgba(255, 141, 161, 89);
   border-radius: 4px;
   min-height: 24px;
 }}
 QScrollBar::handle:vertical:hover {{
-  background: rgba(255, 141, 161, 0.55);
+  background: rgba(255, 141, 161, 140);
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
   height: 0;
@@ -1527,7 +1751,7 @@ QScrollBar:horizontal {{
   height: 8px;
 }}
 QScrollBar::handle:horizontal {{
-  background: rgba(255, 141, 161, 0.35);
+  background: rgba(255, 141, 161, 89);
   border-radius: 4px;
 }}
 QScrollArea {{
@@ -1599,8 +1823,8 @@ def _patch_arc_menu_paint(menu: ArcMotionMenu) -> None:
         p.fillPath(path, QColor(255, 255, 255, 225))
       p.setPen(QColor(255, 255, 255) if hovered else QColor(51, 51, 51))
       label = str(item.get("label", ""))
-      if len(label) > 5:
-        label = label[:4] + "…"
+      if len(label) > 8:
+        label = label[:8]
       p.drawText(r, Qt.AlignmentFlag.AlignCenter, label)
     p.end()
 
@@ -1619,11 +1843,17 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
   for w in glass_widgets:
     if w is None:
       continue
+    is_floating_bubble = w is pet.info_bubble or w is pet.chat_bubble
     w.setObjectName("glass")
-    w.setAutoFillBackground(True)
-    w.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-    w.setStyleSheet(_glass_qss(radii.get(w, 20)).replace("248", "252"))
-    _soft_shadow(w, blur=16, offset_y=3, alpha=45)
+    w.setAutoFillBackground(not is_floating_bubble)
+    w.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, is_floating_bubble)
+    w.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, is_floating_bubble)
+    style = _bubble_qss(radii.get(w, 20)) if is_floating_bubble else _glass_qss(radii.get(w, 20))
+    w.setStyleSheet(style)
+    if is_floating_bubble:
+      w.setGraphicsEffect(None)
+    else:
+      _soft_shadow(w, blur=16, offset_y=3, alpha=45)
   if pet.context_menu:
     _patch_menu_paint(pet.context_menu)
   for sm in (pet.pin_submenu, pet.hover_submenu, pet.status_submenu, pet.chat_submenu):
@@ -1634,7 +1864,15 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
     _patch_arc_menu_paint(pet.arc_menu)
     _soft_shadow(pet.arc_menu, blur=20, offset_y=4, alpha=40)
   if pet.input_box and hasattr(pet.input_box, "_btn"):
-    pet.input_box._btn.setStyleSheet(_btn_primary_qss(20))
+    pet.input_box._btn.setStyleSheet(_btn_primary_qss(18, "0px 18px"))
+    pet.input_box._btn.setMinimumHeight(30)
+  for bubble in (pet.info_bubble, pet.chat_bubble):
+    if bubble and hasattr(bubble, "_lbl"):
+      bubble._lbl.setFont(_pet_font(15))
+  if pet.input_box and hasattr(pet.input_box, "_field"):
+    pet.input_box._field.setFont(_pet_font(15))
+    if hasattr(pet.input_box, "_apply_field_style"):
+      pet.input_box._apply_field_style()
 
 
 def _apply_control_console_theme(console: ControlConsole) -> None:
@@ -1825,8 +2063,8 @@ class _ArcMenuHideFilter(QObject):
 class Live2DWidget(QOpenGLWidget):
   """OpenGL 渲染 Live2D 模型。"""
 
-  def __init__(self, pet: "DesktopPet") -> None:
-    super().__init__()
+  def __init__(self, pet: "DesktopPet", parent: QWidget | None = None) -> None:
+    super().__init__(parent)
     self._pet = pet
     self._gl_ready = False
     self.setMouseTracking(True)
@@ -1845,6 +2083,7 @@ class Live2DWidget(QOpenGLWidget):
   def resizeGL(self, w: int, h: int) -> None:
     if self._pet._model is not None:
       self._pet._model.Resize(w, h)
+      self._pet._adjust_model_canvas_fit()
 
   def paintGL(self) -> None:
     if self._pet._model is None:
@@ -1870,6 +2109,28 @@ class Live2DWidget(QOpenGLWidget):
       pos = (int(event.position().x()), int(event.position().y()))
       self._pet._on_left_release(pos)
 
+  def shutdown(self) -> None:
+    self._gl_ready = False
+    try:
+      self.makeCurrent()
+      self.doneCurrent()
+    except RuntimeError:
+      pass
+    except Exception:
+      pass
+    try:
+      self.hide()
+    except RuntimeError:
+      pass
+    try:
+      self.close()
+    except RuntimeError:
+      pass
+    try:
+      self.deleteLater()
+    except RuntimeError:
+      pass
+
 
 class PetWindow(QWidget):
   """无边框透明桌宠主窗口。"""
@@ -1886,22 +2147,20 @@ class PetWindow(QWidget):
 
     layout = QVBoxLayout(self)
     layout.setContentsMargins(0, 0, 0, 0)
-    self._gl = Live2DWidget(pet)
+    self._gl = Live2DWidget(pet, self)
     layout.addWidget(self._gl)
     self._gl.lower()
 
     self._plane_player = PlanePetPlayer(self)
     self._plane_player.hide()
 
-    pet.info_bubble.setParent(self)
-    pet.chat_bubble.setParent(self)
-    pet.input_box.setParent(self)
     pet.arc_menu.setParent(self)
     pet.context_menu.setParent(self)
     pet.pin_submenu.setParent(self)
     pet.hover_submenu.setParent(self)
     pet.status_submenu.setParent(self)
     pet.chat_submenu.setParent(self)
+    pet._sync_floating_overlay_flags()
 
     self._resize_overlay = _ResizeOverlay(pet, self)
     self._resize_overlay.hide()
@@ -1914,23 +2173,45 @@ class PetWindow(QWidget):
     self._pet._init_win32_window(int(self.winId()))
     self._pet._set_pin_top(self._pet._pin_top)
 
-  def resizeEvent(self, event) -> None:
-    super().resizeEvent(event)
-    w, h = self.width(), self.height()
-    if w > 0 and h > 0 and (w != self._pet._win_w or h != self._pet._win_h):
-      self._pet._win_w, self._pet._win_h = w, h
-      if self._pet._is_flat_mode():
-        player = self._pet._plane_player()
-        if player and self._pet._active_pet:
-          player.set_pet(self._pet._active_pet, w, h)
-      elif self._pet._model:
-        self._pet._model.Resize(w, h)
-      self._pet._apply_ui_scale()
-      if self._pet._status_bar_enabled or self._pet._chat_open:
-        self._pet._layout_bubbles()
-
   def paintEvent(self, event) -> None:
     super().paintEvent(event)
+
+  def closeEvent(self, event) -> None:
+    if not self._pet._cleaning_up:
+      event.ignore()
+      self._pet._close_pet_window()
+      return
+    super().closeEvent(event)
+
+  def shutdown(self) -> None:
+    self._pet._cleaning_up = True
+    gl = getattr(self, "_gl", None)
+    if gl is not None:
+      shutdown = getattr(gl, "shutdown", None)
+      if callable(shutdown):
+        shutdown()
+    plane_player = getattr(self, "_plane_player", None)
+    if plane_player is not None:
+      try:
+        plane_player.hide()
+        plane_player.close()
+        plane_player.deleteLater()
+      except RuntimeError:
+        pass
+      except Exception:
+        pass
+    try:
+      self.hide()
+    except RuntimeError:
+      pass
+    try:
+      self.close()
+    except RuntimeError:
+      pass
+    try:
+      self.deleteLater()
+    except RuntimeError:
+      pass
 
   def mouseMoveEvent(self, event: QMouseEvent) -> None:
     if self._pet._is_flat_mode():
@@ -1980,37 +2261,6 @@ class PetWindow(QWidget):
     super().wheelEvent(event)
 
 
-class _QtRootBridge:
-  """兼容 app/main.py 旧入口：提供 root.after / root.mainloop（映射到 Qt）。"""
-
-  def __init__(self, pet: "DesktopPet") -> None:
-    self._pet = pet
-    self._pending: list[tuple[int, Callable[..., Any]]] = []
-    self._timers: list[QTimer] = []
-
-  def after(self, ms: int, callback: Callable[..., Any]) -> None:
-    if QApplication.instance() is None:
-      self._pending.append((ms, callback))
-      return
-    self._schedule(ms, callback)
-
-  def _schedule(self, ms: int, callback: Callable[..., Any]) -> None:
-    timer = QTimer()
-    timer.setSingleShot(True)
-    timer.timeout.connect(callback)
-    timer.start(max(0, int(ms)))
-    self._timers.append(timer)
-
-  def _flush_pending(self) -> None:
-    pending = list(self._pending)
-    self._pending.clear()
-    for ms, callback in pending:
-      self._schedule(ms, callback)
-
-  def mainloop(self) -> None:
-    self._pet.run()
-
-
 class DesktopPet:
   """Live2D 桌宠：模型动画、透明背景、视线跟随、菜单与对话。"""
 
@@ -2030,19 +2280,21 @@ class DesktopPet:
     self._model: Optional[live2d.LAppModel] = None
     self._motion_index: dict[str, tuple[str, int]] = {}
     self._running = False
+    self._cleaning_up = False
+    self._closed = False
     self.available_motions: list[str] = []
+    # --- Expression support ---
+    self._expression_index: dict[str, str] = {}
+    self.available_expressions: list[str] = []
     self.motion_name_map = MOTION_NAME_MAP
 
     self.on_click_callback: Optional[Callable[..., Any]] = None
-    self.on_drag_callback: Optional[Callable[..., Any]] = None
-    self.on_right_click_callback: Optional[Callable[..., Any]] = None
-    self.root = _QtRootBridge(self)
 
     self._hwnd: Optional[int] = None
     self._win_w = 0
     self._win_h = 0
     self._pin_top = True
-    self._hover_fade_enabled = True
+    self._hover_fade_enabled = False
     self._status_bar_enabled = False
     self._hovering_window = False
     self._window_alpha = 255
@@ -2064,6 +2316,7 @@ class DesktopPet:
     self._edge_hold_timer.setSingleShot(True)
     self._edge_hold_timer.timeout.connect(self._show_resize_overlay)
     self._chat_history = ChatHistoryStore(PROJECT_ROOT)
+    self._pending_chat_history: list[dict[str, str]] = []
 
     self._app: Optional[QApplication] = None
     self._window: Optional[PetWindow] = None
@@ -2079,12 +2332,39 @@ class DesktopPet:
     self.chat_bubble: Optional[ChatBubble] = None
     self.input_box: Optional[InputBox] = None
     self._chat_open = False
-    self._chat_bubble_visible = False
-    self._chat_bubble_idle_timer: Optional[QTimer] = None
     self._last_pet_id: str = ""
+    self._voice_pack_id: str = ""
+    self._tts_settings: dict[str, Any] = normalize_tts_settings(DEFAULT_TTS_UI_SETTINGS)
     self._active_pet: dict | None = None
     self._console: PetControlConsole | None = None
     self._chat_stream: ChatStreamBridge | None = None
+    self._companion_bubble_active = False
+    self._companion_bubble_token = 0
+
+    self._computer_activity_config_enabled = _config_bool("COMPUTER_ACTIVITY_ENABLED", True)
+    self._computer_companion_enabled = False
+    self._desktop_observation_authorized = False
+    self._computer_include_window_title = True
+    self._computer_no_disturb_fullscreen = True
+    self._computer_activity_detector: ComputerActivityDetector | None = None
+    if self._computer_activity_config_enabled:
+      self._computer_activity_detector = ComputerActivityDetector(
+        min_comment_duration=_config_float("COMPUTER_ACTIVITY_MIN_DURATION", 0.0)
+      )
+    self._computer_comment_timer: Optional[QTimer] = None
+    self._computer_comment_busy = False
+    self._last_computer_comment_at = 0.0
+    self._last_computer_comment_signature = ""
+    self._computer_poll_ms = max(500, _config_int("COMPUTER_ACTIVITY_POLL_MS", 1000))
+    self._computer_comment_cooldown = max(30.0, _config_float("COMPUTER_ACTIVITY_COMMENT_COOLDOWN", 150.0))
+    self._apply_desktop_access_settings_from_disk()
+    self._speech_hint_enabled = _config_bool("STATE_SPEECH_HINT_ENABLED", True)
+    self._speech_hint_timer: Optional[QTimer] = None
+    self._speech_hint_busy = False
+    self._speech_hint_poll_ms = max(5000, _config_int("STATE_SPEECH_HINT_POLL_MS", 30000))
+    self._speech_hint_cooldown = max(60.0, _config_float("STATE_SPEECH_HINT_COOLDOWN", 180.0))
+    self._last_speech_hint_at = 0.0
+    self._last_speech_hint_text = ""
 
     self._bind_team_interfaces()
     self._load_settings()
@@ -2100,6 +2380,20 @@ class DesktopPet:
     self.team_d = _create_team_d()
 
     def on_chat_event(event: dict[str, Any]) -> None:
+      event_type = str(event.get("event_type") or event.get("event") or "")
+      if event_type == "user_chat":
+        reply = str(event.get("ai_reply") or "").strip()
+        if reply:
+          character_name = self._take_pending_chat_character(str(event.get("user_input") or ""))
+          if self._chat_stream is not None:
+            self._chat_stream.chat_reply_finished.emit(character_name, reply)
+          else:
+            self._save_chat_message("ai", reply, character_name=character_name)
+        if hasattr(self.team_d, "api_update_from_chat_emotion"):
+          try:
+            self.team_d.api_update_from_chat_emotion(event)
+          except Exception as exc:
+            print(f"[DesktopPet] 更新聊天情绪画像失败: {exc}")
       wc = int(event.get("word_count", 0) or 0)
       if hasattr(self.team_d, "api_on_chat_finished"):
         self.team_d.api_on_chat_finished(wc)
@@ -2127,19 +2421,8 @@ class DesktopPet:
   def list_flat_pets_enriched(self) -> list[dict]:
     pets = scan_flat_pet_list()
     known = {p["id"] for p in pets}
-    custom_ids = set(load_custom_pet_ids(PROJECT_ROOT))
     for pet_id in self._scan_portrait_pet_ids():
-      if pet_id in known or pet_id in custom_ids:
-        continue
-      # 仅头像、无 animations 动作的不进入运行时平面列表
-      anim_dir = os.path.join(PROJECT_ROOT, "assets", "animations")
-      has_anim = False
-      if os.path.isdir(anim_dir):
-        for fname in os.listdir(anim_dir):
-          if fname.lower().startswith(f"{pet_id}_anim_"):
-            has_anim = True
-            break
-      if not has_anim:
+      if pet_id in known:
         continue
       thumb = _resolve_asset_path(os.path.join("assets", "images", f"{pet_id}_image.png"))
       pets.append(
@@ -2174,11 +2457,9 @@ class DesktopPet:
       self._console.sync_dashboard_stats()
 
   def build_pet_record(self, pet_id: str) -> dict | None:
-    from app.ui.widgets import scan_flat_pets
-
-    for pet in scan_flat_pets(PROJECT_ROOT, include_custom=True):
-      if pet.get("id") == pet_id:
-        return enrich_flat_pet(pet, self.action_mapping, self.synonym_resolver)
+    for pet in self.list_flat_pets_enriched():
+      if pet["id"] == pet_id:
+        return pet
     return None
 
   def stats_for_dashboard(self) -> dict[str, int]:
@@ -2195,10 +2476,18 @@ class DesktopPet:
   def motions_for_dashboard(self, pet: dict) -> list[dict]:
     if pet.get("is_flat"):
       return self.synonym_resolver.motions_for_flat(pet.get("id", ""))
-    return self.synonym_resolver.motions_for_live2d(
+    items = self.synonym_resolver.motions_for_live2d(
       pet.get("id", "mao"),
       pet.get("model_path") or self.model_path,
     )
+    # Append available expressions as pseudo-motion items
+    for e in self.available_expressions:
+      items.append({
+        "id": f"__expr__:{e}",
+        "label": EXPRESSION_NAME_MAP.get(e, e),
+        "kind": "expression",
+      })
+    return items
 
   def play_flat_motion(
     self,
@@ -2207,6 +2496,11 @@ class DesktopPet:
     idle_path: str,
     size: QSize,
   ) -> None:
+    # Handle expression items from dashboard
+    if motion.get("kind") == "expression":
+      expr_id = str(motion.get("id", "")).replace("__expr__:", "")
+      self.set_expression(expr_id)
+      return
     if self._console:
       self._console._play_motion(motion, pic_label, idle_path, size)
     if self._is_flat_mode():
@@ -2284,8 +2578,8 @@ class DesktopPet:
       pet = enrich_flat_pet(_normalize_flat_pet(pet), self.action_mapping, self.synonym_resolver)
     self._active_pet = pet
     self._last_pet_id = pet.get("id", "")
+    self._sync_team_c_voice_context()
     self._save_pet_memory()
-    self._sync_console_dashboard()
     name = pet.get("name") or pet.get("id", "")
     if pet.get("is_flat"):
       self._window._gl.hide()
@@ -2300,11 +2594,173 @@ class DesktopPet:
     else:
       self._window._plane_player.hide()
       self._window._gl.show()
+      # --- Live2D model-specific window sizing ---
+      # Always switch to this model's view profile (base_size, scale, offset)
+      profile = self._current_live2d_view_profile()
+      base_size = profile.get("base_size", (450, 600))
+      bw, bh = int(base_size[0]), int(base_size[1])
+      if abs(self._win_w - bw) > 2 or abs(self._win_h - bh) > 2:
+        self._aspect_ratio = bw / bh
+        self._apply_window_size(bw, bh, save_memory=False)
+        print(f"[DesktopPet] Applied Live2D view profile: id={pet_id}, size={bw}x{bh} (was {self._win_w}x{self._win_h})")
+      # Reload Live2D model
+      model_path = pet.get("model_path") or ""
+      if model_path and os.path.isfile(model_path):
+        reload_live2d_model(self, model_path)
+      # Re-apply canvas fit after model reload
+      self._adjust_model_canvas_fit()
+      QTimer.singleShot(300, self._debug_save_live2d_frame)
       self._start_idle_motion()
     self._update_mouse_passthrough(self._local_mouse_pos())
     self._show_switch_notice(name)
     print(f"[DesktopPet] 已切换到: {name}")
     QTimer.singleShot(0, self._after_pet_switch)
+    # Save memory so next startup uses correct window size
+    self._save_pet_memory()
+
+  def current_voice_pack_id(self) -> str:
+    return self._voice_pack_id
+
+  def current_tts_settings(self) -> dict[str, Any]:
+    return dict(self._tts_settings)
+
+  def switch_voice_pack(self, pack: dict) -> None:
+    pack_id = str(pack.get("id", "") if isinstance(pack, dict) else "").strip()
+    self._voice_pack_id = pack_id
+    self._sync_team_c_voice_context()
+    self._save_settings()
+    name = str(pack.get("name") or pack.get("display_name") or "默认") if isinstance(pack, dict) else "默认"
+    print(f"[DesktopPet] 已切换语音包: {name} ({pack_id or 'auto'})")
+
+  def update_tts_settings(self, settings: dict[str, Any]) -> None:
+    self._tts_settings = normalize_tts_settings(settings)
+    self._sync_team_c_voice_context()
+    self._save_settings()
+    print(f"[DesktopPet] TTS settings updated: {self._tts_settings}")
+
+  def update_pet_personalization_settings(self, settings: dict[str, dict[str, Any]]) -> None:
+    self._apply_desktop_access_settings(settings)
+    if not self._running:
+      return
+    if self._computer_companion_enabled:
+      self._start_computer_companion()
+    else:
+      self._stop_computer_companion()
+
+  def _apply_desktop_access_settings_from_disk(self) -> None:
+    settings_path = os.path.join(PROJECT_ROOT, "data", "pet_personalization_settings.json")
+    try:
+      with open(settings_path, encoding="utf-8") as f:
+        loaded = json.load(f)
+    except (OSError, json.JSONDecodeError):
+      loaded = {}
+    self._apply_desktop_access_settings(loaded if isinstance(loaded, dict) else {})
+
+  def _apply_desktop_access_settings(self, personalization: dict[str, Any] | None) -> None:
+    settings = personalization if isinstance(personalization, dict) else {}
+    desktop_access = settings.get("desktop_access") if isinstance(settings.get("desktop_access"), dict) else {}
+    boundaries = settings.get("boundaries") if isinstance(settings.get("boundaries"), dict) else {}
+
+    authorized = _setting_bool(desktop_access.get("foreground_observation_authorized"), False)
+    comment_enabled = _setting_bool(desktop_access.get("proactive_comment_enabled"), True)
+    self._desktop_observation_authorized = authorized
+    self._computer_include_window_title = _setting_bool(desktop_access.get("include_window_title"), True)
+    self._computer_no_disturb_fullscreen = _setting_bool(boundaries.get("no_disturb_when_fullscreen"), True)
+    default_cooldown = _config_float("COMPUTER_ACTIVITY_COMMENT_COOLDOWN", 150.0)
+    configured_cooldown = _setting_float(desktop_access.get("comment_interval_seconds"), default_cooldown)
+    self._computer_comment_cooldown = max(30.0, min(3600.0, configured_cooldown))
+    self._computer_companion_enabled = bool(
+      self._computer_activity_config_enabled
+      and self._desktop_observation_authorized
+      and comment_enabled
+    )
+    if self._computer_companion_enabled and self._computer_activity_detector is None:
+      self._computer_activity_detector = ComputerActivityDetector(
+        min_comment_duration=_config_float("COMPUTER_ACTIVITY_MIN_DURATION", 0.0)
+      )
+    print(
+      "[DesktopPet] 桌面授权: "
+      f"authorized={self._desktop_observation_authorized}, "
+      f"comments={self._computer_companion_enabled}, "
+      f"title_context={self._computer_include_window_title}, "
+      f"cooldown={self._computer_comment_cooldown:.0f}s"
+    )
+
+  def read_text_aloud(self, text: str, title: str = "") -> None:
+    value = str(text or "").strip()
+    if not value:
+      return
+    self._sync_team_c_voice_context()
+    context = self._current_voice_state_context()
+    context["voice_action"] = "read"
+    context["tts_action"] = "read"
+    if hasattr(self.team_c, "api_read_long_text"):
+      try:
+        self.team_c.api_read_long_text(value, current_state=context, title=title or "文本")
+        return
+      except Exception as exc:
+        print(f"[DesktopPet] 长文本朗读失败: {exc}")
+    if not hasattr(self.team_c, "api_play_system_voice"):
+      return
+    state = str(context.get("mood") or context.get("state_code") or "neutral").strip() or "neutral"
+    if state == "normal":
+      state = "neutral"
+    try:
+      self.team_c.api_play_system_voice(value, state=state, action="read")
+    except Exception as exc:
+      print(f"[DesktopPet] 文本朗读失败: {exc}")
+
+  def _play_system_voice(self, text: str, *, state: str | None = None, action: str = "speak") -> None:
+    if not hasattr(self.team_c, "api_play_system_voice"):
+      return
+    self._sync_team_c_voice_context()
+    context = self._current_voice_state_context()
+    voice_state = (state or str(context.get("mood") or context.get("state_code") or "neutral")).strip()
+    if voice_state == "normal":
+      voice_state = "neutral"
+    voice_action = (action or "speak").strip() or "speak"
+    context["voice_action"] = voice_action
+    context["tts_action"] = voice_action
+    play_voice = self.team_c.api_play_system_voice
+    try:
+      accepts_context = "current_state" in inspect.signature(play_voice).parameters
+    except (TypeError, ValueError):
+      accepts_context = False
+    if accepts_context:
+      play_voice(
+        text,
+        state=voice_state or "neutral",
+        action=voice_action,
+        current_state=context,
+      )
+    else:
+      play_voice(text, state=voice_state or "neutral", action=voice_action)
+
+  def stop_text_reading(self) -> None:
+    if hasattr(self.team_c, "api_stop_long_text"):
+      try:
+        self.team_c.api_stop_long_text()
+      except Exception as exc:
+        print(f"[DesktopPet] 停止长文本朗读失败: {exc}")
+
+  def _sync_team_c_voice_context(self) -> None:
+    pet_id = self._last_pet_id or str((self._active_pet or {}).get("id", ""))
+    if pet_id and hasattr(self.team_c, "api_set_pet_id"):
+      try:
+        self.team_c.api_set_pet_id(pet_id)
+      except Exception as exc:
+        print(f"[DesktopPet] 同步桌宠ID到队员C失败: {exc}")
+    if hasattr(self.team_c, "api_set_voice_pack_id"):
+      try:
+        self.team_c.api_set_voice_pack_id(self._voice_pack_id)
+      except Exception as exc:
+        print(f"[DesktopPet] 同步语音包到队员C失败: {exc}")
+
+    if hasattr(self.team_c, "api_set_tts_settings"):
+      try:
+        self.team_c.api_set_tts_settings(self._tts_settings)
+      except Exception as exc:
+        print(f"[DesktopPet] Sync TTS settings to Team C failed: {exc}")
 
   def _after_pet_switch(self) -> None:
     self.play_action_from_decision()
@@ -2337,69 +2793,94 @@ class DesktopPet:
       if self._widget_alive(widget):
         widget.raise_()
 
-  def _motion_display_label(self, motion: dict) -> str:
-    gif = motion.get("gif") or ""
-    if gif:
-      return motion_label_from_filename(os.path.basename(gif))
-    frames = motion.get("frames") or []
-    if frames:
-      return motion_label_from_filename(os.path.basename(frames[0]))
-    mid = str(motion.get("id", ""))
-    if ":" in mid:
-      return motion_label_from_filename(os.path.basename(mid.split(":", 1)[1]))
-    label = motion.get("label") or ""
-    if label in D_ACTION_CODES:
-      return mid or label
-    return label or mid or "动作"
-
-  def _flat_arc_motion_items(self, pet_id: str) -> list[dict[str, str]]:
-    """环形菜单：按扫描文件名展示（anim_ 后文字），播放用实际素材路径。"""
-    items: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for pet in scan_flat_pets(PROJECT_ROOT, include_custom=True):
-      if pet.get("id") != pet_id:
+  def _sync_floating_overlay_flags(self) -> None:
+    flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
+    if self._pin_top:
+      flags |= Qt.WindowType.WindowStaysOnTopHint
+    passive_flags = flags | Qt.WindowType.WindowDoesNotAcceptFocus
+    for widget in (self.info_bubble, self.chat_bubble):
+      if widget is None:
         continue
-      for motion in pet.get("motions", []):
-        if not _flat_motion_playable(motion):
-          continue
-        gif = motion.get("gif") or ""
-        frames = motion.get("frames") or []
-        key = gif or (frames[0] if frames else motion.get("id", ""))
-        if not key or key in seen:
-          continue
-        seen.add(key)
-        label = motion.get("label") or self._motion_display_label(motion)
-        items.append({"label": label, "value": key})
-      break
-    if not items and self._active_pet:
-      for motion in self._active_pet.get("motions", []):
-        if not _flat_motion_playable(motion):
-          continue
-        gif = motion.get("gif") or ""
-        frames = motion.get("frames") or []
-        key = gif or (frames[0] if frames else str(motion.get("id", "")))
-        if key in seen:
-          continue
-        seen.add(key)
-        items.append({"label": self._motion_display_label(motion), "value": key})
-    return items
+      was_visible = widget.isVisible()
+      widget.setParent(None)
+      widget.setWindowFlags(passive_flags)
+      widget.setAutoFillBackground(False)
+      widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+      widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+      widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+      if was_visible:
+        QWidget.show(widget)
+    if self.input_box is not None:
+      was_visible = self.input_box.isVisible()
+      self.input_box.setParent(None)
+      self.input_box.setWindowFlags(flags)
+      if was_visible:
+        QWidget.show(self.input_box)
+
+  def _floating_overlay_pos(self, width: int, height: int, preferred_y: int) -> tuple[int, int]:
+    if self._window is None:
+      return 0, 0
+    gap = 12
+    screen_margin = 8
+    base = self._window.frameGeometry()
+    screen = QApplication.screenAt(base.center()) or QApplication.primaryScreen()
+    area = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+    left_room = base.left() - area.left()
+    right_room = area.right() - base.right()
+    if right_room >= width + gap or right_room >= left_room:
+      x = min(base.right() + gap, area.right() - width - screen_margin)
+    else:
+      x = max(area.left() + screen_margin, base.left() - width - gap)
+    y = base.top() + preferred_y
+    y = max(area.top() + screen_margin, min(y, area.bottom() - height - screen_margin))
+    return x, y
 
   def _current_arc_motion_items(self) -> list[dict[str, str]]:
     if self._is_flat_mode() and self._active_pet:
-      return self._flat_arc_motion_items(self._active_pet.get("id", ""))
+      items: list[dict[str, str]] = []
+      for motion in self._active_pet.get("motions", []):
+        if not _flat_motion_playable(motion):
+          continue
+        mid = motion.get("id", "")
+        items.append({"label": motion.get("label", mid), "value": mid})
+      return items
+    # --- Live2D: combine motions + expressions ---
     items: list[dict[str, str]] = []
-    pet_id = (self._active_pet or {}).get("id", "mao")
-    pet_map = self.action_mapping._data.get(pet_id, {})
-    for stem in self.available_motions:
-      label = self.motion_name_map.get(stem, stem)
-      for _code, files in pet_map.items():
-        for fname in files:
-          base = os.path.splitext(fname)[0]
-          if stem in base or base.endswith(stem):
-            label = motion_label_from_filename(fname) if "anim_" in fname.lower() else fname
-            break
-      items.append({"label": label, "value": stem})
+    for m in self.available_motions:
+      items.append({
+        "label": self.motion_name_map.get(m, m),
+        "value": m,
+        "kind": "motion",
+      })
+    # Add expressions, limited to 16
+    exp_items = []
+    for e in self.available_expressions:
+      exp_items.append({
+        "label": self._expression_label(e),
+        "value": e,
+        "kind": "expression",
+      })
+    # Sort: common moods first, then others
+    def _exp_sort_key(item: dict) -> tuple:
+      e = str(item["value"])
+      prio = {
+        "smile": 0, "happy": 1, "sad": 2, "angry": 3,
+        "surprised": 4, "neutral": 5, "shy": 6, "sleepy": 7,
+        "不安": 8, "星星眼": 9, "爱心眼": 10, "白眼": 11,
+        "脸红": 12, "脸黑": 13, "豆豆眼": 14, "白眼嘴": 15,
+      }
+      return (prio.get(e, 99), e)
+    exp_items.sort(key=_exp_sort_key)
+    items.extend(exp_items)
+    if len(exp_items) > 16:
+      print(f"[DesktopPet] Arc menu displays all expressions: total={len(exp_items)}")
     return items
+
+  def _expression_label(self, name: str) -> str:
+    """Map expression id to a short display label (Chinese if available)."""
+    if name in EXPRESSION_NAME_MAP:
+      return EXPRESSION_NAME_MAP[name]
+    return name
 
   def _lower_character_layer(self) -> None:
     if self._window is None:
@@ -2415,14 +2896,12 @@ class DesktopPet:
     msg = f"已切换到 {name}"
     prev_open = self._chat_open
     self._chat_open = True
-    self._show_chat_bubble(chat_text=msg)
+    self._layout_bubbles(chat_text=msg)
 
     def _restore() -> None:
       if not prev_open:
         self._chat_open = False
-        self._chat_bubble_visible = False
-        if self.chat_bubble:
-          self.chat_bubble.hide()
+        self.chat_bubble.hide()
       else:
         self._layout_bubbles()
 
@@ -2449,12 +2928,17 @@ class DesktopPet:
     if group is None:
       print(f"[DesktopPet] 未找到动作: {motion_name}")
       return False
+    self._model.StopAllMotions()
     self._model.StartMotion(
       group,
       index,
-      MotionPriority.NORMAL,
+      MotionPriority.FORCE,
       onFinishMotionHandler=self._start_idle_motion,
     )
+    try:
+        self._model.SetExpression(motion_name)
+    except Exception:
+        pass
     print(f"[DesktopPet] 播放动作: {motion_name}")
     return True
 
@@ -2465,13 +2949,20 @@ class DesktopPet:
       return True
     if self._model is None:
       return False
-    expression_id = EMOTION_TO_EXPRESSION.get(emotion.strip().lower(), emotion)
+    # If the emotion is a known available expression, use it directly
+    trimmed = emotion.strip()
+    if trimmed in self.available_expressions or trimmed in self._expression_index:
+      expression_id = trimmed
+    else:
+      expression_id = EMOTION_TO_EXPRESSION.get(trimmed.lower(), trimmed)
     try:
       self._model.SetExpression(expression_id)
-      self.current_state = emotion
+      self.current_state = expression_id
+      print(f"[DesktopPet] 设置表情成功: {expression_id}")
       return True
     except Exception as exc:
-      print(f"[DesktopPet] 设置表情失败 ({expression_id}): {exc}")
+      avail_summary = self.available_expressions[:8] if hasattr(self, 'available_expressions') else []
+      print(f"[DesktopPet] 设置表情失败: expression_id={expression_id}, available={avail_summary}, error={exc}")
       return False
 
   def on_click(self, x: int, y: int) -> dict[str, Any]:
@@ -2488,7 +2979,7 @@ class DesktopPet:
         result["hit_areas"] = ["HitAreaBody"]
         result["clicked"] = True
         try:
-          self.team_c.api_play_system_voice(SYSTEM_VOICE_ON_CLICK)
+          self._play_system_voice(SYSTEM_VOICE_ON_CLICK, action="click")
         except Exception as exc:
           print(f"[DesktopPet] api_play_system_voice 失败: {exc}")
       if self.on_click_callback:
@@ -2506,7 +2997,7 @@ class DesktopPet:
       result["clicked"] = True
     if result["clicked"]:
       try:
-        self.team_c.api_play_system_voice(SYSTEM_VOICE_ON_CLICK)
+        self._play_system_voice(SYSTEM_VOICE_ON_CLICK, action="click")
       except Exception as exc:
         print(f"[DesktopPet] api_play_system_voice 失败: {exc}")
     if self.on_click_callback:
@@ -2519,8 +3010,6 @@ class DesktopPet:
 
     self._app = QApplication.instance() or QApplication(sys.argv)
     self._app.setStyleSheet(APP_GLOBAL_QSS)
-    if isinstance(self.root, _QtRootBridge):
-      self.root._flush_pending()
     self._init_ui_widgets()
 
     size = self.window_size or (BASE_WINDOW_W, BASE_WINDOW_H)
@@ -2546,6 +3035,8 @@ class DesktopPet:
     self._timer.timeout.connect(self._tick)
     self._timer.start(16)
 
+    self._start_computer_companion()
+    self._start_state_speech_hints()
     QTimer.singleShot(0, self._restore_last_pet)
 
     self._app.exec()
@@ -2577,42 +3068,24 @@ class DesktopPet:
     self.arc_menu.installEventFilter(self._arc_hide_filter)
     self._chat_stream = ChatStreamBridge()
     self._chat_stream.chunk_received.connect(self._append_chat_chunk)
+    self._chat_stream.comment_finished.connect(self._handle_companion_comment_finished)
+    self._chat_stream.chat_reply_finished.connect(self._save_ai_reply_from_event)
     _apply_desktop_overlays(self)
-    self._apply_ui_scale()
-
-  def _ensure_chat_idle_timer(self) -> QTimer:
-    if self._chat_bubble_idle_timer is None:
-      self._chat_bubble_idle_timer = QTimer()
-      self._chat_bubble_idle_timer.setSingleShot(True)
-      self._chat_bubble_idle_timer.timeout.connect(self._on_chat_bubble_idle_timeout)
-    return self._chat_bubble_idle_timer
-
-  def _on_chat_bubble_idle_timeout(self) -> None:
-    if not self._chat_open:
-      return
-    self._chat_bubble_visible = False
-    if self.chat_bubble:
-      self.chat_bubble.hide()
-    self._layout_bubbles()
-
-  def _schedule_chat_bubble_hide(self) -> None:
-    if not self._chat_open:
-      return
-    timer = self._ensure_chat_idle_timer()
-    timer.stop()
-    timer.start(CHAT_BUBBLE_IDLE_MS)
-
-  def _show_chat_bubble(self, chat_text: str | None = None) -> None:
-    if not self._chat_open:
-      return
-    self._chat_bubble_visible = True
-    self._layout_bubbles(chat_text=chat_text)
-    self._schedule_chat_bubble_hide()
 
   def _append_chat_chunk(self, ch: str) -> None:
-    if self.chat_bubble is None or not self._chat_open:
+    if self.chat_bubble is None or not (self._chat_open or self._companion_bubble_active):
       return
-    self._show_chat_bubble(chat_text=self.chat_bubble.text + ch)
+    next_text = self.chat_bubble.text + ch
+    if not self.chat_bubble.visible or not self.chat_bubble.isVisible():
+      self._layout_bubbles(chat_text=next_text)
+      return
+    old_height = self.chat_bubble.height()
+    self.chat_bubble.set_text(next_text)
+    self.chat_bubble.adjustSize()
+    if abs(self.chat_bubble.height() - old_height) > 8:
+      self._reflow_visible_bubbles()
+    else:
+      self.chat_bubble.update()
 
   def _stream_ui_callback(self, ch: str) -> None:
     if self._chat_stream is not None:
@@ -2637,122 +3110,106 @@ class DesktopPet:
   def _character_layout(self) -> tuple[int, int, int]:
     """返回 (center_x, head_top_y, body_bottom_y)。"""
     cx = self._win_w // 2
+    head_y = max(40, self._win_h // 2 - HEAD_CENTER_Y_OFFSET)
+    body_bottom = min(self._win_h - 8, int(self._win_h * 0.82))
     if self._is_flat_mode():
-      head_y = max(40, self._win_h // 2 - HEAD_CENTER_Y_OFFSET)
-      body_bottom = min(self._win_h - 8, int(self._win_h * 0.82))
       player = self._plane_player()
       if player and not player._pixmap_rect.isEmpty():
         rect = player._pixmap_rect
         cx = rect.center().x()
         head_y = max(8, rect.top())
         body_bottom = min(self._win_h - 8, rect.bottom())
-    else:
-      # Live2D 面部约在窗口上部，避免用中心点导致气泡挡脸
-      head_y = max(24, int(self._win_h * LIVE2D_HEAD_Y_RATIO))
-      body_bottom = min(self._win_h - 8, int(self._win_h * 0.78))
     return cx, head_y, body_bottom
 
-  def _scaled_margin_gap(self) -> tuple[int, int]:
-    scale = self._ui_scale_factor()
-    margin = max(4, int(round(8 * scale)))
-    gap = max(4, int(round(10 * scale)))
-    return margin, gap
-
   def _layout_bubbles(self, chat_text: str | None = None) -> None:
-    """状态栏在上、AI 气泡在下，贴头顶堆叠；小窗时保证不叠在同一 y。"""
+    """Place chat/status/input overlays beside the pet window."""
     if self._window is None:
       return
-    scale = self._ui_scale_factor()
-    for widget in (self.info_bubble, self.chat_bubble, self.input_box):
-      if widget is not None and hasattr(widget, "apply_ui_scale"):
-        widget.apply_ui_scale(scale)
-
-    cx, head_y, body_bottom = self._character_layout()
-    margin, gap = self._scaled_margin_gap()
-    stack_gap = max(gap, int(round(12 * scale)))
-    live2d_lift = 0 if self._is_flat_mode() else int(round(LIVE2D_BUBBLE_LIFT_BASE * scale))
-    flat_head_gap = int(round(10 * scale)) if self._is_flat_mode() else 0
-    status_chat_gap = max(stack_gap, int(round(20 * scale)))
+    _cx, head_y, _body_bottom = self._character_layout()
+    margin = 8
+    gap = 10
 
     status_on = bool(self._status_bar_enabled and self.info_bubble)
-    chat_show = bool(
-      self._chat_open and self._chat_bubble_visible and self.chat_bubble
-    )
+    chat_on = bool((self._chat_open or self._companion_bubble_active) and self.chat_bubble)
+    input_on = bool(self._chat_open and self.input_box)
 
-    if self._chat_open and self.input_box:
-      ix = max(margin, min(cx - self.input_box.WIDTH // 2, self._win_w - self.input_box.WIDTH - margin))
-      iy = min(self._win_h - self.input_box.HEIGHT - margin, body_bottom + gap)
-      self.input_box.show(ix, iy)
-
-    max_bubble_w = max(100, self._win_w - margin * 2)
-    sw = sh = cw = ch = 0
-    if chat_show:
-      text = chat_text if chat_text is not None else self.chat_bubble.text
-      self.chat_bubble.set_max_width(max_bubble_w)
-      self.chat_bubble.show(0, 0, text)
-      cw, ch = self.chat_bubble.width(), self.chat_bubble.height()
-    elif self.chat_bubble:
-      self.chat_bubble.hide()
-
-    if status_on:
-      self.info_bubble.set_max_width(max_bubble_w)
+    items: list[tuple[QWidget, int, int]] = []
+    if status_on and self.info_bubble:
       self.info_bubble.show(0, 0)
-      sw, sh = self.info_bubble.width(), self.info_bubble.height()
+      items.append((self.info_bubble, self.info_bubble.width(), self.info_bubble.height()))
+    if input_on and self.input_box:
+      self.input_box.show(0, 0)
+      items.append((self.input_box, self.input_box.width(), self.input_box.height()))
+    if chat_on and self.chat_bubble:
+      text = chat_text if chat_text is not None else self.chat_bubble.text
+      self.chat_bubble.show(0, 0, text)
+      items.append((self.chat_bubble, self.chat_bubble.width(), self.chat_bubble.height()))
 
-    stack_h = 0
-    if chat_show and ch > 0:
-      stack_h += ch
-    if status_on and sh > 0:
-      stack_h += sh
-    if chat_show and ch > 0 and status_on and sh > 0:
-      stack_h += status_chat_gap
+    if not items:
+      return
 
-    # 从头顶往上堆：先 AI 气泡（靠下/靠头），再状态栏（靠上）
-    anchor_bottom = head_y - stack_gap - live2d_lift - flat_head_gap
-    min_anchor = margin + stack_h
-    if anchor_bottom < min_anchor:
-      anchor_bottom = min_anchor
+    stack_w = max(width for _widget, width, _height in items)
+    stack_h = sum(height for _widget, _width, height in items) + gap * (len(items) - 1)
+    preferred_y = max(margin, min(head_y - stack_h // 3, self._win_h - stack_h - margin))
+    x, y = self._floating_overlay_pos(stack_w, stack_h, preferred_y)
 
-    dual_live2d = bool(
-      not self._is_flat_mode() and status_on and chat_show and sh > 0 and ch > 0
-    )
-    if dual_live2d:
-      anchor_bottom -= int(round(28 * scale))
-
-    y_bottom = anchor_bottom
-    chat_x = chat_y = 0
-    if chat_show and ch > 0:
-      chat_x = max(margin, min(cx - cw // 2, self._win_w - cw - margin))
-      chat_y = y_bottom - ch
-      self.chat_bubble.move(chat_x, chat_y)
-      if not dual_live2d:
-        y_bottom = chat_y - status_chat_gap
-
-    if status_on and sh > 0:
-      if dual_live2d:
-        lateral = int(round(52 * scale))
-        sx = max(
-          margin,
-          min(cx + lateral - sw // 2, self._win_w - sw - margin),
-        )
-        sy = head_y - stack_gap - live2d_lift - int(round(36 * scale)) - sh
-        if chat_y > 0 and sy + sh > chat_y - 6:
-          sy = chat_y - status_chat_gap - sh
-        sy = max(margin, sy)
-      else:
-        sx = max(margin, min(cx - sw // 2, self._win_w - sw - margin))
-        sy = y_bottom - sh
-        sy = max(margin, sy)
-      self.info_bubble.move(sx, sy)
+    cursor_y = y
+    for widget, width, height in items:
+      widget.move(x + (stack_w - width) // 2, cursor_y)
+      widget.raise_()
+      cursor_y += height + gap
 
     self._raise_ui_overlays()
-    if chat_show and self._widget_alive(self.chat_bubble):
-      self.chat_bubble.raise_()
-    if status_on and self._widget_alive(self.info_bubble):
-      self.info_bubble.raise_()
 
-  def _save_chat_message(self, role: str, text: str) -> None:
-    name = self._active_character_name()
+  def _reflow_visible_bubbles(self) -> None:
+    """Reposition already-visible overlays without hiding/showing them."""
+    visible: list[QWidget] = []
+    for widget in (self.info_bubble, self.input_box, self.chat_bubble):
+      if widget is not None and widget.isVisible():
+        visible.append(widget)
+    if not visible:
+      return
+
+    margin = 8
+    gap = 10
+    stack_w = max(widget.width() for widget in visible)
+    stack_h = sum(widget.height() for widget in visible) + gap * (len(visible) - 1)
+    x = min(widget.x() for widget in visible)
+    y = max(margin, min(visible[0].y(), self._win_h - stack_h - margin))
+
+    cursor_y = y
+    for widget in visible:
+      widget.move(x + (stack_w - widget.width()) // 2, cursor_y)
+      widget.raise_()
+      cursor_y += widget.height() + gap
+    self._raise_ui_overlays()
+
+  def _remember_pending_chat_reply(self, character_name: str, user_text: str) -> None:
+    self._pending_chat_history.append(
+      {"name": str(character_name or "").strip(), "user": str(user_text or "").strip()}
+    )
+    if len(self._pending_chat_history) > 50:
+      self._pending_chat_history = self._pending_chat_history[-50:]
+
+  def _take_pending_chat_character(self, user_text: str) -> str:
+    value = str(user_text or "").strip()
+    for idx, item in enumerate(self._pending_chat_history):
+      if not value or item.get("user") == value:
+        found = self._pending_chat_history.pop(idx)
+        return found.get("name") or self._active_character_name()
+    if self._pending_chat_history:
+      found = self._pending_chat_history.pop(0)
+      return found.get("name") or self._active_character_name()
+    return self._active_character_name()
+
+  def _save_ai_reply_from_event(self, character_name: str, reply: str) -> None:
+    self._save_chat_message("ai", reply, character_name=character_name)
+
+  def _save_chat_message(self, role: str, text: str, character_name: str | None = None) -> None:
+    name = character_name or self._active_character_name()
+    text = str(text or "").strip()
+    if not text:
+      return
     msgs = self._chat_history.load(name)
     msgs.append((role, text))
     self._chat_history.save(name, msgs)
@@ -2782,7 +3239,7 @@ class DesktopPet:
     self._resize_start_global = global_pos
     self._resize_start_size = (self._win_w, self._win_h)
 
-  def _apply_window_size(self, w: int, h: int) -> None:
+  def _apply_window_size(self, w: int, h: int, save_memory: bool = True) -> None:
     w = max(220, w)
     h = max(280, h)
     self._win_w, self._win_h = w, h
@@ -2794,15 +3251,17 @@ class DesktopPet:
           player.set_pet(self._active_pet or {}, w, h)
       elif self._model:
         self._model.Resize(w, h)
+        self._adjust_model_canvas_fit()
     if self._resize_visible and self._window and hasattr(self._window, "_resize_overlay"):
       self._window._resize_overlay.setGeometry(0, 0, w, h)
     self._apply_ui_scale()
     if self._status_bar_enabled or self._chat_open:
       self._layout_bubbles()
-    self._save_pet_memory()
+    if save_memory:
+      self._save_pet_memory()
 
   def _ui_scale_factor(self) -> float:
-    return max(0.28, min(1.25, self._win_w / BASE_WINDOW_W))
+    return max(0.35, min(1.25, self._win_w / BASE_WINDOW_W))
 
   def _apply_ui_scale(self) -> None:
     scale = self._ui_scale_factor()
@@ -2819,29 +3278,6 @@ class DesktopPet:
     ):
       if widget is not None and hasattr(widget, "apply_ui_scale"):
         widget.apply_ui_scale(scale)
-        if hasattr(widget, "repaint"):
-          widget.repaint()
-    if self.context_menu and self.context_menu.visible:
-      mx, my = self.context_menu.x, self.context_menu.y
-      menu_h = (
-        self.context_menu.PADDING * 2
-        + len(RightClickMenu.ITEMS) * self.context_menu.ITEM_HEIGHT
-      )
-      mx = max(0, min(mx, self._win_w - self.context_menu.WIDTH - 4))
-      my = max(0, min(my, self._win_h - menu_h - 4))
-      self.context_menu.setGeometry(mx, my, self.context_menu.WIDTH, menu_h)
-    for submenu in (
-      self.pin_submenu,
-      self.hover_submenu,
-      self.status_submenu,
-      self.chat_submenu,
-    ):
-      if submenu and submenu.visible:
-        submenu.apply_ui_scale(scale)
-        h = submenu.PADDING * 2 + len(submenu.ITEMS) * submenu.ITEM_HEIGHT
-        submenu.setGeometry(submenu.x, submenu.y, submenu.WIDTH, h)
-    if self._status_bar_enabled or self._chat_open:
-      self._layout_bubbles()
 
   def _scale_window(self, factor: float) -> None:
     if factor <= 0:
@@ -2849,6 +3285,38 @@ class DesktopPet:
     new_w = int(self._win_w * factor)
     new_h = int(new_w / self._aspect_ratio)
     self._apply_window_size(new_w, new_h)
+
+  def _current_base_size(self) -> tuple[int, int]:
+    """Return base window size (w, h) for current character."""
+    profile = self._current_live2d_view_profile()
+    base_size = profile.get("base_size", (BASE_WINDOW_W, BASE_WINDOW_H))
+    if base_size and len(base_size) == 2:
+      return (int(base_size[0]), int(base_size[1]))
+    return (BASE_WINDOW_W, BASE_WINDOW_H)
+
+  def set_pet_scale(self, scale: float, min_scale: float = 0.6, max_scale: float = 1.8) -> float:
+    value = max(float(min_scale), min(float(max_scale), float(scale)))
+    base_w, base_h = self._current_base_size()
+    new_w = int(round(base_w * value))
+    new_h = int(round(base_h * value))
+    if abs(new_w - self._win_w) < 2 and abs(new_h - self._win_h) < 2:
+      return self.current_pet_scale()
+    self._aspect_ratio = base_w / base_h
+    self._apply_window_size(new_w, new_h, save_memory=False)
+    if self._window is not None:
+      self._window.update()
+    if self._is_flat_mode():
+      player = self._plane_player()
+      if player is not None:
+        player.update()
+    print(f"[DesktopPet] Scale applied: scale={value:.2f}, size={new_w}x{new_h}")
+    return self.current_pet_scale()
+
+  def current_pet_scale(self) -> float:
+    if self._win_w <= 0:
+      return 1.0
+    base_w, _ = self._current_base_size()
+    return self._win_w / base_w
 
   def _on_pin_submenu_item_and_dismiss(self, choice: str) -> None:
     self._on_pin_submenu_item(choice)
@@ -2882,13 +3350,91 @@ class DesktopPet:
     except Exception:
       pass
 
-  def close(self) -> None:
-    if self._window is not None:
-      self._close_pet_window()
+  def _stop_runtime_timers(self) -> None:
     self._running = False
-    if self._timer:
-      self._timer.stop()
-      self._timer = None
+    for attr in ("_timer", "_computer_comment_timer", "_speech_hint_timer"):
+      timer = getattr(self, attr, None)
+      if timer is not None:
+        try:
+          timer.stop()
+        except RuntimeError:
+          pass
+        try:
+          timer.deleteLater()
+        except RuntimeError:
+          pass
+        setattr(self, attr, None)
+    try:
+      self._edge_hold_timer.stop()
+    except RuntimeError:
+      pass
+    try:
+      self._edge_hold_timer.deleteLater()
+    except RuntimeError:
+      pass
+
+  def _close_qt_widget(self, widget: QWidget | None) -> None:
+    if not self._widget_alive(widget):
+      return
+    shutdown = getattr(widget, "shutdown", None)
+    if callable(shutdown):
+      try:
+        shutdown()
+        return
+      except RuntimeError:
+        return
+      except Exception as exc:
+        print(f"[DesktopPet] 子窗口 shutdown 失败，改用 close: {exc}")
+    try:
+      widget.hide()
+    except RuntimeError:
+      pass
+    try:
+      widget.close()
+    except RuntimeError:
+      pass
+    try:
+      widget.deleteLater()
+    except RuntimeError:
+      pass
+
+  def _close_child_windows(self) -> None:
+    for widget in (
+      getattr(self, "_vision_debug_panel", None),
+      self._console,
+      self.info_bubble,
+      self.chat_bubble,
+      self.input_box,
+      self.context_menu,
+      self.pin_submenu,
+      self.hover_submenu,
+      self.status_submenu,
+      self.chat_submenu,
+      self.arc_menu,
+      self._window,
+    ):
+      self._close_qt_widget(widget)
+    self._clear_overlay_refs()
+    self._console = None
+    self._window = None
+    self._hwnd = None
+    if hasattr(self, "_vision_debug_panel"):
+      self._vision_debug_panel = None
+    self._chat_stream = None
+
+  def _release_live2d_resources(self) -> None:
+    gl_widget = None
+    if self._window is not None:
+      gl_widget = getattr(self._window, "_gl", None)
+    made_current = False
+    if gl_widget is not None and self._widget_alive(gl_widget):
+      try:
+        gl_widget.makeCurrent()
+        made_current = True
+      except RuntimeError:
+        made_current = False
+      except Exception:
+        made_current = False
     self._model = None
     try:
       live2d.glRelease()
@@ -2898,11 +3444,28 @@ class DesktopPet:
       live2d.dispose()
     except Exception:
       pass
-    if self._app:
+    if gl_widget is not None and made_current:
       try:
-        self._app.quit()
+        gl_widget.doneCurrent()
+      except RuntimeError:
+        pass
       except Exception:
         pass
+
+  def close(self) -> None:
+    if self._closed:
+      return
+    self._closed = True
+    self._cleaning_up = True
+    self._stop_runtime_timers()
+    self.stop_text_reading()
+    self._release_live2d_resources()
+    self._close_child_windows()
+
+  def cleanup(self, quit_app: bool = False) -> None:
+    self.close()
+    if quit_app and self._app:
+      self._app.quit()
 
   def _tick(self) -> None:
     if not self._running:
@@ -2926,6 +3489,207 @@ class DesktopPet:
     if self.arc_menu:
       self.arc_menu.tick(1.0 / 60.0)
     self._poll_right_button_menu()
+
+  def _start_computer_companion(self) -> None:
+    if not self._computer_companion_enabled or self._computer_activity_detector is None:
+      return
+    if self._computer_comment_timer is not None:
+      self._computer_comment_timer.stop()
+    self._computer_comment_timer = QTimer()
+    self._computer_comment_timer.timeout.connect(self._poll_computer_companion)
+    self._computer_comment_timer.start(self._computer_poll_ms)
+    QTimer.singleShot(self._computer_poll_ms, self._poll_computer_companion)
+    print("[DesktopPet] 电脑状态陪伴点评已开启。")
+
+  def _stop_computer_companion(self) -> None:
+    if self._computer_comment_timer is not None:
+      self._computer_comment_timer.stop()
+      self._computer_comment_timer = None
+    self._computer_comment_busy = False
+    print("[DesktopPet] 电脑状态陪伴点评已关闭。")
+
+  def _start_state_speech_hints(self) -> None:
+    if not self._speech_hint_enabled:
+      return
+    if self._speech_hint_timer is not None:
+      self._speech_hint_timer.stop()
+    self._speech_hint_timer = QTimer()
+    self._speech_hint_timer.timeout.connect(self._poll_state_speech_hint)
+    self._speech_hint_timer.start(self._speech_hint_poll_ms)
+    QTimer.singleShot(self._speech_hint_poll_ms, self._poll_state_speech_hint)
+    print("[DesktopPet] 桌宠主动语音提示已开启。")
+
+  def _poll_state_speech_hint(self) -> None:
+    if (
+      not self._running
+      or self._speech_hint_busy
+      or self._computer_comment_busy
+      or self._chat_open
+      or self._any_menu_open()
+      or self._resizing_corner
+    ):
+      return
+    if not hasattr(self.team_d, "api_should_speak") or not hasattr(self.team_d, "api_get_speech_hint"):
+      return
+    try:
+      if not self.team_d.api_should_speak():
+        return
+      hint = str(self.team_d.api_get_speech_hint() or "").strip()
+    except Exception as exc:
+      print(f"[DesktopPet] 主动语音提示检查失败: {exc}")
+      return
+    if not hint:
+      return
+
+    now = time.time()
+    if now - self._last_speech_hint_at < self._speech_hint_cooldown:
+      return
+    if hint == self._last_speech_hint_text and now - self._last_speech_hint_at < self._speech_hint_cooldown * 2:
+      return
+
+    self._last_speech_hint_at = now
+    self._last_speech_hint_text = hint
+    self._emit_state_speech_hint(hint)
+
+  def _emit_state_speech_hint(self, hint: str) -> None:
+    self._speech_hint_busy = True
+    self._begin_companion_bubble()
+
+    def _run() -> None:
+      try:
+        self._stream_text_to_ui(hint)
+        if hasattr(self.team_c, "api_play_speech_hint"):
+          self.team_c.api_play_speech_hint(hint)
+        elif hasattr(self.team_c, "api_play_system_voice"):
+          self.team_c.api_play_system_voice(hint, state="hint", action="speak")
+      except Exception as exc:
+        print(f"[DesktopPet] 主动语音提示失败: {exc}")
+      finally:
+        self._speech_hint_busy = False
+        if self._chat_stream is not None:
+          self._chat_stream.comment_finished.emit()
+
+    threading.Thread(target=_run, daemon=True).start()
+
+  def _poll_computer_companion(self) -> None:
+    if (
+      not self._running
+      or not self._computer_companion_enabled
+      or not self._desktop_observation_authorized
+      or self._computer_activity_detector is None
+      or self._computer_comment_busy
+      or self._chat_open
+      or self._any_menu_open()
+      or self._resizing_corner
+    ):
+      return
+
+    try:
+      state = self._computer_activity_detector.get_state()
+    except Exception as exc:
+      print(f"[DesktopPet] 电脑状态检测失败: {exc}")
+      return
+
+    if self._computer_no_disturb_fullscreen and bool(state.get("is_fullscreen")):
+      return
+    if not state.get("need_response"):
+      return
+    comment_state = self._privacy_filtered_activity_state(state)
+    event = build_companion_event(comment_state)
+    if not event:
+      return
+
+    now = time.time()
+    signature = self._computer_comment_signature(event)
+    if now - self._last_computer_comment_at < self._computer_comment_cooldown:
+      return
+    if signature == self._last_computer_comment_signature and now - self._last_computer_comment_at < self._computer_comment_cooldown * 2:
+      return
+
+    self._last_computer_comment_at = now
+    self._last_computer_comment_signature = signature
+    self._emit_computer_companion_comment(event, comment_state)
+
+  def _privacy_filtered_activity_state(self, state: dict[str, Any]) -> dict[str, Any]:
+    filtered = dict(state)
+    if not self._computer_include_window_title:
+      filtered["window_title"] = ""
+      filtered["description"] = re.sub(
+        r"，窗口标题是.*?(?:，|。|$)",
+        "，",
+        str(filtered.get("description") or ""),
+      ).rstrip("，")
+      filtered["suggestion"] = build_activity_suggestion(filtered)
+    return filtered
+
+  def _emit_computer_companion_comment(self, event: dict[str, Any], state: dict[str, Any]) -> None:
+    self._computer_comment_busy = True
+    self._begin_companion_bubble()
+
+    def _run() -> None:
+      reply = ""
+      try:
+        if hasattr(self.team_c, "api_on_status_event"):
+          reply = self.team_c.api_on_status_event(event, ui_callback=self._stream_ui_callback)
+        if not reply:
+          reply = build_local_companion_comment(state)
+          self._stream_text_to_ui(reply)
+          if hasattr(self.team_c, "api_play_system_voice"):
+            self.team_c.api_play_system_voice(reply, state="happy", action="speak")
+      except Exception as exc:
+        print(f"[DesktopPet] 电脑状态点评失败，使用本地短句: {exc}")
+        reply = build_local_companion_comment(state)
+        self._stream_text_to_ui(reply)
+        try:
+          if hasattr(self.team_c, "api_play_system_voice"):
+            self.team_c.api_play_system_voice(reply, state="happy", action="speak")
+        except Exception as voice_exc:
+          print(f"[DesktopPet] 电脑状态点评语音失败: {voice_exc}")
+      finally:
+        if self._chat_stream is not None:
+          self._chat_stream.comment_finished.emit()
+
+    threading.Thread(target=_run, daemon=True).start()
+
+  def _begin_companion_bubble(self) -> None:
+    self._companion_bubble_active = True
+    self._companion_bubble_token += 1
+    if self.chat_bubble is not None:
+      self.chat_bubble.set_text("")
+      self._layout_bubbles(chat_text="")
+
+  def _handle_companion_comment_finished(self) -> None:
+    self._computer_comment_busy = False
+    token = self._companion_bubble_token
+
+    def _hide_if_current() -> None:
+      if token == self._companion_bubble_token:
+        self._hide_companion_bubble()
+
+    QTimer.singleShot(9000, _hide_if_current)
+
+  def _finish_companion_comment(self) -> None:
+    self._handle_companion_comment_finished()
+
+  def _hide_companion_bubble(self) -> None:
+    if self._chat_open:
+      self._companion_bubble_active = False
+      return
+    self._companion_bubble_active = False
+    if self.chat_bubble is not None:
+      self.chat_bubble.hide()
+    if self._status_bar_enabled and self.info_bubble is not None:
+      self._layout_bubbles()
+    self._update_mouse_passthrough(self._local_mouse_pos())
+
+  def _stream_text_to_ui(self, text: str) -> None:
+    show_feedback_message(text, self._stream_ui_callback, stream=True, delay=0.015)
+
+  @staticmethod
+  def _computer_comment_signature(event: dict[str, Any]) -> str:
+    title = str(event.get("window_title", "") or "")[:48].lower()
+    process = str(event.get("process_name", "") or "").lower()
+    return f"{event.get('activity_code')}|{process}|{title}"
 
   def _update_gaze(self, mx: int, my: int) -> None:
     """窗口全域视线：x -> angleX [-30,30]，y -> angleY [-20,20]，每帧 Drag。"""
@@ -2954,12 +3718,200 @@ class DesktopPet:
     return gp.x(), gp.y()
 
   def _init_model_gl(self) -> None:
+    # Patch model3.json if it lacks Expressions (e.g. elf_count)
+    patched_path = self._prepare_model3_with_discovered_expressions(self.model_path)
     self._model = live2d.LAppModel()
-    self._model.LoadModelJson(self.model_path, maskBufferCount=2)
+    self._model.LoadModelJson(patched_path, maskBufferCount=2)
     self._model.Resize(self._win_w, self._win_h)
+    self._adjust_model_canvas_fit()
     self._build_motion_index()
     self._load_available_motions()
+    self._build_expression_index()
+    self._load_available_expressions()
+    QTimer.singleShot(300, self._debug_save_live2d_frame)
     self._start_idle_motion()
+
+
+  def _prepare_model3_with_discovered_expressions(self, model_path: str) -> str:
+    """If model3.json lacks Expressions but .exp3.json files exist, create a patched copy."""
+    runtime = os.path.dirname(model_path)
+    try:
+      with open(model_path, encoding="utf-8") as f:
+        data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+      return model_path
+    fr = data.get("FileReferences", {})
+    if "Expressions" in fr and len(fr["Expressions"]) > 0:
+      return model_path  # already declared
+    # Scan for .exp3.json files
+    exp3_files: list[str] = []
+    for root, _dirs, files in os.walk(runtime):
+      for fn in files:
+        if fn.endswith(".exp3.json"):
+          rel = os.path.relpath(os.path.join(root, fn), runtime)
+          exp3_files.append(rel.replace("\\", "/"))
+    if not exp3_files:
+      return model_path  # no expression files at all
+    exp3_files.sort()
+    new_expressions = [
+      {"Name": os.path.basename(f)[: -len(".exp3.json")], "File": f}
+      for f in exp3_files
+    ]
+    data.setdefault("FileReferences", {})["Expressions"] = new_expressions
+    # Write patched copy next to original
+    patched_path = model_path[: -len(".model3.json")] + ".patched.model3.json"
+    try:
+      with open(patched_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+      print(f"[DesktopPet] Patched model3 with {len(new_expressions)} expressions: {patched_path}")
+      return patched_path
+    except OSError:
+      return model_path
+
+  def _iter_live2d_expression_files(self, model_path: str | None = None) -> list[str]:
+    """Scan runtime dir for all .exp3.json files, return sorted list."""
+    mp = model_path or self.model_path
+    runtime = os.path.dirname(mp)
+    exp3_files: list[str] = []
+    if os.path.isdir(runtime):
+      for root, _dirs, files in os.walk(runtime):
+        for fn in files:
+          if fn.endswith(".exp3.json"):
+            exp3_files.append(os.path.join(root, fn))
+    exp3_files.sort()
+    return exp3_files
+
+  @staticmethod
+  def _expression_id_from_file(path: str) -> str:
+    base = os.path.basename(path)
+    if base.lower().endswith(".exp3.json"):
+      return base[: -len(".exp3.json")]
+    return os.path.splitext(base)[0]
+
+  def _build_expression_index(self) -> None:
+    """Build self._expression_index from model3.json Expressions + file scan."""
+    self._expression_index.clear()
+    # 1. Read model3.json FileReferences.Expressions
+    try:
+      with open(self.model_path, encoding="utf-8") as f:
+        data = json.load(f)
+      expr_list = data.get("FileReferences", {}).get("Expressions", [])
+      for entry in expr_list:
+        name = entry.get("Name", "")
+        fpath = entry.get("File", "")
+        if name and fpath:
+          full = os.path.join(os.path.dirname(self.model_path), fpath.replace("/", os.sep))
+          self._expression_index[name] = full if os.path.isfile(full) else name
+    except (OSError, json.JSONDecodeError):
+      pass
+    # 2. Scan all .exp3.json files (catch files not in model3)
+    scanned = self._iter_live2d_expression_files()
+    for fp in scanned:
+      eid = self._expression_id_from_file(fp)
+      if eid not in self._expression_index:
+        self._expression_index[eid] = fp
+
+  def _load_available_expressions(self) -> None:
+    self.available_expressions = sorted(self._expression_index.keys())
+    model_id = self._current_live2d_model_id()
+    print(
+      f"[DesktopPet] Loaded expressions: id={model_id}, "
+      f"count={len(self.available_expressions)}, "
+      f"names={self.available_expressions}"
+    )
+
+  def _current_live2d_model_id(self) -> str:
+    """Return identifier for current Live2D model, for LIVE2D_VIEW_OVERRIDES lookup."""
+    if self._active_pet and self._active_pet.get("id"):
+      return str(self._active_pet.get("id"))
+    norm = os.path.normpath(self.model_path).lower()
+    if "elf_count" in norm:
+      return "elf_count"
+    if "doro" in norm:
+      return "doro"
+    if "mao_pro_zh" in norm or "maopro" in norm or "xiaomonv" in norm:
+      return "mao_pro_zh"
+    return ""
+
+  def _current_live2d_view_profile(self) -> dict[str, Any]:
+    """Get live2d view profile for current model: base_size, scale, offset."""
+    model_id = self._current_live2d_model_id()
+    if model_id:
+      profile = LIVE2D_VIEW_OVERRIDES.get(model_id)
+      if profile:
+        return profile
+    return dict(DEFAULT_LIVE2D_VIEW_PROFILE)
+
+  def _adjust_model_canvas_fit(self) -> None:
+    """Apply per-character view profile: scale + offset. No fallback branch needed."""
+    if self._model is None or self._win_h <= 0:
+      return
+    # Every Live2D model gets its profile (override or default)
+    profile = self._current_live2d_view_profile()
+    scale = float(profile.get("scale", 1.0))
+    ox, oy = profile.get("offset", (0.0, 0.05))
+    try:
+      # --- Attempt scale ---
+      scale_applied = False
+      if hasattr(self._model, "SetScale"):
+        self._model.SetScale(scale)
+        scale_applied = True
+      elif hasattr(self._model, "SetModelScale"):
+        self._model.SetModelScale(scale)
+        scale_applied = True
+      elif hasattr(self._model, "SetModelMatrix"):
+        self._model.SetModelMatrix(scale)
+        scale_applied = True
+      else:
+        print(f"[DesktopPet] WARNING: {type(self._model).__name__} has no SetScale/SetModelScale/SetModelMatrix")
+      # --- Always apply offset ---
+      self._model.SetOffset(float(ox), float(oy))
+      try:
+        cw, ch = self._model.GetCanvasSize()
+      except Exception:
+        cw, ch = 0, 0
+      print(
+        f"[DesktopPet] Live2D fit override: id={self._current_live2d_model_id()}, "
+        f"win={self._win_w}x{self._win_h}, canvas={cw}x{ch}, "
+        f"scale={scale}(applied={scale_applied}), offset=({ox},{oy})"
+      )
+      # --- Diagnostic: extreme params still not showing feet? ---
+      if scale <= 0.6 and self._win_h >= 880:
+        print("[DesktopPet] " + "=" * 40)
+        print("[DesktopPet] DIAGNOSTIC: Extremely small scale ({:.2f}) and tall window ({:.0f}x{:.0f})".format(scale, self._win_w, self._win_h))
+        print("[DesktopPet] If feet are STILL truncated, the problem is NOT")
+        print("[DesktopPet] window clipping or offset misconfiguration.")
+        print("[DesktopPet] The Live2D model resource (moc3/artmesh) likely")
+        print("[DesktopPet] has no complete foot geometry below the visible area.")
+        print("[DesktopPet] Check debug_live2d_frame.png for confirmation.")
+        print("[DesktopPet] Solutions: re-export model in Cubism Editor with")
+        print("[DesktopPet] full body artmesh, or pad the canvas bottom.")
+        print("[DesktopPet] " + "=" * 40)
+    except Exception as exc:
+      print(f"[DesktopPet] Live2D fit override failed: {exc}")
+
+  def _debug_save_live2d_frame(self) -> None:
+    """Save a debug screenshot of the current GL frame for any Live2D model."""
+    if self._model is None or self._window is None:
+      return
+    model_id = self._current_live2d_model_id()
+    if not model_id:
+      return
+    try:
+      debug_dir = os.path.join(PROJECT_ROOT, "data")
+      os.makedirs(debug_dir, exist_ok=True)
+      out_path = os.path.join(debug_dir, f"debug_live2d_frame_{model_id}.png")
+      self._model.Update()
+      self._window._gl.update()
+      QApplication.processEvents()
+      pix = self._window._gl.grabFramebuffer()
+      if pix.isNull():
+        print("[DesktopPet] Debug frame grab returned null pixmap")
+        return
+      pix.save(out_path)
+      print(f"[DesktopPet] Debug frame saved: {out_path}")
+    except Exception as exc:
+      print(f"[DesktopPet] Failed to save debug frame: {exc}")
 
   def _capture_mao_pro_motion_preview(self) -> None:
     """mao_pro_zh：从首个 motion3 首帧生成预览图。"""
@@ -3157,9 +4109,11 @@ class DesktopPet:
   def _load_settings(self) -> None:
     defaults = {
       "pin_top": True,
-      "hover_fade": True,
+      "hover_fade": False,
       "status_bar": False,
       "chat_open": False,
+      "voice_pack_id": "",
+      "tts_settings": DEFAULT_TTS_UI_SETTINGS,
     }
     data: dict[str, Any] = dict(defaults)
     try:
@@ -3182,6 +4136,9 @@ class DesktopPet:
     self._hover_fade_enabled = bool(data.get("hover_fade", defaults["hover_fade"]))
     self._status_bar_enabled = bool(data.get("status_bar", defaults["status_bar"]))
     self._chat_open = bool(data.get("chat_open", defaults["chat_open"]))
+    self._voice_pack_id = str(data.get("voice_pack_id", defaults["voice_pack_id"]) or "").strip()
+    self._tts_settings = normalize_tts_settings(data.get("tts_settings", defaults["tts_settings"]))
+    self._sync_team_c_voice_context()
 
   def _save_settings(self) -> None:
     data = {
@@ -3189,6 +4146,8 @@ class DesktopPet:
       "hover_fade": self._hover_fade_enabled,
       "status_bar": self._status_bar_enabled,
       "chat_open": self._chat_open,
+      "voice_pack_id": self._voice_pack_id,
+      "tts_settings": self._tts_settings,
     }
     try:
       os.makedirs(_SETTINGS_DIR, exist_ok=True)
@@ -3204,7 +4163,24 @@ class DesktopPet:
     try:
       with open(PET_MEMORY_PATH, encoding="utf-8") as f:
         data = json.load(f)
-      return data if isinstance(data, dict) else {}
+      if not isinstance(data, dict):
+        return {}
+      # --- Per-model window size anchor ---
+      # Ensure remembered window_size at least matches each model's bare minimum.
+      # (switch_to_pet will apply the exact profile base_size anyway.)
+      last_id = str(data.get("last_pet_id", "") or "")
+      size = data.get("window_size")
+      if last_id == "elf_count" and isinstance(size, (list, tuple)) and len(size) == 2:
+        h = int(size[1])
+        if h < 800:
+          data["window_size"] = [500, 920]
+          print(f"[DesktopPet] Auto-fixed elf_count window size: {size} -> [500, 920]")
+          try:
+            with open(PET_MEMORY_PATH, "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+          except OSError:
+            pass
+      return data
     except (OSError, json.JSONDecodeError, TypeError):
       return {}
 
@@ -3215,6 +4191,8 @@ class DesktopPet:
       "hover_fade": self._hover_fade_enabled,
       "status_bar": self._status_bar_enabled,
       "chat_open": self._chat_open,
+      "voice_pack_id": self._voice_pack_id,
+      "tts_settings": self._tts_settings,
     }
     if self._window is not None:
       data["position"] = [self._window.x(), self._window.y()]
@@ -3229,35 +4207,17 @@ class DesktopPet:
     except OSError as exc:
       print(f"[DesktopPet] 保存记忆失败: {exc}")
 
-  def _first_available_pet_id(self) -> str:
-    flat = scan_flat_pet_list()
-    if flat:
-      return flat[0]["id"]
-    if is_mao_pro_zh_model(self.model_path):
-      return "mao_pro_zh"
-    return "mao"
-
-  def _sync_console_dashboard(self) -> None:
-    if not self._console or not self._widget_alive(self._console):
-      return
-    pet_id = (self._active_pet or {}).get("id") or self._last_pet_id
-    if pet_id:
-      self._console._current_pet_id = pet_id
-      self._console._sel_pet = pet_id
-    self._console.sync_dashboard_stats()
-
   def _restore_last_pet(self) -> None:
-    pet_id = self._last_pet_id or self._first_available_pet_id()
-    self._last_pet_id = pet_id
+    pet_id = self._last_pet_id
+    if not pet_id:
+      return
     record = self.build_pet_record(pet_id)
     if record:
       self.switch_to_pet(record)
-      self._sync_console_dashboard()
       return
     for pet in self.list_flat_pets_enriched():
       if pet.get("id") == pet_id:
         self.switch_to_pet(pet)
-        self._sync_console_dashboard()
         return
 
   def _set_pin_top(self, enabled: bool) -> None:
@@ -3282,6 +4242,9 @@ class DesktopPet:
       else:
         self._window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
       self._window.show()
+    self._sync_floating_overlay_flags()
+    if self._status_bar_enabled or self._chat_open:
+      self._layout_bubbles()
     if self.pin_submenu:
       self.pin_submenu.set_active(enabled)
     self._save_settings()
@@ -3314,14 +4277,11 @@ class DesktopPet:
     self._chat_open = enabled
     if self.chat_submenu:
       self.chat_submenu.set_active(enabled)
-    if self._chat_bubble_idle_timer:
-      self._chat_bubble_idle_timer.stop()
     if enabled:
       if self.input_box:
         self.input_box.set_text("")
-      self._show_chat_bubble(chat_text=self._chat_greeting())
+      self._layout_bubbles(chat_text=self._chat_greeting())
     else:
-      self._chat_bubble_visible = False
       if self.chat_bubble:
         self.chat_bubble.hide()
       if self.input_box:
@@ -3415,8 +4375,6 @@ class DesktopPet:
     if self._point_on_ui(pos):
       if self._input_box_contains(pos) and self.input_box:
         self.input_box._field.setFocus()
-        if self._chat_open:
-          self._schedule_chat_bubble_hide()
       return
     if self._edge_zone(pos):
       self._edge_hold_timer.start(450)
@@ -3449,6 +4407,12 @@ class DesktopPet:
   def _ui_consumes_click(self, pos: tuple[int, int]) -> bool:
     if self._input_box_contains(pos) and self.input_box:
       local = self.input_box.mapFromParent(QPoint(*pos))
+      if (
+        hasattr(self.input_box, "_voice_btn")
+        and self.input_box._voice_btn.geometry().contains(local)
+      ):
+        self.input_box.start_voice_input()
+        return True
       if self.input_box._btn.geometry().contains(local):
         self._submit_chat()
         return True
@@ -3498,7 +4462,6 @@ class DesktopPet:
       choice = self.chat_submenu.handle_click(pos)
       if choice == "开启AI对话":
         self._set_chat_open(True)
-        self._show_chat_bubble(chat_text=self._chat_greeting())
       elif choice == "关闭AI对话":
         self._set_chat_open(False)
       if choice:
@@ -3585,7 +4548,6 @@ class DesktopPet:
     self._restore_window_focus()
 
   def _show_submenu_adjacent(self, submenu: SubMenu, item_rect) -> None:
-    submenu.apply_ui_scale(self._ui_scale_factor())
     gap = 4
     x_right = item_rect.right() + gap
     x_left = item_rect.left() - submenu.WIDTH - gap
@@ -3635,33 +4597,20 @@ class DesktopPet:
       self._set_chat_open(False)
 
   def _on_arc_motion_picked(self, item: dict) -> None:
-    motion = str(item.get("value", ""))
-    label = str(item.get("label", motion))
-    print(f"[DesktopPet] 播放动作: {label} ({motion})")
-    if self._is_flat_mode():
-      player = self._plane_player()
-      if player and motion and os.path.isfile(motion) and motion.lower().endswith(".gif"):
-        player.play_asset(gif=motion)
-      elif player and motion and os.path.isfile(motion):
-        player.play_asset(gif=motion)
-      elif player and motion:
-        for m in (self._active_pet or {}).get("motions", []):
-          frames = m.get("frames") or []
-          if frames and frames[0] == motion:
-            player.play_asset(frames=frames)
-            break
-        else:
-          self.play_motion(motion)
-      else:
-        self.play_motion(motion)
+    kind = str(item.get("kind", "motion"))
+    value = str(item.get("value", ""))
+    label = str(item.get("label", value))
+    if kind == "expression":
+      print(f"[DesktopPet] 设置表情: {label} ({value})")
+      self.set_expression(value)
     else:
-      self.play_motion(motion)
+      print(f"[DesktopPet] 播放动作: {label} ({value})")
+      self.play_motion(value)
     self._close_arc_menu()
 
   def _open_context_menu(self, pos: tuple[int, int]) -> None:
     if not self.context_menu:
       return
-    self.context_menu.apply_ui_scale(self._ui_scale_factor())
     self._set_window_click_through(False)
     if self.context_menu.visible and not self.context_menu.rect.contains(QPoint(*pos)):
       self._dismiss_menus()
@@ -3751,44 +4700,23 @@ class DesktopPet:
       pass
 
   def _close_pet_window(self) -> None:
-    """仅关闭桌宠悬浮窗；设置面板保持独立运行。"""
+    """关闭完整桌宠程序并释放所有 UI 子窗口。"""
     self._save_pet_memory()
-    self._running = False
-    if self._timer:
-      self._timer.stop()
-      self._timer = None
-    self._dismiss_menus()
-    if self._window is not None:
-      self._window.hide()
-      self._window.close()
-      self._window = None
-    self._clear_overlay_refs()
-    if self._console is not None:
-      try:
-        if self._console.isVisible():
-          return
-      except RuntimeError:
-        pass
-    if self._app:
-      self._app.quit()
+    self.cleanup(quit_app=True)
 
   def _open_settings_panel(self) -> None:
-    if self.arc_menu:
-      self.arc_menu.hide()
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-    if self._console is None or not self._widget_alive(self._console):
-      self._console = PetControlConsole(
-        desktop_pet=self,
-        project_root=project_root,
-        model_path=self.model_path,
-        available_motions=self.available_motions,
-        motion_name_map=self.motion_name_map,
-      )
-      _apply_control_console_theme(self._console)
-    self._console._reload_flat_tab()
-    self._sync_console_dashboard()
-    self._console.bring_to_front()
-    QTimer.singleShot(0, self._console.bring_to_front)
+    self.arc_menu.hide()
+    console = PetControlConsole(
+      desktop_pet=self,
+      project_root=PROJECT_ROOT,
+      model_path=self.model_path,
+      available_motions=self.available_motions,
+      motion_name_map=self.motion_name_map,
+    )
+    self._console = console
+    _apply_control_console_theme(console)
+    console.run()
+    self._console = None
 
   def _open_chat(self) -> None:
     self._set_chat_open(True)
@@ -3800,27 +4728,55 @@ class DesktopPet:
     msg = text if text is not None else self.input_box.get_text()
     if not msg or not str(msg).strip():
       return
+    user_text = str(msg).strip()
+    character_name = self._active_character_name()
     if not self._chat_open:
       self._set_chat_open(True)
-    self._save_chat_message("user", str(msg).strip())
-    self._show_chat_bubble(chat_text="")
-    if self.input_box:
-      self.input_box.set_text("")
+    self._save_chat_message("user", user_text, character_name=character_name)
+    self._remember_pending_chat_reply(character_name, user_text)
+    self._layout_bubbles(chat_text="")
+    self.input_box.set_text("")
     self.team_c.api_user_speak(
-      str(msg).strip(),
-      {"state_code": "normal"},
+      user_text,
+      self._current_voice_state_context(),
       self._stream_ui_callback,
     )
-    QTimer.singleShot(2500, self._save_ai_reply_from_bubble)
 
-  def _save_ai_reply_from_bubble(self) -> None:
-    if self.chat_bubble and self.chat_bubble.text.strip():
-      self._save_chat_message("ai", self.chat_bubble.text.strip())
+  def _current_voice_state_context(self) -> dict[str, Any]:
+    state: dict[str, Any] = {"state_code": "normal"}
+    try:
+      if hasattr(self.team_d, "api_get_pet_status"):
+        raw = self.team_d.api_get_pet_status()
+        if isinstance(raw, dict):
+          state.update(raw)
+    except Exception as exc:
+      print(f"[DesktopPet] Read voice state context failed: {exc}")
+    emotion_style = str(self._tts_settings.get("emotion_style") or "auto").strip()
+    if emotion_style:
+      state["tts_style"] = emotion_style
+    tts_settings = dict(self._tts_settings)
+    state["tts_settings"] = tts_settings
+    if str(tts_settings.get("response_language") or "").strip():
+      state["response_language"] = str(tts_settings.get("response_language") or "").strip()
+    if str(tts_settings.get("edge_voice") or "").strip():
+      state["edge_voice"] = str(tts_settings.get("edge_voice") or "").strip()
+    try:
+      ui_settings = load_ui_settings(PROJECT_ROOT)
+      personalization = ui_settings.get("personalization_settings")
+      if isinstance(personalization, dict):
+        state["personalization_settings"] = personalization
+    except Exception as exc:
+      print(f"[DesktopPet] Load personalization settings failed: {exc}")
+    try:
+      state["user_profile"] = UserProfile.load().to_prompt_context()
+    except Exception as exc:
+      print(f"[DesktopPet] Load user profile failed: {exc}")
+    return state
 
   def _start_idle_motion(self, *_args: Any) -> None:
     if self._model is None:
       return
-    self._model.StartMotion("Idle", 0, MotionPriority.IDLE, onFinishMotionHandler=self._start_idle_motion)
+    self._model.StartMotion("Idle", 0, MotionPriority.FORCE)
 
   def _build_motion_index(self) -> None:
     self._motion_index.clear()
@@ -3883,7 +4839,8 @@ class DesktopPet:
     motions = self._scan_motions_from_folder()
     if not motions:
       motions = self._scan_motions_from_model_json()
-    self.available_motions = motions
+    # 过滤掉 _OFF_ 开头的动作（关闭动作，不可叠加，对用户无意义）
+    self.available_motions = [m for m in motions if not m.startswith("_OFF_")]
 
   def _resolve_motion(self, motion_name: str) -> tuple[Optional[str], int]:
     key = motion_name.strip().lower()

@@ -1,0 +1,95 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "monkey.moc3",
+    "Textures": [
+      "monkey.4096/texture_00.png"
+    ],
+    "Physics": "monkey.physics3.json",
+    "DisplayInfo": "monkey.cdi3.json",
+    "Motions": {
+      "Idle": [
+        {
+          "File": "motions/Idle.motion3.json"
+        }
+      ],
+      "BRA": [
+        {
+          "File": "motions/BRA.motion3.json"
+        }
+      ],
+      "COAT": [
+        {
+          "File": "motions/COAT.motion3.json"
+        }
+      ],
+      "GLASSES": [
+        {
+          "File": "motions/GLASSES.motion3.json"
+        }
+      ],
+      "SUNGLASSES": [
+        {
+          "File": "motions/SUNGLASSES.motion3.json"
+        }
+      ],
+      "WTF": [
+        {
+          "File": "motions/WTF.motion3.json"
+        }
+      ],
+      "HairCustom": [
+        {
+          "File": "motions/HairCustom.motion3.json"
+        }
+      ],
+      "Sign": [
+        {
+          "File": "motions/Sign.motion3.json"
+        }
+      ]
+    },
+    "Expressions": [
+      {
+        "Name": "BRA",
+        "File": "BRA.exp3.json"
+      },
+      {
+        "Name": "COAT",
+        "File": "COAT.exp3.json"
+      },
+      {
+        "Name": "GLASSES",
+        "File": "GLASSES.exp3.json"
+      },
+      {
+        "Name": "HairCustom",
+        "File": "HairCustom.exp3.json"
+      },
+      {
+        "Name": "SUNGLASSES",
+        "File": "SUNGLASSES.exp3.json"
+      },
+      {
+        "Name": "Sign",
+        "File": "Sign.exp3.json"
+      },
+      {
+        "Name": "WTF",
+        "File": "WTF.exp3.json"
+      }
+    ]
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "LipSync",
+      "Ids": []
+    },
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": []
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "format": "pet_buddy_live2d_anatomy_lineart_parameters_v1",
+  "groups": [
+    {
+      "id": "proportion",
+      "label": "整体比例",
+      "parameters": [
+        {"key": "overall_height", "label": "整体身高", "type": "slider", "min": 90, "max": 112, "default": 100, "step": 1, "unit": "%"},
+        {"key": "head_size", "label": "头部比例", "type": "slider", "min": 88, "max": 112, "default": 100, "step": 1, "unit": "%"},
+        {"key": "torso_length", "label": "躯干长度", "type": "slider", "min": 88, "max": 114, "default": 100, "step": 1, "unit": "%"},
+        {"key": "leg_length", "label": "腿部长度", "type": "slider", "min": 88, "max": 116, "default": 100, "step": 1, "unit": "%"}
+      ]
+    },
+    {
+      "id": "torso",
+      "label": "胸腰胯",
+      "parameters": [
+        {"key": "shoulder_width", "label": "肩宽", "type": "slider", "min": 86, "max": 118, "default": 100, "step": 1, "unit": "%"},
+        {"key": "chest_width", "label": "胸腔宽度", "type": "slider", "min": 88, "max": 118, "default": 100, "step": 1, "unit": "%"},
+        {"key": "waist_width", "label": "腰部宽度", "type": "slider", "min": 82, "max": 116, "default": 100, "step": 1, "unit": "%"},
+        {"key": "hip_width", "label": "胯部宽度", "type": "slider", "min": 86, "max": 122, "default": 100, "step": 1, "unit": "%"}
+      ]
+    },
+    {
+      "id": "muscle",
+      "label": "肌肉体积",
+      "parameters": [
+        {"key": "chest_muscle", "label": "胸肌体积", "type": "slider", "min": 75, "max": 135, "default": 100, "step": 1, "unit": "%"},
+        {"key": "arm_muscle", "label": "上臂肌肉", "type": "slider", "min": 76, "max": 136, "default": 100, "step": 1, "unit": "%"},
+        {"key": "forearm_muscle", "label": "前臂肌肉", "type": "slider", "min": 76, "max": 132, "default": 100, "step": 1, "unit": "%"},
+        {"key": "thigh_muscle", "label": "大腿肌肉", "type": "slider", "min": 78, "max": 134, "default": 100, "step": 1, "unit": "%"},
+        {"key": "calf_muscle", "label": "小腿肌肉", "type": "slider", "min": 78, "max": 130, "default": 100, "step": 1, "unit": "%"}
+      ]
+    },
+    {
+      "id": "line_detail",
+      "label": "线稿细节",
+      "parameters": [
+        {"key": "abdomen_definition", "label": "腹肌清晰度", "type": "slider", "min": 40, "max": 160, "default": 100, "step": 1, "unit": "%"},
+        {"key": "muscle_definition", "label": "肌肉线清晰度", "type": "slider", "min": 50, "max": 160, "default": 100, "step": 1, "unit": "%"},
+        {"key": "construction_lines", "label": "构造线保留", "type": "slider", "min": 20, "max": 130, "default": 100, "step": 1, "unit": "%"},
+        {"key": "line_weight", "label": "整体线重", "type": "slider", "min": 70, "max": 150, "default": 100, "step": 1, "unit": "%"}
+      ]
+    }
+  ]
+}

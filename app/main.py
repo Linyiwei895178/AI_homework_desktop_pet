@@ -4,17 +4,24 @@ AI_Desktop_Pet - 程序入口
 """
 import sys
 import os
+import time
 
 # 将项目根目录加入 sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtWidgets import QApplication
+
+from app.services.demo_mode import MockUserStateProvider
 from app.ui.desktop_pet import DesktopPet
+from app.ui.vision_debug_panel import VisionDebugPanel
 from app.controller.event_handler import EventHandler
 from app.controller.pet_controller import PetController
 from models.state.pet_state import PetState
 from models.state.behavior_rules import decide_action
 from models.state.echo_team_d_interface import EchoTeamDInterface
 from models.nlp.deepseek_api import generate_pet_reply, DeepSeekClient
+from models.nlp.proactive_event_builder import build_gesture_event
 from models.tts.tts_manager import speak
 from models.tts.echo_team_c_interface import EchoTeamCInterface
 from models.vision.qwen_vl_api import get_user_state, QwenVLClient
@@ -24,6 +31,8 @@ from models.vision.user_state_detector import (
     STATE_AWAY, STATE_RETURN, STATE_STUDY_LONG, STATE_LOW_LIGHT,
     STATE_CAMERA_ERROR, STATE_UNKNOWN,
 )
+from models.vision.gesture_detector import GESTURE_NONE, GestureDetector
+from models.vision.shared_camera import SharedCameraCapture
 from utils.logger import setup_logger
 
 
@@ -44,6 +53,8 @@ def main():
     logger.info("=" * 50)
 
     # ====== 1. 初始化桌宠 UI (队员A) ======
+    app = QApplication.instance() or QApplication(sys.argv)
+
     pet_image_path = os.path.join(
         "assets", "images", "cat_image_smile_001.png"
     )
@@ -59,7 +70,15 @@ def main():
     team_c = EchoTeamCInterface()
 
     # 队员C ← 注册队员D的状态回调（对话结束后通知队员D）
-    team_c.api_register_logic_callback(team_d.api_on_chat_finished)
+    def _on_team_c_chat_event(event):
+        if isinstance(event, dict):
+            if hasattr(team_d, "api_update_from_chat_emotion"):
+                team_d.api_update_from_chat_emotion(event)
+            team_d.api_on_chat_finished(int(event.get("word_count", 0) or 0))
+        else:
+            team_d.api_on_chat_finished(int(event or 0))
+
+    team_c.api_register_logic_callback(_on_team_c_chat_event)
 
     # 队员D ← 注册队员C的状态监听（状态变化时通知队员C）
     team_d.api_register_status_listener(lambda event: logger.info(f"[队员C←队员D] 状态事件: {event}"))
@@ -76,74 +95,581 @@ def main():
     pet.on_right_click_callback = pet.close
     logger.info("[队员A] 鼠标事件回调绑定完成")
 
-    # ====== 6. 初始化用户状态检测器 (队员B) ======
-    # 取消注释以下代码即可启用摄像头检测：
-    # user_detector = UserStateDetector(enable_vlm=False)
-    # user_detector.set_mock_state(STATE_NORMAL)
-    # team_d.api_bind_vision_detector(user_detector)  # 队员B → 队员D 自动同步
-    # user_detector.start()
-    # logger.info("[队员B] 用户状态检测器已启动，已绑定队员D")
+    # ====== 6. 队员B视觉模块配置 ======
+    MOCK_ENABLED = os.getenv("DESKTOP_PET_MOCK_USER_STATE", "false").strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }  # 摄像头不可用或演示阶段可开启模拟状态
+    USER_STATE_ENABLED = os.getenv("DESKTOP_PET_USER_STATE_ENABLED", "true").strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }
+    GESTURE_ENABLED = os.getenv("DESKTOP_PET_GESTURE_ENABLED", "true").strip().lower() in {
+        "1", "true", "yes", "y", "on"
+    }
+    CAMERA_INDEX = int(os.getenv("DESKTOP_PET_CAMERA_INDEX", "0") or 0)
 
-    # ====== 7. 启动定时状态检测 + 自动回应 ======
-    MOCK_ENABLED = True  # demo阶段使用模拟状态
+    # ====== 7. 初始化共享摄像头 (队员B) ======
+    shared_camera = None
+    camera_needed = GESTURE_ENABLED or (USER_STATE_ENABLED and not MOCK_ENABLED)
+    if camera_needed:
+        try:
+            shared_camera = SharedCameraCapture(camera_index=CAMERA_INDEX)
+            if shared_camera.start():
+                pet._shared_camera = shared_camera
+                logger.info(f"[队员B] 共享摄像头已启动(index={CAMERA_INDEX})")
+            else:
+                logger.warning(f"[队员B] 共享摄像头启动失败: {shared_camera.last_error()}")
+                shared_camera = None
+        except Exception as exc:
+            shared_camera = None
+            logger.exception(f"[队员B] 共享摄像头启动异常，视觉模块将降级: {exc}")
+    else:
+        logger.info("[队员B] 当前配置不需要启动摄像头")
+
+    # ====== 8. 初始化用户状态检测器 (队员B B-4) ======
+    user_detector = None
+    mock_user_state_provider = MockUserStateProvider()
+    if USER_STATE_ENABLED and not MOCK_ENABLED and shared_camera is not None:
+        try:
+            user_detector = UserStateDetector(
+                enable_vlm=False,
+                frame_provider=shared_camera,
+            )
+            user_detector.start()
+            pet._user_state_detector = user_detector
+            logger.info("[队员B] 用户状态检测器已启动，使用共享摄像头")
+        except Exception as exc:
+            user_detector = None
+            logger.exception(f"[队员B] 用户状态检测器启动失败，将使用mock状态: {exc}")
+    elif USER_STATE_ENABLED:
+        logger.info("[队员B] 用户状态检测器使用mock状态")
+    else:
+        logger.info("[队员B] 用户状态检测器已关闭")
+
+    # ====== 9. 初始化手势检测器 (队员B B-5) ======
+    GESTURE_COOLDOWN_SECONDS = 3.0
+    GESTURE_POLL_INTERVAL_MS = max(100, int(os.getenv("DESKTOP_PET_GESTURE_POLL_MS", "100") or 100))
+    GESTURE_DETECT_INTERVAL_SECONDS = max(
+        0.10,
+        float(os.getenv("DESKTOP_PET_GESTURE_DETECT_INTERVAL", "0.12") or 0.12),
+    )
+    GESTURE_ZOOM_APPLY_INTERVAL_SECONDS = max(0.15, GESTURE_POLL_INTERVAL_MS / 1000.0)
+    GESTURE_ZOOM_MIN_DELTA = 0.06
+    gesture_detector = None
+    gesture_timer = None
+    gesture_last_response_at = {}
+    gesture_zoom_last_scale = None
+    gesture_zoom_last_apply_at = 0.0
+
+    if GESTURE_ENABLED:
+        try:
+            gesture_detector = GestureDetector(
+                enable_real=shared_camera is not None,
+                frame_provider=shared_camera,
+                detect_interval=GESTURE_DETECT_INTERVAL_SECONDS,
+            )
+            gesture_detector.start()
+            pet._gesture_detector = gesture_detector
+            logger.info(f"[队员B] 手势检测器已启动(real={gesture_detector.is_real_active()})")
+        except Exception as exc:
+            gesture_detector = None
+            logger.exception(f"[队员B] 手势检测器启动失败，桌宠继续运行: {exc}")
+    else:
+        logger.info("[队员B] 手势检测器已通过 DESKTOP_PET_GESTURE_ENABLED 关闭")
+
+    def apply_gesture_zoom(gesture_state: dict) -> bool:
+        """Apply pinch zoom from MediaPipe Hands without triggering speech."""
+        nonlocal gesture_zoom_last_scale, gesture_zoom_last_apply_at
+
+        zoom = gesture_state.get("zoom") if isinstance(gesture_state, dict) else None
+        if not isinstance(zoom, dict):
+            return False
+
+        now = time.monotonic()
+        if not zoom.get("active"):
+            return False
+
+        try:
+            scale = float(zoom.get("scale_ratio", zoom.get("smooth_scale")))
+        except (TypeError, ValueError):
+            return False
+
+        if now - gesture_zoom_last_apply_at < GESTURE_ZOOM_APPLY_INTERVAL_SECONDS:
+            return True
+        if gesture_zoom_last_scale is not None and abs(scale - gesture_zoom_last_scale) < GESTURE_ZOOM_MIN_DELTA:
+            return True
+
+        setter = getattr(pet, "set_pet_scale", None)
+        if not callable(setter):
+            logger.warning("[队员B] 未找到桌宠缩放接口 set_pet_scale，跳过本次手势缩放。")
+            return False
+
+        applied_scale = setter(scale)
+        if applied_scale is None:
+            current_scale = getattr(pet, "current_pet_scale", lambda: scale)
+            applied_scale = current_scale() if callable(current_scale) else scale
+        try:
+            zoom["applied_scale"] = round(float(applied_scale), 3)
+            gesture_state["zoom"] = zoom
+        except Exception:
+            pass
+        gesture_zoom_last_scale = float(applied_scale)
+        gesture_zoom_last_apply_at = now
+        logger.info(
+            "[队员B] 手势缩放应用: "
+            f"pinch={zoom.get('pinch_distance')}, scale={float(applied_scale):.2f}"
+        )
+        return True
+
+    def check_gesture_state():
+        """轮询手势状态；同一个手势 3 秒内只响应一次。"""
+        if gesture_detector is None:
+            return
+
+        try:
+            gesture_state = gesture_detector.get_state()
+            if apply_gesture_zoom(gesture_state):
+                return
+
+            gesture_code = str(gesture_state.get("gesture_code") or GESTURE_NONE).strip()
+            if gesture_code == GESTURE_NONE or not gesture_state.get("need_response", False):
+                return
+
+            now = time.monotonic()
+            last_at = gesture_last_response_at.get(gesture_code, 0.0)
+            if now - last_at < GESTURE_COOLDOWN_SECONDS:
+                return
+            gesture_last_response_at[gesture_code] = now
+
+            logger.info(
+                f"[队员B→队员C] 手势事件: {gesture_code} "
+                f"(置信度: {gesture_state.get('confidence')})"
+            )
+            event_data = build_gesture_event(
+                gesture_type=gesture_code,
+                confidence=gesture_state.get("confidence", 0.0),
+                duration=gesture_state.get("duration", 0.0),
+            )
+            event_data.update({
+                "gesture_code": gesture_code,
+                "gesture_name": gesture_state.get("gesture_name", ""),
+                "description": gesture_state.get("description", ""),
+                "suggestion": gesture_state.get("suggestion", ""),
+                "source": gesture_state.get("source", []),
+                "mood": "happy",
+                "voice_action": "speak",
+            })
+            if hasattr(team_c, "api_on_status_event"):
+                team_c.api_on_status_event(event_data)
+            else:
+                speak("我看到你的手势啦！", state="happy", action="speak")
+        except Exception as exc:
+            logger.exception(f"[队员B] 手势检测轮询失败，已忽略本次结果: {exc}")
+
+    if gesture_detector is not None:
+        gesture_timer = QTimer()
+        gesture_timer.setInterval(GESTURE_POLL_INTERVAL_MS)
+        gesture_timer.timeout.connect(check_gesture_state)
+        gesture_timer.start()
+        pet._gesture_timer = gesture_timer
+        logger.info(
+            "[主循环] 手势检测轮询已启动"
+            f"（每{GESTURE_POLL_INTERVAL_MS}ms一次，同手势3秒冷却，支持pinch缩放）"
+        )
+
+    camera_detection_enabled = bool(camera_needed)
+    camera_toggle_in_progress = False
+    last_camera_toggle_at = 0.0
+    CAMERA_TOGGLE_DEBOUNCE_SECONDS = 1.5
+
+    def build_camera_off_state() -> dict:
+        return {
+            "state_code": STATE_UNKNOWN,
+            "state_name": "摄像头已关闭",
+            "description": "用户状态检测已暂停",
+            "tags": ["camera_off"],
+            "confidence": 1.0,
+            "duration": 0.0,
+            "need_response": False,
+            "suggestion": "",
+            "source": ["camera_off"],
+        }
+
+    def start_user_detector() -> bool:
+        """开启共享摄像头、用户状态检测，并恢复手势检测。"""
+        nonlocal shared_camera, user_detector, gesture_detector, gesture_timer, camera_detection_enabled
+
+        if camera_detection_enabled:
+            logger.info("[队员B] 摄像头检测已处于开启状态，忽略重复开启。")
+            return True
+
+        if not camera_needed:
+            camera_detection_enabled = False
+            logger.info("[队员B] 当前配置未启用摄像头相关检测，q键开关无操作。")
+            return False
+
+        camera_ready = False
+        detector_ready = not (USER_STATE_ENABLED and not MOCK_ENABLED)
+
+        if shared_camera is None or not shared_camera.is_running():
+            try:
+                shared_camera = SharedCameraCapture(camera_index=CAMERA_INDEX)
+                camera_ready = shared_camera.start()
+                if camera_ready:
+                    pet._shared_camera = shared_camera
+                    logger.info(f"[队员B] 共享摄像头已启动(index={CAMERA_INDEX})")
+                else:
+                    logger.warning(f"[队员B] 共享摄像头重新打开失败: {shared_camera.last_error()}")
+                    shared_camera = None
+                    pet._shared_camera = None
+            except Exception as exc:
+                shared_camera = None
+                pet._shared_camera = None
+                logger.exception(f"[队员B] 共享摄像头重新打开异常，已降级: {exc}")
+        else:
+            camera_ready = True
+
+        if USER_STATE_ENABLED and not MOCK_ENABLED and shared_camera is not None:
+            try:
+                if user_detector is not None:
+                    user_detector.stop()
+                user_detector = UserStateDetector(
+                    enable_vlm=False,
+                    frame_provider=shared_camera,
+                )
+                user_detector.start()
+                pet._user_state_detector = user_detector
+                detector_ready = True
+                logger.info("[队员B] 用户状态检测器已启动，使用共享摄像头")
+            except Exception as exc:
+                user_detector = None
+                pet._user_state_detector = None
+                detector_ready = False
+                logger.exception(f"[队员B] 用户状态检测器重新启动失败，将使用mock/unknown状态: {exc}")
+        elif USER_STATE_ENABLED:
+            user_detector = None
+            pet._user_state_detector = None
+            detector_ready = True
+            logger.info("[队员B] 用户状态检测器使用mock/unknown状态")
+
+        if GESTURE_ENABLED:
+            try:
+                if gesture_timer is not None:
+                    gesture_timer.stop()
+                    gesture_timer.deleteLater()
+                    gesture_timer = None
+                if gesture_detector is not None:
+                    gesture_detector.stop()
+                gesture_detector = GestureDetector(
+                    enable_real=shared_camera is not None,
+                    frame_provider=shared_camera,
+                    detect_interval=GESTURE_DETECT_INTERVAL_SECONDS,
+                )
+                gesture_detector.start()
+                pet._gesture_detector = gesture_detector
+                logger.info(f"[队员B] 手势检测器已启动(real={gesture_detector.is_real_active()})")
+
+                gesture_timer = QTimer()
+                gesture_timer.setInterval(GESTURE_POLL_INTERVAL_MS)
+                gesture_timer.timeout.connect(check_gesture_state)
+                gesture_timer.start()
+                pet._gesture_timer = gesture_timer
+                logger.info(
+                    "[主循环] 手势检测轮询已恢复"
+                    f"（每{GESTURE_POLL_INTERVAL_MS}ms一次，支持pinch缩放）"
+                )
+            except Exception as exc:
+                gesture_detector = None
+                pet._gesture_detector = None
+                logger.exception(f"[队员B] 手势检测器恢复失败，桌宠继续运行: {exc}")
+
+        if camera_ready and detector_ready:
+            camera_detection_enabled = True
+            logger.info("[队员B] 摄像头检测已开启")
+            return True
+
+        camera_detection_enabled = False
+        if not camera_ready:
+            logger.warning("[队员B] 摄像头重新打开失败，主程序继续运行并降级为mock/unknown状态")
+        elif not detector_ready:
+            logger.warning("[队员B] 用户状态检测器重新打开失败，保持摄像头检测关闭。")
+            stop_user_detector()
+        return False
+
+    def stop_user_detector() -> None:
+        """关闭用户状态检测、手势检测和共享摄像头。"""
+        nonlocal shared_camera, user_detector, gesture_detector, gesture_timer, camera_detection_enabled
+
+        if (
+            not camera_detection_enabled
+            and shared_camera is None
+            and user_detector is None
+            and gesture_detector is None
+            and gesture_timer is None
+        ):
+            logger.info("[队员B] 摄像头检测已处于关闭状态，忽略重复关闭。")
+            return
+
+        camera_detection_enabled = False
+
+        try:
+            if gesture_timer is not None:
+                gesture_timer.stop()
+                gesture_timer.deleteLater()
+                gesture_timer = None
+                pet._gesture_timer = None
+        except Exception as exc:
+            logger.warning(f"[队员B] 手势轮询定时器关闭异常，已忽略: {exc}")
+
+        try:
+            if gesture_detector is not None:
+                gesture_detector.stop()
+                gesture_detector = None
+                pet._gesture_detector = None
+        except Exception as exc:
+            logger.warning(f"[队员B] 手势检测器关闭异常，已忽略: {exc}")
+
+        try:
+            if user_detector is not None:
+                user_detector.stop()
+                user_detector = None
+                pet._user_state_detector = None
+        except Exception as exc:
+            logger.warning(f"[队员B] 用户状态检测器关闭异常，已忽略: {exc}")
+
+        try:
+            if shared_camera is not None:
+                shared_camera.stop()
+                shared_camera = None
+                pet._shared_camera = None
+        except Exception as exc:
+            logger.warning(f"[队员B] 共享摄像头关闭异常，已忽略: {exc}")
+
+        logger.info("[队员B] 摄像头检测已关闭")
+
+    def toggle_user_detector() -> None:
+        """q键触发：开关摄像头和 B 模块用户状态检测。"""
+        nonlocal camera_toggle_in_progress, last_camera_toggle_at
+
+        now = time.monotonic()
+        if camera_toggle_in_progress:
+            logger.info("[队员B] 摄像头检测正在切换中，忽略重复q键。")
+            return
+        if now - last_camera_toggle_at < CAMERA_TOGGLE_DEBOUNCE_SECONDS:
+            logger.info("[队员B] q键摄像头切换防抖中，忽略本次按键。")
+            return
+
+        camera_toggle_in_progress = True
+        last_camera_toggle_at = now
+        try:
+            if camera_detection_enabled:
+                stop_user_detector()
+            else:
+                start_user_detector()
+        finally:
+            camera_toggle_in_progress = False
+
+    class CameraToggleKeyFilter(QObject):
+        """Qt 全局按键过滤器：q 切换摄像头；输入框聚焦时放行，不影响聊天输入。"""
+
+        def eventFilter(self, obj, event):  # noqa: N802 - Qt API name
+            if event.type() != QEvent.Type.KeyPress:
+                return False
+            if event.key() != Qt.Key.Key_Q:
+                return False
+            if event.modifiers() & (
+                Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.AltModifier
+                | Qt.KeyboardModifier.MetaModifier
+            ):
+                return False
+
+            focus_widget = QApplication.focusWidget()
+            if focus_widget is not None and (
+                focus_widget.inherits("QLineEdit")
+                or focus_widget.inherits("QTextEdit")
+                or focus_widget.inherits("QPlainTextEdit")
+            ):
+                return False
+
+            if event.isAutoRepeat():
+                event.accept()
+                return True
+
+            toggle_user_detector()
+            event.accept()
+            return True
+
+    camera_toggle_key_filter = CameraToggleKeyFilter(app)
+    app.installEventFilter(camera_toggle_key_filter)
+    pet._camera_toggle_key_filter = camera_toggle_key_filter
+    logger.info("[队员B] q键摄像头/用户状态检测开关已绑定")
+
+    vision_debug_panel = None
+
+    def is_vision_debug_panel_visible() -> bool:
+        return vision_debug_panel is not None and vision_debug_panel.isVisible()
+
+    def sync_vision_debug_controls() -> None:
+        console = getattr(pet, "_console", None)
+        if console is None:
+            return
+        sync = getattr(console, "sync_vision_debug_state", None)
+        if not callable(sync):
+            return
+        try:
+            sync(is_vision_debug_panel_visible())
+        except RuntimeError:
+            return
+        except Exception as exc:
+            logger.warning(f"[队员B] 视觉调试控制台状态同步失败，已忽略: {exc}")
+
+    def ensure_vision_debug_panel() -> VisionDebugPanel:
+        nonlocal vision_debug_panel
+        if vision_debug_panel is None:
+            vision_debug_panel = VisionDebugPanel(
+                detector_getter=lambda: user_detector,
+                gesture_getter=(
+                    lambda: gesture_detector.get_debug_snapshot()
+                    if gesture_detector is not None and hasattr(gesture_detector, "get_debug_snapshot")
+                    else (gesture_detector.get_state() if gesture_detector is not None else None)
+                ),
+                camera_enabled_getter=lambda: camera_detection_enabled,
+                refresh_ms=150,
+            )
+            vision_debug_panel.hide()
+            pet._vision_debug_panel = vision_debug_panel
+            vision_debug_panel.visibility_changed.connect(lambda _visible: sync_vision_debug_controls())
+            logger.info("[队员B] 视觉调试预览窗口已创建")
+        return vision_debug_panel
+
+    def set_vision_debug_panel_visible(enabled: bool) -> None:
+        panel = ensure_vision_debug_panel()
+        if enabled:
+            panel.start()
+            panel.show()
+            panel.raise_()
+            panel.activateWindow()
+            panel.update_from_detector()
+            logger.info("[队员B] 视觉调试预览窗口已显示")
+        else:
+            panel.hide()
+            logger.info("[队员B] 视觉调试预览窗口已隐藏")
+        sync_vision_debug_controls()
+
+    pet._vision_debug_set_visible = set_vision_debug_panel_visible
+    pet._vision_debug_is_visible = is_vision_debug_panel_visible
+    pet._vision_debug_panel = None
+
+    # ====== 10. 启动定时状态检测 + 自动回应 ======
+    SPEECH_HINT_COOLDOWN_SECONDS = 300.0
+    USER_STATE_RESPONSE_COOLDOWN_SECONDS = 120.0
+    USER_STATE_SILENT_CODES = {STATE_AWAY}
+    USER_STATE_SUPPRESS_D_HINT_CODES = {
+        STATE_DISTRACTED,
+        STATE_TIRED,
+        STATE_AWAY,
+        STATE_STUDY_LONG,
+        STATE_LOW_LIGHT,
+        STATE_CAMERA_ERROR,
+    }
+    USER_STATE_DEFAULT_SUGGESTIONS = {
+        STATE_DISTRACTED: "给桌宠：轻轻提醒用户把注意力拉回当前任务，不要表现成桌宠自己难过。",
+        STATE_TIRED: "给桌宠：关心用户可能疲劳，建议休息眼睛、喝水或活动一下。",
+        STATE_STUDY_LONG: "给桌宠：提醒用户已经学习较久，可以短暂休息后再继续。",
+        STATE_LOW_LIGHT: "给桌宠：提醒用户把环境光调亮一点，保护眼睛。",
+        STATE_CAMERA_ERROR: "给桌宠：用简短语气提示当前视觉检测可能不稳定。",
+    }
+    last_speech_hint_text = ""
+    last_speech_hint_at = 0.0
+    last_user_state_response_at = {}
+    shutting_down = False
+
+    def build_user_state_event(user_state: dict) -> dict:
+        """把 B 模块 user_state 转成 C 模块可处理的主动状态事件。"""
+        state_code = str(user_state.get("state_code", STATE_UNKNOWN) or STATE_UNKNOWN)
+        suggestion = str(user_state.get("suggestion", "") or "").strip()
+        if not suggestion:
+            suggestion = USER_STATE_DEFAULT_SUGGESTIONS.get(
+                state_code,
+                "给桌宠：根据用户当前状态，用一句简短自然的话做轻量提醒。",
+            )
+        return {
+            "event_type": "user_state_alert",
+            "state_code": state_code,
+            "description": user_state.get("description", ""),
+            "tags": user_state.get("tags", []),
+            "confidence": user_state.get("confidence", 0.0),
+            "duration": user_state.get("duration", 0.0),
+            "need_response": bool(user_state.get("need_response", False)),
+            "suggestion": suggestion,
+            "source": user_state.get("source", []),
+            "action": team_d.api_decide_action(),
+            "pet_id": pet_state.pet_id,
+            "mood": "neutral",
+            "pet_mood": pet_state.mood,
+            "energy": pet_state.energy,
+            "intimacy": pet_state.intimacy,
+        }
 
     def check_user_state():
         """定时检测用户状态，更新桌宠行为和对话"""
-        if MOCK_ENABLED:
-            # demo阶段：使用模拟状态轮换展示功能
-            mock_states_cycle = [
-                STATE_NORMAL,
-                STATE_FOCUSED,
-                STATE_DISTRACTED,
-                STATE_TIRED,
-                STATE_RETURN,
-            ]
-            import time
-            idx = int(time.time() / 10) % len(mock_states_cycle)
-            mock_code = mock_states_cycle[idx]
+        nonlocal last_speech_hint_text, last_speech_hint_at
 
-            # 构建模拟状态字典
-            user_state = {
-                "state_code": mock_code,
-                "state_name": {
-                    STATE_NORMAL: "正常状态",
-                    STATE_FOCUSED: "专注学习",
-                    STATE_DISTRACTED: "疑似分心",
-                    STATE_TIRED: "疑似疲劳",
-                    STATE_RETURN: "回到座位",
-                }.get(mock_code, "未知"),
-                "description": f"模拟状态: {mock_code}",
-                "tags": [mock_code, "mock"],
-                "confidence": 0.85,
-                "duration": 10.0,
-                "need_response": mock_code in (STATE_DISTRACTED, STATE_TIRED),
-                "suggestion": "根据用户状态做出合适的回应。",
-                "source": ["mock"],
-            }
+        if shutting_down:
+            return
+
+        if not USER_STATE_ENABLED:
+            if not shutting_down:
+                QTimer.singleShot(3000, check_user_state)
+            return
+
+        if not camera_detection_enabled:
+            user_state = build_camera_off_state()
+        elif MOCK_ENABLED or user_detector is None:
+            user_state = mock_user_state_provider.get_state()
         else:
-            # 正式模式：从 UserStateDetector 获取真实状态
-            # user_state = user_detector.get_state()
-            return  # 暂不执行
+            try:
+                user_state = user_detector.get_state()
+            except Exception as exc:
+                logger.exception(f"[队员B] 读取用户状态失败，已降级为mock状态: {exc}")
+                user_state = mock_user_state_provider.get_state()
 
         # 6a. 更新桌宠状态（队员B → 队员D）
         team_d.api_apply_user_state(user_state)
         logger.info(f"[队员B→队员D] 用户状态: {user_state['state_code']} "
                     f"(置信度: {user_state['confidence']})")
 
-        # 6b. 如果用户需要主动回应，通过队员C生成对话
+        state_code = str(user_state.get("state_code", STATE_UNKNOWN) or STATE_UNKNOWN)
+        suppress_pet_mood_hint = state_code in USER_STATE_SUPPRESS_D_HINT_CODES
+        user_state_spoke = False
+
+        # 6b. 如果用户需要主动回应，优先使用 B 模块 suggestion 生成 user_state 事件
         if user_state.get("need_response", False):
-            suggestion = user_state.get("suggestion", "根据用户当前状态，做出合适的回应。")
-            reply = generate_pet_reply(
-                text_prompt=suggestion,
-                user_state=user_state,
-            )
-            logger.info(f"[队员C] 桌宠主动回应: {reply}")
+            now = time.monotonic()
+            last_at = last_user_state_response_at.get(state_code, 0.0)
+            if state_code in USER_STATE_SILENT_CODES:
+                logger.info(f"[队员B→队员C] 用户状态 {state_code} 需要静默等待，跳过主动语音。")
+            elif now - last_at < USER_STATE_RESPONSE_COOLDOWN_SECONDS:
+                logger.info(
+                    f"[队员B→队员C] 用户状态 {state_code} 主动提醒冷却中，跳过。"
+                )
+            else:
+                event_data = build_user_state_event(user_state)
+                logger.info(f"[队员B→队员C] 用户状态事件: {event_data}")
+                if hasattr(team_c, "api_on_status_event"):
+                    reply = team_c.api_on_status_event(event_data)
+                else:
+                    suggestion = event_data.get("suggestion", "根据用户当前状态，做出合适的回应。")
+                    reply = generate_pet_reply(text_prompt=suggestion, user_state=user_state)
+                    speak(reply, state=state_code, action="speak")
 
-            # 播放语音（队员C TTS）
-            speak(reply, state=user_state.get("state_code", "neutral"), action="speak")
+                logger.info(f"[队员C] 用户状态主动回应: {reply}")
+                last_user_state_response_at[state_code] = now
+                user_state_spoke = bool(reply)
 
-            # 对话结束后通知队员D更新状态
-            team_d.api_on_chat_finished(len(reply))
+                # 对话结束后通知队员D更新状态
+                if reply:
+                    team_d.api_on_chat_finished(len(reply))
 
         # 6c. 根据桌宠状态决定动作（队员D），触发桌宠表情/动画切换（队员A）
         action = team_d.api_decide_action()
@@ -151,35 +677,132 @@ def main():
         pet_controller.trigger_action(pet, action)
 
         # 6d. 检查是否需要主动语音提示（队员D → 队员C）
-        if team_d.api_should_speak():
+        # 用户状态提醒已经由 B 的 suggestion 控制；避免 distracted/tired/away 被 mood=sad 固定话术覆盖。
+        if suppress_pet_mood_hint or user_state_spoke:
+            logger.info(
+                f"[队员D→队员C] 当前为用户状态提醒链路({state_code})，跳过宠物自身 mood 固定话术。"
+            )
+        elif team_d.api_should_speak():
             hint = team_d.api_get_speech_hint()
             if hint:
-                logger.info(f"[队员D→队员C] 主动语音提示: {hint}")
-                # 播放提示语音（队员C TTS）
-                speak(hint, state="hint", action="speak")
-                # 注意：主动提示不计入对话字数，不更新状态
+                now = time.monotonic()
+                same_hint_in_cooldown = (
+                    hint == last_speech_hint_text
+                    and now - last_speech_hint_at < SPEECH_HINT_COOLDOWN_SECONDS
+                )
+                chain_in_cooldown = now - last_speech_hint_at < SPEECH_HINT_COOLDOWN_SECONDS
+                if same_hint_in_cooldown or chain_in_cooldown:
+                    logger.info(f"[队员D→队员C] 主动语音提示冷却中，跳过: {hint}")
+                else:
+                    logger.info(f"[队员D→队员C] 主动语音提示: {hint}")
+                    last_speech_hint_text = hint
+                    last_speech_hint_at = now
+                    # 播放提示语音（队员C TTS）
+                    speak(hint, state="hint", action="speak")
+                    # 注意：主动提示不计入对话字数，不更新状态
 
         # 6e. 定时循环（每 3 秒检测一次）
-        pet.root.after(3000, check_user_state)
+        if not shutting_down:
+            QTimer.singleShot(3000, check_user_state)
 
     # 启动定时检测（延迟 1 秒后首次执行）
-    pet.root.after(1000, check_user_state)
-    logger.info("[主循环] 定时状态检测已启动（每3秒一次）")
+    QTimer.singleShot(1000, check_user_state)
+    logger.info(f"[主循环] 定时状态检测已启动（每3秒一次，mock={MOCK_ENABLED}）")
 
-    # ====== 8. 启动事件循环（Tkinter主事件循环） ======
+    # ====== 11. 启动事件循环（Qt主事件循环） ======
     logger.info("启动桌面宠物事件循环...")
     try:
-        pet.root.mainloop()
+        pet.run()
     except KeyboardInterrupt:
         logger.info("用户中断，桌宠退出。")
     except Exception as e:
-        logger.error(f"运行时异常: {e}")
+        logger.exception(f"运行时异常: {e}")
     finally:
-        # 停止用户状态检测器（如果已启动）
-        # if "user_detector" in dir() and user_detector:
-        #     user_detector.stop()
-        pet.close()
-        logger.info("AI_Desktop_Pet 已退出。")
+        shutting_down = True
+        logger.info("[AI_Desktop_Pet] 正在清理子窗口和后台线程...")
+        try:
+            app.removeEventFilter(camera_toggle_key_filter)
+        except Exception:
+            pass
+        try:
+            if hasattr(team_c, "api_stop_long_text"):
+                team_c.api_stop_long_text()
+        except Exception as exc:
+            logger.warning(f"[队员C] 停止长文本朗读失败，已忽略: {exc}")
+        try:
+            if hasattr(pet, "stop_text_reading"):
+                pet.stop_text_reading()
+        except Exception as exc:
+            logger.warning(f"[队员C] 停止桌宠朗读失败，已忽略: {exc}")
+        if gesture_timer is not None:
+            try:
+                gesture_timer.stop()
+            except Exception:
+                pass
+            try:
+                gesture_timer.deleteLater()
+            except Exception:
+                pass
+        if gesture_detector is not None:
+            try:
+                gesture_detector.stop()
+            except Exception as exc:
+                logger.warning(f"[队员B] 手势检测器清理异常，已忽略: {exc}")
+        if user_detector is not None:
+            try:
+                user_detector.stop()
+            except Exception as exc:
+                logger.warning(f"[队员B] 用户状态检测器清理异常，已忽略: {exc}")
+        if shared_camera is not None:
+            try:
+                shared_camera.stop()
+            except Exception as exc:
+                logger.warning(f"[队员B] 共享摄像头清理异常，已忽略: {exc}")
+        try:
+            if vision_debug_panel is not None:
+                vision_debug_panel.shutdown()
+            logger.info("[AI_Desktop_Pet] 视觉调试窗口已关闭")
+        except Exception as exc:
+            logger.warning(f"[AI_Desktop_Pet] 视觉调试窗口清理异常，已忽略: {exc}")
+        try:
+            if hasattr(pet, "cleanup"):
+                pet.cleanup(quit_app=False)
+            else:
+                try:
+                    setattr(pet, "_cleaning_up", True)
+                except Exception:
+                    pass
+                pet.close()
+            logger.info("[AI_Desktop_Pet] DesktopPet 主窗口已关闭")
+            logger.info("[AI_Desktop_Pet] Live2D 窗口已释放")
+        except Exception as exc:
+            logger.warning(f"[AI_Desktop_Pet] 桌宠 UI 清理异常，已忽略: {exc}")
+        try:
+            for widget in list(app.topLevelWidgets()):
+                try:
+                    widget.hide()
+                except Exception:
+                    pass
+                try:
+                    widget.close()
+                except Exception:
+                    pass
+                try:
+                    widget.deleteLater()
+                except Exception:
+                    pass
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            app.processEvents()
+            app.closeAllWindows()
+            QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+            app.processEvents()
+        except Exception:
+            pass
+        try:
+            app.quit()
+        except Exception:
+            pass
+        logger.info("[AI_Desktop_Pet] 清理完成，程序退出。")
 
 
 if __name__ == "__main__":

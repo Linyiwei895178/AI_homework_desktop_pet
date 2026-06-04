@@ -11,7 +11,7 @@ UserStateDetector - 用户状态感知模块（优化版）
     need_response, suggestion, source
 
 本优化版重点：
-1. 优先使用 MediaPipe FaceDetection / FaceMesh，OpenCV Haar 只做备用。
+1. 优先使用 MediaPipe Tasks FaceLandmarker，OpenCV Haar 只做备用。
 2. “低头/短暂未识别人脸”不会立刻判断离开；只要最近检测到过脸/头，就继续认为人在。
 3. 增加状态平滑，减少 normal / unknown / away / return 抖动。
 4. Qwen-VL 每 5 秒调用一次（可通过 vlm_interval 调整）。
@@ -22,9 +22,11 @@ from __future__ import annotations
 
 import copy
 import math
+import sys
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 # ========== 状态大类常量：已经发给队友，不要随意修改 ========== 
@@ -66,6 +68,43 @@ STATE_NAME_MAP = {
     STATE_UNKNOWN: "未知状态",
 }
 
+MEDIAPIPE_MODELS_DIR = Path(__file__).resolve().parent / "mediapipe_models"
+FACE_LANDMARKER_MODEL_PATH = MEDIAPIPE_MODELS_DIR / "face_landmarker.task"
+
+FACE_MIMIC_RAW_BLENDSHAPE_KEYS = [
+    "jawOpen",
+    "mouthSmileLeft",
+    "mouthSmileRight",
+    "eyeBlinkLeft",
+    "eyeBlinkRight",
+    "browOuterUpLeft",
+    "browOuterUpRight",
+    "mouthFrownLeft",
+    "mouthFrownRight",
+    "cheekPuff",
+    "cheekPuffLeft",
+    "cheekPuffRight",
+    "jawLeft",
+    "jawRight",
+    "browDownLeft",
+    "browDownRight",
+]
+
+FACE_MIMIC_NUMERIC_FIELDS = [
+    "mouth_open",
+    "smile",
+    "eye_blink_left",
+    "eye_blink_right",
+    "brow_raise",
+    "mouth_frown",
+    "cheek_puff",
+    "jaw_left",
+    "jaw_right",
+    "head_yaw",
+    "head_pitch",
+    "head_roll",
+]
+
 
 def create_empty_state(state_code: str = STATE_UNKNOWN) -> dict:
     if state_code not in ALL_STATE_CODES:
@@ -98,7 +137,7 @@ class UserStateDetector:
     说明：
     - 不会每帧调用 Qwen-VL，而是每 vlm_interval 秒调用一次。
     - 低头/遮挡导致短暂检测不到脸时，不会直接判断 away。
-    - 如果检测不到 MediaPipe，会自动降级到 OpenCV Haar。
+    - 如果检测不到 MediaPipe Tasks 或模型文件，会自动降级到 OpenCV Haar。
     """
 
     def __init__(
@@ -106,6 +145,7 @@ class UserStateDetector:
         camera_index: int = 0,
         detect_interval: float = 0.5,
         vlm_interval: float = 5.0,          # 按你的要求：每 5 秒调用一次 API
+        emotion_interval: float = 4.0,
         enable_vlm: bool = False,
         study_long_seconds: float = 40 * 60,
         away_threshold: float = 12.0,       # 优化：离开阈值拉长，低头不会马上 away
@@ -117,10 +157,12 @@ class UserStateDetector:
         focused_seconds: float = 25.0,
         response_cooldown: float = 30.0,
         show_preview: bool = False,
+        frame_provider: Any = None,
     ):
         self.camera_index = camera_index
         self._detect_interval = max(0.1, float(detect_interval))
         self._vlm_interval = max(5.0, float(vlm_interval))
+        self._emotion_interval = max(3.0, float(emotion_interval))
         self._vlm_enabled = bool(enable_vlm)
         self._study_long_seconds = float(study_long_seconds)
         self._away_threshold = float(away_threshold)
@@ -132,6 +174,7 @@ class UserStateDetector:
         self._focused_seconds = float(focused_seconds)
         self._response_cooldown = float(response_cooldown)
         self._show_preview = bool(show_preview)
+        self._frame_provider = frame_provider
 
         self._is_running = False
         self._detect_thread: Optional[threading.Thread] = None
@@ -140,7 +183,21 @@ class UserStateDetector:
 
         self._current_state: dict = create_empty_state(STATE_UNKNOWN)
         self._latest_frame: Any = None
+        self._latest_debug_frame: Any = None
+        self._latest_debug_info: dict = {}
+        self._last_debug_face_info: dict = {}
+        self._last_debug_analysis_info: dict = {}
+        self._face_mimic_state: dict = self._empty_face_mimic_state()
+        self._face_mimic_blendshape_enabled: bool = False
+        self._face_mimic_blendshape_unavailable_logged: bool = False
+        self._face_mimic_first_blendshape_logged: bool = False
+        self._face_mimic_landmark_fallback_logged: bool = False
+        self._face_mimic_smooth_values: dict = {}
+        self._face_mimic_stable_expression: str = "unknown"
+        self._face_mimic_candidate_expression: str = "unknown"
+        self._face_mimic_candidate_count: int = 0
         self._cap: Any = None
+        self._owns_camera = frame_provider is None
 
         self._cv2: Any = None
         self._mp: Any = None
@@ -148,6 +205,12 @@ class UserStateDetector:
         self._mp_face_mesh: Any = None
         self._face_detection: Any = None
         self._face_mesh: Any = None
+        self._face_landmarker: Any = None
+        self._mediapipe_available: bool = False
+        self._mediapipe_init_reason: str = ""
+        self._haar_only_mode: bool = False
+        self._mediapipe_runtime_warning_logged: bool = False
+        self._last_mediapipe_timestamp_ms: int = 0
         self._haar_frontal: Any = None
         self._haar_profile: Any = None
         self._vl_client: Any = None
@@ -177,6 +240,10 @@ class UserStateDetector:
         self._last_response_at: Dict[str, float] = {}
         self._last_vlm_at: float = 0.0
         self._last_vlm_state: Optional[dict] = None
+        self._last_emotion_at: float = 0.0
+        self._last_emotion_failure_at: float = 0.0
+        self._last_emotion_result: Any = None
+        self._emotion_busy: bool = False
 
     # ==================== 对外接口 ====================
 
@@ -207,6 +274,37 @@ class UserStateDetector:
                 return self._latest_frame.copy()
             except Exception:
                 return self._latest_frame
+
+    def get_debug_frame(self):
+        """Return the latest overlay debug frame as a BGR image copy."""
+        with self._lock:
+            if self._latest_debug_frame is None:
+                return None
+            try:
+                return self._latest_debug_frame.copy()
+            except Exception:
+                return self._latest_debug_frame
+
+    def get_debug_snapshot(self) -> dict:
+        """Return latest debug frame and metadata without changing get_state()."""
+        with self._lock:
+            frame = None
+            if self._latest_debug_frame is not None:
+                try:
+                    frame = self._latest_debug_frame.copy()
+                except Exception:
+                    frame = self._latest_debug_frame
+            return {
+                "frame": frame,
+                "info": copy.deepcopy(self._latest_debug_info),
+                "state": copy.deepcopy(self._current_state),
+                "face_mimic": copy.deepcopy(self._face_mimic_state),
+            }
+
+    def get_face_mimic_state(self) -> dict:
+        """Return the latest Face Mimic output for Team A without changing get_state()."""
+        with self._lock:
+            return copy.deepcopy(self._face_mimic_state)
 
     def set_vlm_enabled(self, enabled: bool):
         self._vlm_enabled = bool(enabled)
@@ -278,7 +376,7 @@ class UserStateDetector:
         while self._is_running:
             loop_start = time.time()
             try:
-                ret, frame = self._cap.read()
+                ret, frame = self._read_frame()
                 if not ret or frame is None:
                     self._update_state(self._build_state(
                         STATE_CAMERA_ERROR,
@@ -297,6 +395,7 @@ class UserStateDetector:
 
                 state = self._analyze_frame(frame)
                 state = self._maybe_apply_vlm(frame, state)
+                self._cache_debug_snapshot(frame, state)
                 self._update_state(state)
 
                 if self._show_preview:
@@ -324,44 +423,24 @@ class UserStateDetector:
             print(f"[UserStateDetector] OpenCV 导入失败：{exc}")
             return False
 
-        # MediaPipe 优先，Haar 备用
-        try:
-            import mediapipe as mp  # type: ignore
-            self._mp = mp
-            self._mp_face_detection = mp.solutions.face_detection
-            self._mp_face_mesh = mp.solutions.face_mesh
-            self._face_detection = self._mp_face_detection.FaceDetection(
-                model_selection=0,
-                min_detection_confidence=0.45,
-            )
-            self._face_mesh = self._mp_face_mesh.FaceMesh(
-                static_image_mode=False,
-                max_num_faces=1,
-                refine_landmarks=True,
-                min_detection_confidence=0.45,
-                min_tracking_confidence=0.45,
-            )
-            print("[UserStateDetector] MediaPipe 已启用。")
-        except Exception as exc:
-            print(f"[UserStateDetector] MediaPipe 不可用，将使用 OpenCV Haar 降级：{exc}")
-            self._mp = None
-            self._face_detection = None
-            self._face_mesh = None
+        if not self._init_mediapipe():
+            self._enable_haar_stability_mode()
 
         try:
             frontal_path = self._cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
             profile_path = self._cv2.data.haarcascades + "haarcascade_profileface.xml"
             self._haar_frontal = self._cv2.CascadeClassifier(frontal_path)
             self._haar_profile = self._cv2.CascadeClassifier(profile_path)
-        except Exception:
+        except Exception as exc:
+            print(f"[UserStateDetector] OpenCV Haar 初始化失败：{exc}")
             self._haar_frontal = None
             self._haar_profile = None
 
         if self._vlm_enabled:
             self._init_vlm_client()
 
-        # 表情识别是增强项：可用则加载，不可用不影响基础检测。
-        self._init_emotion_recognizer()
+        if self._frame_provider is not None:
+            return True
 
         self._cap = self._cv2.VideoCapture(self.camera_index)
         if not self._cap or not self._cap.isOpened():
@@ -376,9 +455,175 @@ class UserStateDetector:
             pass
         return True
 
+    def _init_mediapipe(self) -> bool:
+        """Initialize MediaPipe Tasks FaceLandmarker when the installed API supports it."""
+        return self._init_mediapipe_tasks()
+
+    def _init_mediapipe_tasks(self) -> bool:
+        """Initialize MediaPipe Tasks FaceLandmarker, or leave Haar fallback active."""
+        self._mp = None
+        self._mp_face_detection = None
+        self._mp_face_mesh = None
+        self._face_detection = None
+        self._face_mesh = None
+        self._face_landmarker = None
+        self._mediapipe_available = False
+        self._mediapipe_init_reason = ""
+        self._mediapipe_runtime_warning_logged = False
+
+        try:
+            import mediapipe as mp  # type: ignore
+        except ImportError as exc:
+            self._mediapipe_init_reason = f"MediaPipe 未安装: {exc}"
+            print(
+                "[UserStateDetector] MediaPipe 未安装，将使用 OpenCV Haar + DeepFace/Qwen-VL 降级。"
+            )
+            return False
+        except Exception as exc:
+            self._mediapipe_init_reason = f"MediaPipe 导入失败: {exc}"
+            print(
+                f"[UserStateDetector] MediaPipe 导入失败，将使用 OpenCV Haar + DeepFace/Qwen-VL 降级：{exc}"
+            )
+            return False
+
+        version = getattr(mp, "__version__", "unknown")
+        module_file = getattr(mp, "__file__", "unknown")
+
+        try:
+            from mediapipe.tasks import python as mp_tasks_python  # type: ignore
+            from mediapipe.tasks.python import vision  # type: ignore
+            from mediapipe.tasks.python.core.base_options import BaseOptions  # type: ignore
+            _ = mp_tasks_python
+        except ImportError as exc:
+            self._mediapipe_init_reason = (
+                f"MediaPipe {version} 已安装，但 Tasks API 不可导入: {exc}; "
+                f"module={module_file}; python={sys.version.split()[0]}"
+            )
+            print(
+                "[UserStateDetector] MediaPipe Tasks API 不可用，将使用 OpenCV Haar + "
+                f"DeepFace/Qwen-VL 降级：{exc}"
+            )
+            if getattr(mp, "solutions", None) is None:
+                print(
+                    "[UserStateDetector] 当前 mediapipe 包也未提供 legacy mp.solutions。"
+                )
+            print(
+                "[UserStateDetector] 当前环境信息："
+                f"mediapipe={version}, python={sys.version.split()[0]}, module={module_file}"
+            )
+            print(
+                "[UserStateDetector] 当前环境 MediaPipe 不兼容，使用 OpenCV Haar + "
+                "DeepFace + Qwen-VL 降级方案；建议使用 Python 3.10/3.11 运行完整 "
+                "MediaPipe 功能。"
+            )
+            return False
+        except Exception as exc:
+            self._mediapipe_init_reason = (
+                f"MediaPipe {version} Tasks API 初始化前检查失败: {exc}; "
+                f"module={module_file}; python={sys.version.split()[0]}"
+            )
+            print(
+                "[UserStateDetector] MediaPipe Tasks API 检查失败，将使用 OpenCV Haar + "
+                f"DeepFace/Qwen-VL 降级：{exc}"
+            )
+            return False
+
+        if not FACE_LANDMARKER_MODEL_PATH.exists():
+            self._mediapipe_init_reason = (
+                f"MediaPipe {version} Tasks API 可用，但模型文件不存在: "
+                f"{FACE_LANDMARKER_MODEL_PATH}"
+            )
+            print("[UserStateDetector] MediaPipe Tasks 模型文件不存在，继续使用 OpenCV Haar 降级。")
+            print(f"[UserStateDetector] 模型路径：{FACE_LANDMARKER_MODEL_PATH}")
+            return False
+
+        def _make_options(enable_blendshapes: bool):
+            kwargs = {
+                "base_options": BaseOptions(model_asset_path=str(FACE_LANDMARKER_MODEL_PATH)),
+                "running_mode": vision.RunningMode.VIDEO,
+                "num_faces": 1,
+                "min_face_detection_confidence": 0.45,
+                "min_face_presence_confidence": 0.45,
+                "min_tracking_confidence": 0.45,
+            }
+            if enable_blendshapes:
+                kwargs["output_face_blendshapes"] = True
+                kwargs["output_facial_transformation_matrixes"] = True
+            return vision.FaceLandmarkerOptions(**kwargs)
+
+        try:
+            options = _make_options(enable_blendshapes=True)
+            face_landmarker = vision.FaceLandmarker.create_from_options(options)
+            self._face_mimic_blendshape_enabled = True
+        except Exception as blend_exc:
+            self._face_mimic_blendshape_enabled = False
+            self._face_mimic_blendshape_unavailable_logged = True
+            print("[队员B] Face Mimic BlendShape 不可用，使用 landmarks 规则兜底")
+            print(f"[UserStateDetector] FaceLandmarker BlendShape 初始化失败：{blend_exc}")
+            try:
+                options = _make_options(enable_blendshapes=False)
+                face_landmarker = vision.FaceLandmarker.create_from_options(options)
+            except Exception as exc:
+                self._mediapipe_init_reason = (
+                    f"MediaPipe Tasks FaceLandmarker 初始化失败: {exc}; "
+                    f"mediapipe={version}; model={FACE_LANDMARKER_MODEL_PATH}"
+                )
+                print(
+                    "[UserStateDetector] MediaPipe Tasks FaceLandmarker 初始化失败，"
+                    f"将使用 OpenCV Haar + DeepFace/Qwen-VL 降级：{exc}"
+                )
+                return False
+
+        try:
+            _ = face_landmarker
+        except Exception as exc:
+            self._mediapipe_init_reason = (
+                f"MediaPipe Tasks FaceLandmarker 初始化失败: {exc}; "
+                f"mediapipe={version}; model={FACE_LANDMARKER_MODEL_PATH}"
+            )
+            print(
+                "[UserStateDetector] MediaPipe Tasks FaceLandmarker 初始化失败，"
+                f"将使用 OpenCV Haar + DeepFace/Qwen-VL 降级：{exc}"
+            )
+            return False
+
+        self._mp = mp
+        self._face_landmarker = face_landmarker
+        self._mediapipe_available = True
+        self._mediapipe_init_reason = f"MediaPipe {version} Tasks FaceLandmarker 可用"
+        print("[UserStateDetector] MediaPipe Tasks FaceLandmarker 已启用。")
+        if self._face_mimic_blendshape_enabled:
+            print("[队员B] Face Mimic BlendShape 已启用")
+        return True
+
+    def _enable_haar_stability_mode(self) -> None:
+        """Make Haar fallback less likely to report away during short misses."""
+        self._haar_only_mode = True
+        old_away = self._away_threshold
+        old_memory = self._face_memory_seconds
+        self._away_threshold = max(self._away_threshold, 30.0)
+        self._face_memory_seconds = max(self._face_memory_seconds, 20.0)
+        print(
+            "[UserStateDetector] 已启用 OpenCV Haar 稳定降级策略："
+            f"away_threshold {old_away:.1f}s -> {self._away_threshold:.1f}s, "
+            f"face_memory_seconds {old_memory:.1f}s -> {self._face_memory_seconds:.1f}s。"
+        )
+
+    def _read_frame(self) -> Tuple[bool, Any]:
+        if self._frame_provider is not None:
+            getter = getattr(self._frame_provider, "get_frame", None)
+            if not callable(getter):
+                return False, None
+            frame = getter()
+            return frame is not None, frame
+
+        if self._cap is None:
+            return False, None
+        return self._cap.read()
+
     def _release_resources(self):
         try:
-            if self._cap is not None:
+            if self._owns_camera and self._cap is not None:
                 self._cap.release()
         except Exception:
             pass
@@ -393,10 +638,23 @@ class UserStateDetector:
         except Exception:
             pass
         try:
+            if self._face_landmarker is not None:
+                self._face_landmarker.close()
+        except Exception:
+            pass
+        self._face_landmarker = None
+        try:
             if self._show_preview and self._cv2 is not None:
                 self._cv2.destroyAllWindows()
         except Exception:
             pass
+
+    def _next_mediapipe_timestamp_ms(self) -> int:
+        timestamp_ms = int(time.monotonic() * 1000)
+        if timestamp_ms <= self._last_mediapipe_timestamp_ms:
+            timestamp_ms = self._last_mediapipe_timestamp_ms + 1
+        self._last_mediapipe_timestamp_ms = timestamp_ms
+        return timestamp_ms
 
     # ==================== 帧分析 ====================
 
@@ -406,7 +664,7 @@ class UserStateDetector:
         brightness = self._calc_brightness(frame)
         low_light = brightness < self._low_light_threshold
 
-        # 1. 优先 MediaPipe：只要 FaceDetection 或 FaceMesh 任一成功，就认为识别到“头/脸”
+        # 1. 优先 MediaPipe Tasks：FaceLandmarker 检出关键点即认为识别到“头/脸”
         face_info = self._detect_face_or_head(frame)
         face_present = face_info["present"]
         source = face_info["source"][:] if face_info["source"] else ["rule"]
@@ -469,6 +727,23 @@ class UserStateDetector:
         low_light_duration = 0.0 if self._low_light_since is None else now - self._low_light_since
         present_duration = 0.0 if self._face_present_since is None else now - self._face_present_since
         study_duration = 0.0 if self._study_started_at is None else now - self._study_started_at
+
+        analysis_info = {
+            "face_present": bool(face_present),
+            "looking_down": bool(looking_down),
+            "eyes_closed": bool(eyes_closed),
+            "low_light": bool(low_light),
+            "brightness": round(float(brightness), 2),
+            "no_face_duration": round(float(no_face_duration), 2),
+            "looking_down_duration": round(float(looking_down_duration), 2),
+            "eyes_closed_duration": round(float(eyes_closed_duration), 2),
+            "low_light_duration": round(float(low_light_duration), 2),
+            "present_duration": round(float(present_duration), 2),
+            "study_duration": round(float(study_duration), 2),
+        }
+        with self._lock:
+            self._last_debug_face_info = dict(face_info)
+            self._last_debug_analysis_info = dict(analysis_info)
 
         # 4. 离开/回来/正常状态逻辑
         # 关键优化：最近看到过脸/头，则不判 away，避免低头误判人不在。
@@ -599,7 +874,7 @@ class UserStateDetector:
     def _detect_face_or_head(self, frame: Any) -> dict:
         """
         检测脸/头部。
-        只要 MediaPipe FaceDetection 或 FaceMesh 任意检测成功，就认为用户在。
+        优先使用 MediaPipe Tasks FaceLandmarker；不可用或未检出时使用 OpenCV Haar。
         """
         h, w = frame.shape[:2]
         result = {"present": False, "bbox": None, "landmarks": None, "source": []}
@@ -610,47 +885,11 @@ class UserStateDetector:
         except Exception:
             rgb = frame
 
-        # 1. MediaPipe FaceDetection
-        if self._face_detection is not None:
-            try:
-                fd = self._face_detection.process(rgb)
-                if fd and fd.detections:
-                    det = fd.detections[0]
-                    box = det.location_data.relative_bounding_box
-                    x = max(0, int(box.xmin * w))
-                    y = max(0, int(box.ymin * h))
-                    bw = min(w - x, int(box.width * w))
-                    bh = min(h - y, int(box.height * h))
-                    result.update({
-                        "present": True,
-                        "bbox": (x, y, bw, bh),
-                        "source": self._merge_source(result["source"], "mediapipe_face"),
-                    })
-            except Exception:
-                pass
+        # 1. MediaPipe Tasks FaceLandmarker
+        if self._face_landmarker is not None:
+            self._detect_face_with_mediapipe_tasks(rgb, w, h, result)
 
-        # 2. MediaPipe FaceMesh：低头时 FaceDetection 有时失败，但 FaceMesh 可能仍有关键点
-        if self._face_mesh is not None:
-            try:
-                fm = self._face_mesh.process(rgb)
-                if fm and fm.multi_face_landmarks:
-                    landmarks = fm.multi_face_landmarks[0].landmark
-                    xs = [lm.x for lm in landmarks]
-                    ys = [lm.y for lm in landmarks]
-                    x = max(0, int(min(xs) * w))
-                    y = max(0, int(min(ys) * h))
-                    bw = min(w - x, int((max(xs) - min(xs)) * w))
-                    bh = min(h - y, int((max(ys) - min(ys)) * h))
-                    result.update({
-                        "present": True,
-                        "bbox": (x, y, bw, bh),
-                        "landmarks": landmarks,
-                        "source": self._merge_source(result["source"], "mediapipe_mesh"),
-                    })
-            except Exception:
-                pass
-
-        # 3. Haar 降级：正脸 + 侧脸
+        # 2. Haar 降级：正脸 + 侧脸
         if not result["present"]:
             try:
                 gray = self._cv2.cvtColor(frame, self._cv2.COLOR_BGR2GRAY)
@@ -684,8 +923,368 @@ class UserStateDetector:
             cy = (y + bh / 2) / max(1, h)
             self._last_face_center = (cx, cy)
             self._face_center_history.append((time.time(), cx, cy))
+        if not result.get("landmarks"):
+            self._set_face_mimic_unavailable(
+                ["opencv_haar"] if result.get("present") else ["no_face"]
+            )
 
         return result
+
+    def _detect_face_with_mediapipe_tasks(self, rgb_frame: Any, w: int, h: int, result: dict) -> bool:
+        if self._face_landmarker is None or self._mp is None:
+            return False
+        try:
+            mp_image = self._mp.Image(
+                image_format=self._mp.ImageFormat.SRGB,
+                data=rgb_frame,
+            )
+            mp_result = self._face_landmarker.detect_for_video(
+                mp_image,
+                self._next_mediapipe_timestamp_ms(),
+            )
+            face_landmarks = getattr(mp_result, "face_landmarks", None) or []
+            if not face_landmarks:
+                return False
+
+            landmarks = face_landmarks[0]
+            bbox = self._bbox_from_landmarks(landmarks, w, h)
+            self._update_face_mimic_from_mediapipe_result(mp_result, landmarks, bbox, w, h)
+            result.update({
+                "present": True,
+                "bbox": bbox,
+                "landmarks": landmarks,
+                "source": self._merge_source(result["source"], "mediapipe_tasks_face"),
+            })
+            return True
+        except Exception as exc:
+            self._disable_mediapipe_tasks_after_runtime_error(exc)
+            return False
+
+    def _bbox_from_landmarks(self, landmarks: Any, w: int, h: int) -> Tuple[int, int, int, int]:
+        xs = [float(lm.x) for lm in landmarks]
+        ys = [float(lm.y) for lm in landmarks]
+        left = max(0.0, min(xs))
+        top = max(0.0, min(ys))
+        right = min(1.0, max(xs))
+        bottom = min(1.0, max(ys))
+
+        x = max(0, int(left * w))
+        y = max(0, int(top * h))
+        bw = max(1, min(w - x, int((right - left) * w)))
+        bh = max(1, min(h - y, int((bottom - top) * h)))
+        return x, y, bw, bh
+
+    # ==================== Face Mimic 输出 ====================
+
+    def _empty_face_mimic_state(self) -> dict:
+        return {
+            "available": False,
+            "expression": "unknown",
+            "mouth_open": 0.0,
+            "smile": 0.0,
+            "eye_blink_left": 0.0,
+            "eye_blink_right": 0.0,
+            "brow_raise": 0.0,
+            "mouth_frown": 0.0,
+            "cheek_puff": 0.0,
+            "jaw_left": 0.0,
+            "jaw_right": 0.0,
+            "head_yaw": 0.0,
+            "head_pitch": 0.0,
+            "head_roll": 0.0,
+            "raw_blendshapes": {
+                "jawOpen": 0.0,
+                "mouthSmileLeft": 0.0,
+                "mouthSmileRight": 0.0,
+                "eyeBlinkLeft": 0.0,
+                "eyeBlinkRight": 0.0,
+            },
+            "confidence": 0.0,
+            "timestamp": time.time(),
+            "source": [],
+        }
+
+    def _set_face_mimic_unavailable(self, source: list[str]) -> None:
+        state = self._empty_face_mimic_state()
+        state["source"] = list(source)
+        with self._lock:
+            self._face_mimic_state = state
+
+    @staticmethod
+    def _clamp01(value: Any) -> float:
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _avg_values(*values: Any) -> float:
+        vals = [UserStateDetector._clamp01(v) for v in values]
+        if not vals:
+            return 0.0
+        return sum(vals) / len(vals)
+
+    def _update_face_mimic_from_mediapipe_result(
+        self,
+        mp_result: Any,
+        landmarks: Any,
+        bbox: Tuple[int, int, int, int],
+        w: int,
+        h: int,
+    ) -> None:
+        blendshapes = self._extract_blendshape_scores(mp_result)
+        if blendshapes:
+            if not self._face_mimic_first_blendshape_logged:
+                self._face_mimic_first_blendshape_logged = True
+                print("[队员B] Face Mimic 已接收到 BlendShape 参数")
+            state = self._build_face_mimic_from_blendshapes(blendshapes, landmarks, bbox, w, h)
+        else:
+            if not self._face_mimic_landmark_fallback_logged:
+                self._face_mimic_landmark_fallback_logged = True
+                print("[队员B] Face Mimic 使用 landmarks 规则兜底")
+            state = self._build_face_mimic_from_landmarks(landmarks, bbox, w, h)
+
+        with self._lock:
+            self._face_mimic_state = copy.deepcopy(state)
+
+    def _extract_blendshape_scores(self, mp_result: Any) -> dict[str, float]:
+        face_blendshapes = getattr(mp_result, "face_blendshapes", None) or []
+        if not face_blendshapes:
+            return {}
+        first = face_blendshapes[0]
+        categories = getattr(first, "categories", None)
+        if categories is None:
+            categories = first
+        scores: dict[str, float] = {}
+        try:
+            for item in categories:
+                name = str(getattr(item, "category_name", "") or getattr(item, "display_name", "") or "")
+                if not name:
+                    continue
+                scores[name] = self._clamp01(getattr(item, "score", 0.0))
+        except Exception:
+            return {}
+        return scores
+
+    def _build_face_mimic_from_blendshapes(
+        self,
+        scores: dict[str, float],
+        landmarks: Any,
+        bbox: Tuple[int, int, int, int],
+        w: int,
+        h: int,
+    ) -> dict:
+        values = {
+            "mouth_open": self._clamp01(scores.get("jawOpen", 0.0)),
+            "smile": self._avg_values(scores.get("mouthSmileLeft", 0.0), scores.get("mouthSmileRight", 0.0)),
+            "eye_blink_left": self._clamp01(scores.get("eyeBlinkLeft", 0.0)),
+            "eye_blink_right": self._clamp01(scores.get("eyeBlinkRight", 0.0)),
+            "brow_raise": self._avg_values(scores.get("browOuterUpLeft", 0.0), scores.get("browOuterUpRight", 0.0)),
+            "mouth_frown": self._avg_values(scores.get("mouthFrownLeft", 0.0), scores.get("mouthFrownRight", 0.0)),
+            "cheek_puff": self._clamp01(
+                scores.get(
+                    "cheekPuff",
+                    self._avg_values(scores.get("cheekPuffLeft", 0.0), scores.get("cheekPuffRight", 0.0)),
+                )
+            ),
+            "jaw_left": self._clamp01(scores.get("jawLeft", 0.0)),
+            "jaw_right": self._clamp01(scores.get("jawRight", 0.0)),
+        }
+        values.update(self._estimate_head_pose_from_landmarks(landmarks, w, h))
+        values = self._smooth_face_mimic_values(values)
+        expression = self._stable_face_mimic_expression(self._classify_face_mimic_expression(values, scores))
+        raw = {key: round(self._clamp01(scores.get(key, 0.0)), 3) for key in FACE_MIMIC_RAW_BLENDSHAPE_KEYS}
+        confidence = max(0.35, min(1.0, max([values.get(k, 0.0) for k in FACE_MIMIC_NUMERIC_FIELDS] + [0.35])))
+        return self._build_face_mimic_state(
+            available=True,
+            expression=expression,
+            values=values,
+            raw_blendshapes=raw,
+            confidence=confidence,
+            source=["mediapipe_face_blendshapes"],
+        )
+
+    def _build_face_mimic_from_landmarks(
+        self,
+        landmarks: Any,
+        bbox: Tuple[int, int, int, int],
+        w: int,
+        h: int,
+    ) -> dict:
+        values = {
+            "mouth_open": 0.0,
+            "smile": 0.0,
+            "eye_blink_left": 0.0,
+            "eye_blink_right": 0.0,
+            "brow_raise": 0.0,
+            "mouth_frown": 0.0,
+            "cheek_puff": 0.0,
+            "jaw_left": 0.0,
+            "jaw_right": 0.0,
+        }
+        try:
+            x, y, bw, bh = bbox
+            face_w = max(1.0, float(bw))
+            face_h = max(1.0, float(bh))
+            upper_lip = landmarks[13]
+            lower_lip = landmarks[14]
+            left_mouth = landmarks[61]
+            right_mouth = landmarks[291]
+            mouth_open_px = math.dist((upper_lip.x * w, upper_lip.y * h), (lower_lip.x * w, lower_lip.y * h))
+            mouth_width_px = math.dist((left_mouth.x * w, left_mouth.y * h), (right_mouth.x * w, right_mouth.y * h))
+            mouth_center_y = (upper_lip.y + lower_lip.y) / 2.0
+            corner_y = (left_mouth.y + right_mouth.y) / 2.0
+            values["mouth_open"] = self._clamp01((mouth_open_px / face_h) * 4.5)
+            values["smile"] = self._clamp01(((mouth_width_px / face_w) - 0.34) * 4.0)
+            values["mouth_frown"] = self._clamp01((corner_y - mouth_center_y) * 18.0)
+            left_ear = self._eye_aspect_ratio(landmarks, [33, 160, 158, 133, 153, 144], w, h)
+            right_ear = self._eye_aspect_ratio(landmarks, [362, 385, 387, 263, 373, 380], w, h)
+            values["eye_blink_left"] = self._clamp01((0.24 - left_ear) / 0.12)
+            values["eye_blink_right"] = self._clamp01((0.24 - right_ear) / 0.12)
+            left_brow = landmarks[70]
+            right_brow = landmarks[300]
+            left_eye = landmarks[33]
+            right_eye = landmarks[263]
+            brow_gap = ((left_eye.y - left_brow.y) + (right_eye.y - right_brow.y)) / 2.0
+            values["brow_raise"] = self._clamp01((brow_gap - 0.055) * 9.0)
+        except Exception:
+            pass
+        values.update(self._estimate_head_pose_from_landmarks(landmarks, w, h))
+        values = self._smooth_face_mimic_values(values)
+        expression = self._stable_face_mimic_expression(self._classify_face_mimic_expression(values, {}))
+        return self._build_face_mimic_state(
+            available=True,
+            expression=expression,
+            values=values,
+            raw_blendshapes={
+                "jawOpen": round(values.get("mouth_open", 0.0), 3),
+                "mouthSmileLeft": round(values.get("smile", 0.0), 3),
+                "mouthSmileRight": round(values.get("smile", 0.0), 3),
+                "eyeBlinkLeft": round(values.get("eye_blink_left", 0.0), 3),
+                "eyeBlinkRight": round(values.get("eye_blink_right", 0.0), 3),
+            },
+            confidence=0.45,
+            source=["mediapipe_face_landmarks_rule"],
+        )
+
+    def _smooth_face_mimic_values(self, values: dict[str, float]) -> dict[str, float]:
+        smoothed: dict[str, float] = {}
+        for key in FACE_MIMIC_NUMERIC_FIELDS:
+            current = self._clamp01(values.get(key, 0.0)) if key not in {"head_yaw", "head_pitch", "head_roll"} else float(values.get(key, 0.0) or 0.0)
+            if key not in self._face_mimic_smooth_values:
+                smoothed[key] = current
+            else:
+                smoothed[key] = self._face_mimic_smooth_values[key] * 0.7 + current * 0.3
+            if key in {"head_yaw", "head_pitch", "head_roll"}:
+                smoothed[key] = max(-1.0, min(1.0, smoothed[key]))
+            else:
+                smoothed[key] = self._clamp01(smoothed[key])
+        self._face_mimic_smooth_values = dict(smoothed)
+        return smoothed
+
+    def _classify_face_mimic_expression(self, values: dict[str, float], scores: dict[str, float]) -> str:
+        mouth_open = float(values.get("mouth_open", 0.0) or 0.0)
+        smile = float(values.get("smile", 0.0) or 0.0)
+        blink_l = float(values.get("eye_blink_left", 0.0) or 0.0)
+        blink_r = float(values.get("eye_blink_right", 0.0) or 0.0)
+        brow_raise = float(values.get("brow_raise", 0.0) or 0.0)
+        mouth_frown = float(values.get("mouth_frown", 0.0) or 0.0)
+        brow_down = self._avg_values(scores.get("browDownLeft", 0.0), scores.get("browDownRight", 0.0))
+        if mouth_open > 0.45 and brow_raise > 0.25:
+            return "surprised"
+        if smile > 0.35:
+            return "happy"
+        if blink_l > 0.65 and blink_r > 0.65:
+            return "tired"
+        if mouth_frown > 0.30 and smile < 0.20:
+            return "sad"
+        if brow_down > 0.35 and smile < 0.20:
+            return "angry"
+        return "neutral"
+
+    def _stable_face_mimic_expression(self, expression: str) -> str:
+        expression = expression if expression in {"neutral", "happy", "sad", "angry", "surprised", "tired"} else "unknown"
+        if self._face_mimic_stable_expression == "unknown":
+            self._face_mimic_stable_expression = expression
+            self._face_mimic_candidate_expression = expression
+            self._face_mimic_candidate_count = 1
+            return expression
+        if expression == self._face_mimic_stable_expression:
+            self._face_mimic_candidate_expression = expression
+            self._face_mimic_candidate_count = 0
+            return self._face_mimic_stable_expression
+        if expression == self._face_mimic_candidate_expression:
+            self._face_mimic_candidate_count += 1
+        else:
+            self._face_mimic_candidate_expression = expression
+            self._face_mimic_candidate_count = 1
+        if self._face_mimic_candidate_count >= 2:
+            self._face_mimic_stable_expression = expression
+            self._face_mimic_candidate_count = 0
+        return self._face_mimic_stable_expression
+
+    def _estimate_head_pose_from_landmarks(self, landmarks: Any, w: int, h: int) -> dict[str, float]:
+        try:
+            nose = landmarks[1]
+            left_eye = landmarks[33]
+            right_eye = landmarks[263]
+            forehead = landmarks[10]
+            chin = landmarks[152]
+            eye_center_x = (left_eye.x + right_eye.x) / 2.0
+            eye_center_y = (left_eye.y + right_eye.y) / 2.0
+            eye_distance = max(0.001, abs(right_eye.x - left_eye.x))
+            face_height = max(0.001, chin.y - forehead.y)
+            yaw = max(-1.0, min(1.0, ((nose.x - eye_center_x) / eye_distance) * 1.2))
+            pitch = max(-1.0, min(1.0, (((nose.y - eye_center_y) / face_height) - 0.18) * 3.0))
+            roll_rad = math.atan2((right_eye.y - left_eye.y) * h, (right_eye.x - left_eye.x) * w)
+            roll = max(-1.0, min(1.0, roll_rad / math.radians(45.0)))
+            return {"head_yaw": yaw, "head_pitch": pitch, "head_roll": roll}
+        except Exception:
+            return {"head_yaw": 0.0, "head_pitch": 0.0, "head_roll": 0.0}
+
+    def _build_face_mimic_state(
+        self,
+        available: bool,
+        expression: str,
+        values: dict[str, float],
+        raw_blendshapes: dict[str, float],
+        confidence: float,
+        source: list[str],
+    ) -> dict:
+        state = self._empty_face_mimic_state()
+        state.update({
+            "available": bool(available),
+            "expression": expression,
+            "confidence": round(self._clamp01(confidence), 3),
+            "timestamp": time.time(),
+            "source": list(source),
+            "raw_blendshapes": dict(raw_blendshapes),
+        })
+        for key in FACE_MIMIC_NUMERIC_FIELDS:
+            value = float(values.get(key, 0.0) or 0.0)
+            state[key] = round(max(-1.0, min(1.0, value)), 3) if key.startswith("head_") else round(self._clamp01(value), 3)
+        return state
+
+    def _disable_mediapipe_tasks_after_runtime_error(self, exc: Exception) -> None:
+        self._log_mediapipe_runtime_warning("FaceLandmarker.detect_for_video", exc)
+        try:
+            if self._face_landmarker is not None:
+                self._face_landmarker.close()
+        except Exception:
+            pass
+        self._face_landmarker = None
+        self._mediapipe_available = False
+        self._mediapipe_init_reason = f"MediaPipe Tasks 运行时异常，已降级到 OpenCV Haar: {exc}"
+        if not self._haar_only_mode:
+            self._enable_haar_stability_mode()
+
+    def _log_mediapipe_runtime_warning(self, stage: str, exc: Exception) -> None:
+        if self._mediapipe_runtime_warning_logged:
+            return
+        self._mediapipe_runtime_warning_logged = True
+        print(
+            f"[UserStateDetector] MediaPipe 运行时异常({stage})，后续将继续使用 OpenCV Haar 降级：{exc}"
+        )
 
     # ==================== 特征计算 ====================
 
@@ -704,7 +1303,7 @@ class UserStateDetector:
         该规则不追求医学级准确，只为桌宠提醒提供参考。
         """
         try:
-            # FaceMesh 常用点：1 鼻尖，33/263 眼角，10 额头上方，152 下巴
+            # MediaPipe 人脸关键点常用点：1 鼻尖，33/263 眼角，10 额头上方，152 下巴
             nose = landmarks[1]
             left_eye = landmarks[33]
             right_eye = landmarks[263]
@@ -763,19 +1362,50 @@ class UserStateDetector:
             return
         if self._emotion_recognizer is not None:
             return
+        now = time.time()
+        if self._last_emotion_failure_at and now - self._last_emotion_failure_at < 30.0:
+            return
         try:
             from models.vision.emotion_recognizer import EmotionRecognizer
             self._emotion_recognizer = EmotionRecognizer(
                 enabled=True,
                 min_confidence=0.70,
                 min_margin=0.18,
-                analyze_interval=2.0,
+                analyze_interval=self._emotion_interval,
                 smoothing_window=3,
             )
             print("[UserStateDetector] DeepFace 表情识别模块已加载（保守模式）。")
         except Exception as exc:
             print(f"[UserStateDetector] DeepFace 表情识别不可用：{exc}")
+            self._last_emotion_failure_at = time.time()
             self._emotion_recognizer = None
+
+    def _maybe_analyze_emotion(self, frame: Any) -> Any:
+        """Lazy, rate-limited DeepFace analysis."""
+        if not self._emotion_enabled or frame is None:
+            return self._last_emotion_result
+        now = time.time()
+        if self._emotion_busy:
+            return self._last_emotion_result
+        if self._last_emotion_at and now - self._last_emotion_at < self._emotion_interval:
+            return self._last_emotion_result
+        if self._last_emotion_failure_at and now - self._last_emotion_failure_at < 30.0:
+            return self._last_emotion_result
+
+        self._emotion_busy = True
+        try:
+            self._init_emotion_recognizer()
+            if self._emotion_recognizer is None:
+                return self._last_emotion_result
+            self._last_emotion_at = now
+            self._last_emotion_result = self._emotion_recognizer.analyze_frame(frame)
+            return self._last_emotion_result
+        except Exception as exc:
+            self._last_emotion_failure_at = time.time()
+            print(f"[UserStateDetector] DeepFace 表情分析失败：{exc}")
+            return self._last_emotion_result
+        finally:
+            self._emotion_busy = False
 
     def _maybe_apply_vlm(self, frame: Any, base_state: dict) -> dict:
         """
@@ -803,15 +1433,7 @@ class UserStateDetector:
 
         self._last_vlm_at = now
 
-        emotion_result = None
-        try:
-            if self._emotion_enabled:
-                self._init_emotion_recognizer()
-            if self._emotion_recognizer is not None:
-                emotion_result = self._emotion_recognizer.analyze_frame(frame)
-        except Exception as exc:
-            print(f"[UserStateDetector] DeepFace 表情分析失败：{exc}")
-            emotion_result = None
+        emotion_result = self._maybe_analyze_emotion(frame)
 
         try:
             # qwen_vl_api.py 如果已经加入 build_prompt_with_emotion，就使用表情增强提示词；否则自动退回默认提示词。
@@ -1001,16 +1623,119 @@ class UserStateDetector:
                 result.append(text)
         return result
 
-    def _draw_preview(self, frame: Any, state: dict):
+    def _cache_debug_snapshot(
+        self,
+        frame: Any,
+        state: dict,
+        face_info: Optional[dict] = None,
+        analysis_info: Optional[dict] = None,
+    ) -> None:
+        if frame is None:
+            return
         try:
-            text = f"{state.get('state_code')} | {state.get('state_name')} | {state.get('source')}"
-            self._cv2.putText(frame, text, (20, 40), self._cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 255, 0), 2)
-            self._cv2.imshow("UserStateDetector Preview", frame)
-            key = self._cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                self._is_running = False
+            raw_frame = frame.copy()
+        except Exception:
+            return
+
+        with self._lock:
+            face = dict(face_info or self._last_debug_face_info or {})
+            analysis = dict(analysis_info or self._last_debug_analysis_info or {})
+
+        debug_info = self._build_debug_info(state, face, analysis)
+
+        with self._lock:
+            self._latest_debug_frame = raw_frame
+            self._latest_debug_info = debug_info
+
+    def _build_debug_info(self, state: dict, face_info: dict, analysis_info: dict) -> dict:
+        landmarks = face_info.get("landmarks") or []
+        try:
+            landmarks_count = len(landmarks)
+        except Exception:
+            landmarks_count = 0
+        landmark_points: list[dict[str, float]] = []
+        try:
+            for lm in landmarks:
+                landmark_points.append({
+                    "x": float(getattr(lm, "x", 0.0) or 0.0),
+                    "y": float(getattr(lm, "y", 0.0) or 0.0),
+                    "z": float(getattr(lm, "z", 0.0) or 0.0),
+                })
+        except Exception:
+            landmark_points = []
+        return {
+            "state_code": state.get("state_code", STATE_UNKNOWN),
+            "state_name": state.get("state_name", ""),
+            "confidence": state.get("confidence", 0.0),
+            "source": self._merge_source([], state.get("source", [])),
+            "face_present": bool(face_info.get("present") or analysis_info.get("face_present")),
+            "bbox": face_info.get("bbox"),
+            "landmarks_count": landmarks_count,
+            "landmarks": landmark_points,
+            "looking_down": bool(analysis_info.get("looking_down", False)),
+            "eyes_closed": bool(analysis_info.get("eyes_closed", False)),
+            "low_light": bool(analysis_info.get("low_light", False)),
+            "brightness": analysis_info.get("brightness", 0.0),
+            "no_face_duration": analysis_info.get("no_face_duration", 0.0),
+            "face_mimic": copy.deepcopy(self._face_mimic_state),
+            "updated_at": time.time(),
+        }
+
+    def _draw_debug_overlay(self, frame: Any, state: dict, face_info: dict, analysis_info: dict) -> None:
+        cv2 = self._cv2
+        if cv2 is None:
+            return
+        h, w = frame.shape[:2]
+
+        bbox = face_info.get("bbox")
+        if bbox:
+            x, y, bw, bh = [int(v) for v in bbox]
+            cv2.rectangle(frame, (x, y), (x + bw, y + bh), (255, 0, 0), 2)
+
+        landmarks = face_info.get("landmarks") or []
+        try:
+            for idx, lm in enumerate(landmarks):
+                if idx % 3 != 0:
+                    continue
+                px = int(max(0.0, min(1.0, float(lm.x))) * w)
+                py = int(max(0.0, min(1.0, float(lm.y))) * h)
+                cv2.circle(frame, (px, py), 1, (0, 255, 0), -1)
         except Exception:
             pass
+
+        state_code = str(state.get("state_code", STATE_UNKNOWN))
+        confidence = float(state.get("confidence", 0.0) or 0.0)
+        source = ",".join(self._merge_source([], state.get("source", []))) or "none"
+        face_text = "face: yes" if face_info.get("present") else "face: no"
+        lines = [
+            f"state: {state_code}  conf: {confidence:.2f}",
+            f"source: {source[:80]}",
+            (
+                f"{face_text}  looking_down: {bool(analysis_info.get('looking_down'))}  "
+                f"eyes_closed: {bool(analysis_info.get('eyes_closed'))}  "
+                f"low_light: {bool(analysis_info.get('low_light'))}"
+            ),
+            f"brightness: {analysis_info.get('brightness', 0.0)}",
+        ]
+        if not face_info.get("present"):
+            lines.append("no face")
+
+        panel_height = min(h, 26 + len(lines) * 24)
+        cv2.rectangle(frame, (0, 0), (w, panel_height), (0, 0, 0), -1)
+        for i, text in enumerate(lines):
+            cv2.putText(
+                frame,
+                text,
+                (12, 24 + i * 22),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.58,
+                (0, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+    def _draw_preview(self, frame: Any, state: dict):
+        self._cache_debug_snapshot(frame, state)
 
 
 # 简单手动测试：python models/vision/user_state_detector.py

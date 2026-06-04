@@ -35,4 +35,37 @@ Desktop.ini
 # Virtual Environment
 venv/
 .venv/
+.openvoice/
 env/
+
+# Optional local model runtimes
+third_party/OpenVoice/
+assets/openvoice_work/
+
+# ─── Cloud Sync: local secrets & generated data ───
+data/cloud_session.json
+data/local_pet_state.json
+data/user_profile.json
+data/pet_ui_settings.json
+data/live2d_action_showcase.json
+assets/chat_history/
+assets/ai_memory/
+assets/sounds/*.mp3
+assets/sounds/*.wav
+
+# ─── But keep these ───
+!.env.example
+!data/*.example.json
+
+# ─── Generated/temp analysis files ───
+
+# Live2D debug screenshots
+data/debug_live2d_frame_*.png
+analyze_*.py
+fix_*.py
+temp_*.py
+check_canvas.py
+monkey_structure_analysis.py
+
+# ─── Private user models (DO NOT UPLOAD) ───
+assets/models/red_hair/

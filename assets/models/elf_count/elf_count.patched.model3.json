@@ -1,0 +1,101 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "精灵伯爵.moc3",
+    "Textures": [
+      "精灵伯爵.8192/texture_00.png",
+      "精灵伯爵.8192/texture_01.png"
+    ],
+    "Physics": "精灵伯爵.physics3.json",
+    "DisplayInfo": "精灵伯爵.cdi3.json",
+    "Motions": {
+      "Idle": [
+        {
+          "File": "motions/Idle.motion3.json"
+        }
+      ]
+    },
+    "Expressions": [
+      {
+        "Name": "不安",
+        "File": "不安.exp3.json"
+      },
+      {
+        "Name": "不安嘴",
+        "File": "不安嘴.exp3.json"
+      },
+      {
+        "Name": "发型",
+        "File": "发型.exp3.json"
+      },
+      {
+        "Name": "发色",
+        "File": "发色.exp3.json"
+      },
+      {
+        "Name": "披风隐藏",
+        "File": "披风隐藏.exp3.json"
+      },
+      {
+        "Name": "星星眼",
+        "File": "星星眼.exp3.json"
+      },
+      {
+        "Name": "爱心眼",
+        "File": "爱心眼.exp3.json"
+      },
+      {
+        "Name": "白眼",
+        "File": "白眼.exp3.json"
+      },
+      {
+        "Name": "白眼嘴",
+        "File": "白眼嘴.exp3.json"
+      },
+      {
+        "Name": "眼镜",
+        "File": "眼镜.exp3.json"
+      },
+      {
+        "Name": "瞳色",
+        "File": "瞳色.exp3.json"
+      },
+      {
+        "Name": "耳朵",
+        "File": "耳朵.exp3.json"
+      },
+      {
+        "Name": "脸红",
+        "File": "脸红.exp3.json"
+      },
+      {
+        "Name": "脸黑",
+        "File": "脸黑.exp3.json"
+      },
+      {
+        "Name": "豆豆眼",
+        "File": "豆豆眼.exp3.json"
+      },
+      {
+        "Name": "酒杯",
+        "File": "酒杯.exp3.json"
+      },
+      {
+        "Name": "麦克风",
+        "File": "麦克风.exp3.json"
+      }
+    ]
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "LipSync",
+      "Ids": []
+    },
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": []
+    }
+  ]
+}
