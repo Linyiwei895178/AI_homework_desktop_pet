@@ -61,6 +61,9 @@ assets/sounds/*.wav
 
 # Live2D debug screenshots
 data/debug_live2d_frame_*.png
+
+# Auto-generated patched model3.json files
+*.desktop_pet.generated.model3.json
 analyze_*.py
 fix_*.py
 temp_*.py
@@ -69,3 +72,6 @@ monkey_structure_analysis.py
 
 # ─── Private user models (DO NOT UPLOAD) ───
 assets/models/red_hair/
+
+# ─── 我也要死吗 (private model) ───
+assets/models/will_I_die/
