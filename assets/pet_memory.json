@@ -1,9 +1,9 @@
 {
-  "last_pet_id": "mao_pro_zh",
+  "last_pet_id": "懒大王",
   "pin_top": true,
   "hover_fade": false,
   "status_bar": false,
-  "chat_open": false,
+  "chat_open": true,
   "voice_pack_id": "",
   "tts_settings": {
     "enabled": true,
@@ -33,11 +33,11 @@
     "tts_volume": ""
   },
   "position": [
-    75,
-    59
+    500,
+    270
   ],
   "window_size": [
-    353,
-    469
+    408,
+    544
   ]
 }

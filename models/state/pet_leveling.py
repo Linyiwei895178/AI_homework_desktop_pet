@@ -38,6 +38,7 @@ def calculate_interaction_delta(action_type: str) -> Dict[str, int]:
         "pet":  {"exp": 2, "coins": 0, "energy": 0, "intimacy": 4, "hunger": 0, "bond_score": 1},
         "chat": {"exp": 2, "coins": 0, "energy": -2, "intimacy": 2, "hunger": 0, "bond_score": 0},
         "work": {"exp": 8, "coins": 15, "energy": -15, "intimacy": 0, "hunger": -10, "bond_score": 0},
+        "study": {"exp": 6, "coins": 5, "energy": -10, "intimacy": 1, "hunger": -5, "bond_score": 0},
         "level_up": {"exp": 0, "coins": 50, "energy": 20, "intimacy": 10, "hunger": 0, "bond_score": 5},
     }
     return deltas.get(action_type, {"exp": 1, "coins": 0, "energy": 0, "intimacy": 0, "hunger": 0, "bond_score": 0})

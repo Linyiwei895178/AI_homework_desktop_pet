@@ -1,1 +1,2 @@
-# TO_DO: Package initialization for utils module
+# utils package
+from utils.event_log import EventLog, get_event_log

@@ -32,6 +32,7 @@ from typing import Callable, Dict, Any, Optional
 from models.state.pet_state import PetState
 from models.state.behavior_rules import BehaviorRules
 from models.state.user_profile import UserProfile
+from utils.event_log import get_event_log
 
 
 class EchoTeamDInterface:
@@ -41,6 +42,7 @@ class EchoTeamDInterface:
     队员D的内部核心类：
     - PetState       → 管理 mood / energy / intimacy
     - BehaviorRules  → 行为决策 + 主动语音 + 回调通知
+    - EventLog       → 事件日志（JSONL）
     """
 
     def __init__(self, pet_state_instance: PetState):
@@ -52,6 +54,7 @@ class EchoTeamDInterface:
         self.pet_state = pet_state_instance
         self.rules = BehaviorRules(pet_state_instance)
         self.user_profile = UserProfile.load()
+        self._event_log = get_event_log()
 
         # 队员C注册的状态变化监听器
         self._status_change_listener: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -350,6 +353,59 @@ class EchoTeamDInterface:
         :param filepath: 读取路径，默认 logs/pet_state.json
         """
         self.pet_state.load_state(filepath)
+
+    # =========================================================================
+    # 接口 14：提供给 【队员A (UI) / 队员C (TTS)】 —— 互动事件记录
+    # =========================================================================
+    def api_apply_interaction(
+        self,
+        action_type: str,
+        actor: str = "local",
+        source: str = "click",
+        delta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        记录一次宠物互动事件到 JSONL 事件日志。
+
+        所有投喂、陪玩、聊天、提醒、升级、云端同步都通过此接口写入日志。
+
+        :param action_type: 互动类型 (feed/play/chat/click/level_up/sync 等)
+        :param actor: 操作者 (local/remote/system)
+        :param source: 来源 (click/vision/nlp/timer/cloud)
+        :param delta: 状态变化字典，可选，若未提供则从 pet_state 生成
+        """
+        if delta is None:
+            # 使用 apply_interaction 获取变化量（但这里不希望重复更新状态）
+            delta = {}
+
+        event = {
+            "timestamp": time.time(),
+            "event_type": action_type,
+            "actor": actor,
+            "pet_id": getattr(self.pet_state, "pet_id", "cat"),
+            "delta": delta,
+            "source": source,
+        }
+        self._event_log.append_event(event)
+
+    # =========================================================================
+    # 接口 15：提供给 【队员A (UI)】 —— 读取最近事件日志
+    # =========================================================================
+    def api_get_recent_events(self, n: int = 10) -> list:
+        """
+        UI 可以读取最近 n 条事件日志用于展示。
+
+        :param n: 返回条数
+        :return: 事件列表（最新在前）
+        """
+        return self._event_log.read_recent_events(n)
+
+    # =========================================================================
+    # 接口 16：提供给 【管理/调试】 —— 清空事件日志
+    # =========================================================================
+    def api_clear_events(self) -> None:
+        """清空 JSONL 事件日志文件。"""
+        self._event_log.clear_events()
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:

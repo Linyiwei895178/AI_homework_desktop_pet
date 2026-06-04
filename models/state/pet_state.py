@@ -1,5 +1,6 @@
 """
 桌宠状态（心情/能量/亲密度/等级/经验/金币/饱食度/羁绊）
+=====================================================
 
 对接 UserStateDetector 状态字典，通过 update_from_user_state() 方法
 将用户状态识别结果映射为桌宠自身的 mood/energy/intimacy 变化。
@@ -10,12 +11,66 @@
 - coins: 金币
 - hunger: 饱食度（0-100）
 - bond_score: 羁绊值
+
+═══════════════════════════════════════════════════════
+【队员A — UI】直接读写
+═══════════════════════════════════════════════════════
+
+>>> from models.state.pet_state import PetState
+
+>>> s = PetState()
+>>> s.mood       # "neutral" | "happy" | "sad" | "angry" | "hungry"
+>>> s.energy     # 0-100
+>>> s.intimacy   # 0-100
+>>> s.level, s.exp, s.coins, s.hunger, s.bond_score
+
+>>> s.update_state("feed")  # 投喂
+>>> s.update_state("play")  # 陪玩
+>>> s.update_state("chat")  # 聊天
+>>> s.update_state("work")  # 工作陪伴
+>>> s.update_state("study") # 学习陪伴
+
+>>> s.to_dict()             # 全体字段 dict
+>>> s.get_state_info()      # 同 to_dict()
+
+═══════════════════════════════════════════════════════
+【队员B — Vision】用户状态映射
+═══════════════════════════════════════════════════════
+
+>>> s.update_from_user_state({
+...     "state_code": "distracted",
+...     "confidence": 0.85,
+...     "duration": 10.0,
+...     "need_response": True,
+... })
+
+═══════════════════════════════════════════════════════
+【队员C — NLP/TTS】对话后更新 + 等级经验
+═══════════════════════════════════════════════════════
+
+>>> s.add_exp(50)                          # 加经验(可能触发升级)
+>>> s.apply_interaction("chat")            # 返回变化 delta
+>>> s.get_level_progress()                 # {level, exp, next_level_exp, progress, remaining}
+>>> s.check_level_up()                     # 手动触发升级检查
+
+>>> s.save_state()                         # 持久化到 logs/pet_state.json
+>>> s.load_state()                         # 从文件恢复(兼容旧格式)
+>>> s.from_dict({"mood":"happy", ...})     # 从旧 JSON 复原
 """
 
 import json
 import os
 import time
+import json
+import os
+import time
 from typing import Any, Dict, List, Optional
+
+from models.state.pet_leveling import (
+    calculate_interaction_delta,
+    exp_to_next_level,
+    get_level_progress as _get_level_progress,
+)
 
 
 # 用户 state_code → 桌宠 mood 映射规则
@@ -80,29 +135,46 @@ class PetState:
 
     def update_state(self, event: str):
         """
-        根据事件更新桌宠状态
+        根据事件更新桌宠状态（心情/能量/亲密度 + 等级系统）
 
-        :param event: 事件名称（如 "click", "feed", "play", "idle"）
+        :param event: 事件名称（如 "click", "feed", "play", "idle", "chat", "work", "study"）
         """
         self._last_event = event
 
+        # ── 基础心情/能量/亲密度变化 ──
         if event == "click":
-            # 被点击：亲密度上升，能量略降
             self.intimacy = min(100, self.intimacy + 2)
             self.energy = max(0, self.energy - 1)
             self.mood = "happy"
 
         elif event == "feed":
-            # 被喂食：能量上升，亲密度上升
             self.energy = min(100, self.energy + 20)
             self.intimacy = min(100, self.intimacy + 5)
             self.mood = "happy"
 
         elif event == "play":
-            # 玩耍：能量下降，亲密度上升
             self.energy = max(0, self.energy - 10)
             self.intimacy = min(100, self.intimacy + 3)
             self.mood = "happy"
+
+        elif event == "chat":
+            # 聊天：消耗少量能量，增加亲密度
+            self.energy = max(0, self.energy - 2)
+            self.intimacy = min(100, self.intimacy + 2)
+            if self.mood in ("sad", "angry"):
+                self.mood = "neutral"
+
+        elif event == "work":
+            # 工作陪伴：消耗能量，增加经验
+            self.energy = max(0, self.energy - 15)
+            if self.mood == "sad":
+                self.mood = "neutral"
+
+        elif event == "study":
+            # 学习陪伴：同 work 逻辑
+            self.energy = max(0, self.energy - 10)
+            if self.mood == "sad":
+                self.mood = "neutral"
 
         elif event == "idle":
             # 空闲：能量缓慢恢复
@@ -113,13 +185,23 @@ class PetState:
                 self.mood = "neutral"
 
         elif event == "sad":
-            # 难过事件：心情变差
             self.mood = "sad"
             self.energy = max(0, self.energy - 5)
 
         else:
             # 未知事件，保持当前状态
             pass
+
+        # ── 等级系统：应用经验/金币/饱食度/羁绊变化 ──
+        delta = calculate_interaction_delta(event)
+        if delta:
+            self.exp += delta.get("exp", 0)
+            self.coins = max(0, self.coins + delta.get("coins", 0))
+            self.hunger = max(0, min(100, self.hunger + delta.get("hunger", 0)))
+            self.bond_score = max(0, self.bond_score + delta.get("bond_score", 0))
+
+            # 检查升级
+            self.check_level_up()
 
         # 记录状态变化历史（结构化快照）
         self._history.append({
@@ -205,55 +287,67 @@ class PetState:
             "timestamp": time.time(),
         })
 
-    # ── 扩展方法 ──
+    def check_level_up(self) -> bool:
+        """检查并执行升级（公开方法，供外部调用）。
+
+        由 update_state / add_exp 内部也会自动调用。
+        返回值表示本次调用是否触发了升级。
+        """
+        needed = exp_to_next_level(self.level)
+        if self.exp < needed:
+            return False
+        self.exp -= needed
+        self.level += 1
+        # 升级奖励
+        bonus = calculate_interaction_delta("level_up")
+        self.coins += bonus.get("coins", 0)
+        self.energy = min(100, self.energy + bonus.get("energy", 0))
+        self.intimacy = min(100, self.intimacy + bonus.get("intimacy", 0))
+        self.bond_score += bonus.get("bond_score", 0)
+        print(f"[PetState] 升级! 当前等级={self.level}, 剩余exp={self.exp}")
+        return True
 
     def add_exp(self, amount: int) -> List[str]:
         """
         增加经验值，如果达到升级所需经验则自动升级。
+        负数输入会安全地归零处理。
 
-        :param amount: 增加的经验值（正整数）
+        :param amount: 增加的经验值（正整数或零；负数会被视为0）
         :return: 触发的事件列表，可能包含 "level_up"
         """
-        if amount <= 0:
+        # 安全处理负数输入（容错）
+        if amount < 0:
+            amount = 0
+        if amount == 0:
             return []
         self.exp += int(amount)
-        events = []
+        events: List[str] = []
 
-        # TODO: 真实升级公式接入 pet_leveling.py
-        next_exp = self.level * 100 + (self.level - 1) * 50
-        if self.exp >= next_exp:
-            self.exp -= next_exp
-            self.level += 1
-            self.coins += 50
-            self.energy = min(100, self.energy + 20)
-            self.intimacy = min(100, self.intimacy + 10)
-            self.bond_score += 5
-            events.append("level_up")
-            print(f"[PetState] 升级! 当前等级={self.level}, 剩余exp={self.exp}")
+        # 可能连续升级多次
+        while self.exp >= exp_to_next_level(self.level):
+            if self.check_level_up():
+                events.append("level_up")
 
         return events
 
     def apply_interaction(self, action_type: str, actor: str = "local") -> dict:
         """
-        应用一次互动（点击/投喂/玩耍等），更新状态并返回变化。
+        应用一次互动（点击/投喂/玩耍/聊天/工作陪伴/学习陪伴），更新状态并返回变化。
 
-        :param action_type: 互动类型
+        :param action_type: 互动类型（click/feed/play/chat/work/study/pet 等）
         :param actor: 互动执行者
         :return: 状态变化字典
         """
-        old = {
-            "mood": self.mood, "energy": self.energy, "intimacy": self.intimacy,
-            "level": self.level, "exp": self.exp, "coins": self.coins,
-            "hunger": self.hunger, "bond_score": self.bond_score,
-        }
+        old = self.to_dict()
         self.update_state(action_type)
-        deltas = {}
-        for key, old_val in old.items():
-            new_val = getattr(self, key, old_val)
+        deltas: Dict[str, Any] = {}
+        new = self.to_dict()
+        for key, new_val in new.items():
+            old_val = old.get(key, new_val)
             if isinstance(new_val, (int, float)) and isinstance(old_val, (int, float)):
                 diff = new_val - old_val
                 if diff != 0:
-                    deltas[key] = diff
+                    deltas[key + "_delta"] = diff
         deltas["actor"] = actor
         deltas["action_type"] = action_type
         return deltas
@@ -282,14 +376,8 @@ class PetState:
         return self
 
     def get_level_progress(self) -> dict:
-        """获取等级进度信息。"""
-        next_exp = self.level * 100 + (self.level - 1) * 50
-        progress = min(1.0, self.exp / max(next_exp, 1))
-        return {
-            "level": self.level, "exp": self.exp,
-            "next_level_exp": next_exp, "progress": round(progress, 4),
-            "remaining": max(0, next_exp - self.exp),
-        }
+        """获取等级进度信息（委托 pet_leveling.get_level_progress）。"""
+        return _get_level_progress(self.level, self.exp)
 
     def get_last_user_state(self) -> Optional[dict]:
         """
@@ -320,13 +408,25 @@ class PetState:
             filepath = os.path.join(logs_dir, "pet_state.json")
 
         state_data = self.to_dict()
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(state_data, f, ensure_ascii=False, indent=2)
-        print(f"[PetState] 状态已保存到: {filepath}")
+        state_data["updated_at"] = time.time()
+
+        # 原子写入（通过临时文件 + rename）
+        try:
+            tmp_path = str(filepath) + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(state_data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, str(filepath))
+            print(f"[PetState] 状态已保存到: {filepath}")
+        except OSError as e:
+            print(f"[PetState] 保存状态失败: {e}")
 
     def load_state(self, filepath: Optional[str] = None):
         """
-        从 JSON 文件恢复状态（状态持久化）
+        从 JSON 文件恢复状态（状态持久化，兼容旧格式）
+
+        旧格式可能只有 mood/energy/intimacy/pet_id，
+        新格式包含 level/exp/coins/hunger/bond_score。
+        缺失字段自动填充默认值。
 
         :param filepath: 读取路径，默认从 logs/pet_state.json 读取
         :return: self（支持链式调用）
@@ -342,8 +442,12 @@ class PetState:
             print(f"[PetState] 状态文件不存在: {filepath}，保持当前状态")
             return self
 
-        with open(filepath, "r", encoding="utf-8") as f:
-            state_data = json.load(f)
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                state_data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[PetState] 状态文件读取失败: {e}，保持当前状态")
+            return self
 
         self.from_dict(state_data)
         print(f"[PetState] 状态已从 {filepath} 恢复: {self}")

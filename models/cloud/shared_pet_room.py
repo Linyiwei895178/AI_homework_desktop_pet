@@ -24,6 +24,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from models.cloud.cloud_models import CloudPetEvent, CloudPetState
 from models.cloud.cloud_service import SupabaseCloudService
+from utils.event_log import get_event_log
 
 
 class SharedPetRoomManager:
@@ -53,6 +54,7 @@ class SharedPetRoomManager:
         self._room_code: str = room_code or ""
         self._room_info: Dict[str, Any] = {}
         self._on_event: Optional[Callable[[Dict[str, Any]], None]] = None
+        self._event_log = get_event_log()
 
     def set_on_event_callback(
         self, callback: Optional[Callable[[Dict[str, Any]], None]]
@@ -140,6 +142,17 @@ class SharedPetRoomManager:
             delta=delta or {},
         )
         result = self._service.append_pet_event(self._room_code, event.to_dict())
+
+        # ── 写入本地事件日志 ──
+        self._event_log.append_event({
+            "timestamp": time.time(),
+            "event_type": action_type,
+            "actor": actor_name,
+            "pet_id": self._room_code,
+            "delta": delta or {},
+            "source": "cloud",
+        })
+
         if result.get("ok") and self._on_event:
             self._on_event(event.to_dict())
         return result

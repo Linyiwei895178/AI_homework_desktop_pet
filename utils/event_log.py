@@ -44,7 +44,7 @@ class EventLog:
         :param data: dict with at least an "event_type" key.
         """
         record = dict(data)
-        record.setdefault("_timestamp", datetime.now().isoformat())
+        record.setdefault("timestamp", datetime.now().isoformat())
         record.setdefault("event_type", "unknown")
         with self._lock:
             try:
@@ -117,6 +117,20 @@ class EventLog:
         with self._lock:
             if self._path.exists():
                 self._path.unlink(missing_ok=True)
+
+    # ── 兼容别名（用户要求的标准 API 名称） ──
+
+    def append_event(self, event: Dict[str, Any]) -> None:
+        """与 write() 等价的标准接口。"""
+        self.write(event)
+
+    def read_recent_events(self, n: int = 10) -> list[Dict[str, Any]]:
+        """与 read_recent() 等价的标准接口。"""
+        return self.read_recent(limit=n)
+
+    def clear_events(self) -> None:
+        """与 clear() 等价的标准接口。"""
+        self.clear()
 
     def __repr__(self) -> str:
         return f"EventLog(path={self._path})"

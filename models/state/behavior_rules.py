@@ -1,5 +1,6 @@
 """
 状态对应动作决策规则 + 行为协调器
+===================================
 
 核心类 BehaviorRules：
 - 接收 PetState 实例，作为桌宠状态的唯一决策入口
@@ -7,8 +8,68 @@
 - apply_user_state(user_state) → 对接 models/vision/user_state_detector.py
 - on_chat_finished(word_count) → 对接 models/tts/tts_manager.py
 - get_speech_hint() → 主动语音提示文本
+
+═══════════════════════════════════════════════════════
+【队员A — UI】
+═══════════════════════════════════════════════════════
+
+>>> from models.state.behavior_rules import decide_action, BehaviorRules
+>>> from models.state.pet_state import PetState
+
+>>> pet_state = PetState()
+>>> action = decide_action(pet_state)  # "idle" | "happy" | "sad" | "hungry" | "angry"
+
+>>> rules = BehaviorRules(pet_state)
+>>> rules.get_action()                 # 同上
+>>> rules.should_speak()               # 是否该主动说话
+>>> rules.get_pet_id()                 # "cat" 等
+
+═══════════════════════════════════════════════════════
+【队员B — Vision】UserStateDetector
+═══════════════════════════════════════════════════════
+
+>>> from models.vision.user_state_detector import UserStateDetector
+>>> from models.state.pet_state import PetState
+>>> from models.state.behavior_rules import BehaviorRules
+
+>>> pet_state = PetState()
+>>> rules = BehaviorRules(pet_state)
+
+>>> # 方式1: 手动传入
+>>> user_state = detector.get_state()
+>>> rules.apply_user_state(user_state)   # 自动映射到 pet_state
+
+>>> # 方式2: 自动绑定(推荐)
+>>> rules.connect_vision_detector(detector)
+>>> detector.start()                     # 全自动同步
+
+═══════════════════════════════════════════════════════
+【队员C — NLP/TTS】DeepSeekClient / TTSManager
+═══════════════════════════════════════════════════════
+
+>>> from models.state.behavior_rules import BehaviorRules
+>>> from models.state.pet_state import PetState
+
+>>> pet_state = PetState()
+>>> rules = BehaviorRules(pet_state)
+
+>>> # 注册回调, 当用户需要回应时通知 NLP
+>>> def on_status_change(event: dict):
+...     # event 包含: event_type, state_code, suggestion 等
+...     pass
+>>> rules.api_register_logic_callback(on_status_change)
+
+>>> # 对话结束后调用
+>>> rules.on_chat_finished(word_count=60)
+
+>>> # 获取主动语音提示
+>>> hint = rules.get_speech_hint()       # 可能为 None
+
+>>> # 重置记忆(切换用户/睡眠)
+>>> rules.api_reset_ai_memory()
 """
 
+import time
 from typing import Any, Callable, Dict, Optional
 
 from models.state.pet_state import PetState
@@ -358,7 +419,7 @@ class BehaviorRules:
             "mood": ps.mood,
             "energy": ps.energy,
             "intimacy": ps.intimacy,
-            "timestamp": __import__("time").time(),
+            "timestamp": time.time(),
         }
         if extra_data:
             status.update(extra_data)

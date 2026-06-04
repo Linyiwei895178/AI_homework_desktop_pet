@@ -1,1 +1,2 @@
-# TO_DO: Package initialization for models module
+# models package
+from models.state import PetState

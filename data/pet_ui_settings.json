@@ -2,7 +2,7 @@
   "pin_top": true,
   "hover_fade": false,
   "status_bar": false,
-  "chat_open": false,
+  "chat_open": true,
   "voice_pack_id": "",
   "desktop_behavior": {
     "auto_walk": false,
