@@ -1151,7 +1151,7 @@ class InfoBubble(QFrame, ScalableOverlay):
         self.setStyleSheet(_glass_style(14))
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.visible = False
-        self.mood, self.affection, self.energy = 85, 72, 90
+        self.mood, self.energy, self.affection = 85, 72, 90
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(12, 12, 12, 12)
         self._lbl = QLabel()
@@ -1166,14 +1166,23 @@ class InfoBubble(QFrame, ScalableOverlay):
         self._lbl.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
         self.setStyleSheet(_glass_style(_scaled_int(14, self._ui_scale, 8)))
 
+    def set_stats(self, mood: int, energy: int, affection: int) -> None:
+        self.mood = int(mood)
+        self.energy = int(energy)
+        self.affection = int(affection)
+
+    def refresh_label(self) -> None:
+        self._lbl.setText(
+            f"心情❤️{self.mood}\n好感度⭐{self.affection}\n能量⚡{self.energy}"
+        )
+        self.adjustSize()
+
     @property
     def rect(self) -> QRect:
         return self.geometry()
 
     def show(self, x: int, y: int) -> None:
-        self._lbl.setText(
-            f"心情❤️{self.mood}\n好感度⭐{self.affection}\n能量⚡{self.energy}"
-        )
+        self.refresh_label()
         self.adjustSize()
         self.move(x, y)
         self.visible = True
@@ -3503,6 +3512,10 @@ class ControlConsole(QMainWindow):
             self._refresh_pet_main()
         if page == "dashboard":
             self._refresh_dashboard()
+        if page in ("dashboard", "pet_main", "pet_settings"):
+            getter = getattr(self, "sync_dashboard_stats", None)
+            if callable(getter):
+                getter()
         self._log(f"切换: {page}")
 
     def _get_pet(self, pet_id: str | None) -> dict | None:
@@ -3952,6 +3965,12 @@ class ControlConsole(QMainWindow):
             self._apply_pet_switch(pet)
 
     def _stat_card(self, icon: str, title: str, val: int, color: str) -> QFrame:
+        frame, _val_label, _bar = self._stat_card_tracked(icon, title, val, color)
+        return frame
+
+    def _stat_card_tracked(
+        self, icon: str, title: str, val: int, color: str
+    ) -> tuple[QFrame, QLabel, QProgressBar]:
         f = QFrame()
         f.setStyleSheet(_glass_style(14))
         lay = QVBoxLayout(f)
@@ -3959,15 +3978,25 @@ class ControlConsole(QMainWindow):
         row.addWidget(QLabel(icon))
         row.addWidget(QLabel(title))
         row.addStretch()
-        row.addWidget(QLabel(str(val)))
+        val_label = QLabel(str(val))
+        row.addWidget(val_label)
         lay.addLayout(row)
         bar = QProgressBar()
         bar.setRange(0, 100)
         bar.setValue(val)
         bar.setTextVisible(False)
-        bar.setStyleSheet(f"QProgressBar {{ background:#e2e8f0; border-radius:4px; height:8px; }} QProgressBar::chunk {{ background:{color}; border-radius:4px; }}")
+        bar.setStyleSheet(
+            f"QProgressBar {{ background:#e2e8f0; border-radius:4px; height:8px; }}"
+            f" QProgressBar::chunk {{ background:{color}; border-radius:4px; }}"
+        )
         lay.addWidget(bar)
-        return f
+        return f, val_label, bar
+
+    def _apply_stats_to_cards(self, cards: dict[str, tuple[QLabel, QProgressBar]]) -> None:
+        for key, (val_label, bar) in cards.items():
+            val = max(0, min(100, int(self.stats.get(key, 0))))
+            val_label.setText(str(val))
+            bar.setValue(val)
 
     def _page_dashboard(self) -> QWidget:
         w = QWidget()
@@ -4263,8 +4292,11 @@ class ControlConsole(QMainWindow):
         lay.addLayout(body)
         lay.addWidget(QLabel("<h3>宠物状态</h3>"))
         stats = QHBoxLayout()
+        self._pet_main_stat_cards: dict[str, tuple[QLabel, QProgressBar]] = {}
         for icon, title, key, col in (("😊", "心情", "mood", "#3b82f6"), ("⚡", "能量", "energy", "#fb923c"), ("❤️", "好感度", "affection", "#ec4899")):
-            stats.addWidget(self._stat_card(icon, title, self.stats[key], col))
+            card, val_label, bar = self._stat_card_tracked(icon, title, self.stats[key], col)
+            self._pet_main_stat_cards[key] = (val_label, bar)
+            stats.addWidget(card)
         lay.addLayout(stats)
         lay.addStretch()
         return w

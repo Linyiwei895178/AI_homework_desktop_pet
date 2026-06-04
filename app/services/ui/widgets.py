@@ -1242,7 +1242,7 @@ class InfoBubble(QFrame, ScalableOverlay):
         self.setStyleSheet(_glass_style(14))
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.visible = False
-        self.mood, self.affection, self.energy = 85, 72, 90
+        self.mood, self.energy, self.affection = 85, 72, 90
         self._max_outer_w = 0
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(12, 12, 12, 12)

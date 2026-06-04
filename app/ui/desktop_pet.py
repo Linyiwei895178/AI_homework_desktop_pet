@@ -922,6 +922,12 @@ def enrich_flat_pet(
   return apply_zhegou_idle_thumb(PROJECT_ROOT, pet)
 
 
+class PetUiBridge(QObject):
+  """主线程 UI 调度（供后台线程安全刷新状态栏等）。"""
+
+  status_refresh = Signal(bool)
+
+
 class ChatStreamBridge(QObject):
   """将队员 C 后台线程的流式文字块安全投递到主线程 UI。"""
 
@@ -1022,8 +1028,33 @@ class PetControlConsole(ControlConsole):
 
   def sync_dashboard_stats(self) -> None:
     self.stats = self._desk.stats_for_dashboard()
-    if hasattr(self, "_dash_pet_pic"):
-      self._refresh_dashboard()
+    self._apply_stats_to_cards(getattr(self, "_dash_stat_cards", {}))
+    self._apply_stats_to_cards(getattr(self, "_pet_main_stat_cards", {}))
+    self._refresh_dashboard()
+
+  def _dash_stat_card(
+    self, icon: str, title: str, val: int, color: str
+  ) -> tuple[QFrame, QLabel, QProgressBar]:
+    f = QFrame()
+    f.setStyleSheet(_glass_style(14))
+    lay = QVBoxLayout(f)
+    row = QHBoxLayout()
+    row.addWidget(QLabel(icon))
+    row.addWidget(QLabel(title))
+    row.addStretch()
+    val_label = QLabel(str(val))
+    row.addWidget(val_label)
+    lay.addLayout(row)
+    bar = QProgressBar()
+    bar.setRange(0, 100)
+    bar.setValue(val)
+    bar.setTextVisible(False)
+    bar.setStyleSheet(
+      f"QProgressBar {{ background:#e2e8f0; border-radius:4px; height:8px; }}"
+      f" QProgressBar::chunk {{ background:{color}; border-radius:4px; }}"
+    )
+    lay.addWidget(bar)
+    return f, val_label, bar
 
   def _vision_debug_visible(self) -> bool:
     getter = getattr(self._desk, "_vision_debug_is_visible", None)
@@ -1060,6 +1091,8 @@ class PetControlConsole(ControlConsole):
     return self._get_pet(self._current_pet_id)
 
   def _refresh_dashboard(self) -> None:
+    self._apply_stats_to_cards(getattr(self, "_dash_stat_cards", {}))
+    self._apply_stats_to_cards(getattr(self, "_pet_main_stat_cards", {}))
     pet = self._current_pet()
     if not pet or not hasattr(self, "_dash_pet_pic"):
       return
@@ -1078,12 +1111,15 @@ class PetControlConsole(ControlConsole):
     wd = "一二三四五六日"[now.weekday()]
     lay.addWidget(QLabel(f"<h2>欢迎回来，用户</h2><p>{now.year}年{now.month}月{now.day}日 星期{wd}</p>"))
     cards = QHBoxLayout()
+    self._dash_stat_cards: dict[str, tuple[QLabel, QProgressBar]] = {}
     for icon, title, key, col in (
       ("🐾", "宠物心情", "mood", "#3b82f6"),
       ("🔥", "能量值", "energy", "#fb923c"),
       ("❤️", "好感度", "affection", "#ec4899"),
     ):
-      cards.addWidget(self._stat_card(icon, title, self.stats[key], col))
+      card, val_label, bar = self._dash_stat_card(icon, title, self.stats[key], col)
+      self._dash_stat_cards[key] = (val_label, bar)
+      cards.addWidget(card)
     lay.addLayout(cards)
     tool_row = QHBoxLayout()
     hist_btn = QPushButton("查看历史")
@@ -2394,6 +2430,13 @@ class DesktopPet:
     self._last_speech_hint_at = 0.0
     self._last_speech_hint_text = ""
 
+    self.team_c: Any | None = None
+    self.team_d: Any | None = None
+    self._uses_external_team_c = False
+    self._ui_bridge: PetUiBridge | None = None
+    self._pet_stats_poll_timer: Optional[QTimer] = None
+    self._last_pet_stats_key: tuple[int, int, int] | None = None
+
     self._bind_team_interfaces()
     self._load_settings()
 
@@ -2401,39 +2444,131 @@ class DesktopPet:
     self.synonym_store = SynonymStore.load()
     self.synonym_resolver = SynonymActionResolver(PROJECT_ROOT, self.synonym_store)
 
+  def attach_team_interfaces(
+    self,
+    team_c: Any | None = None,
+    team_d: Any | None = None,
+    *,
+    external: bool = False,
+  ) -> None:
+    """注入 main 创建的队员 C/D，使 UI 与视觉/行为共用同一 PetState。"""
+    if team_c is not None:
+      self.team_c = team_c
+    if team_d is not None:
+      self.team_d = team_d
+    if external:
+      self._uses_external_team_c = True
+
   def _bind_team_interfaces(self) -> None:
     self.action_mapping = ActionMappingStore.load()
     self.load_synonyms()
-    self.team_c = _create_team_c()
-    self.team_d = _create_team_d()
+    if self.team_c is None:
+      self.team_c = _create_team_c()
+    if self.team_d is None:
+      self.team_d = _create_team_d()
+    if not self._uses_external_team_c:
+      self._register_team_c_chat_handler()
+
+  def _register_team_c_chat_handler(self) -> None:
+    if not hasattr(self.team_c, "api_register_logic_callback"):
+      return
 
     def on_chat_event(event: dict[str, Any]) -> None:
-      event_type = str(event.get("event_type") or event.get("event") or "")
-      if event_type == "user_chat":
-        reply = str(event.get("ai_reply") or "").strip()
-        if reply:
-          character_name = self._take_pending_chat_character(str(event.get("user_input") or ""))
-          if self._chat_stream is not None:
-            self._chat_stream.chat_reply_finished.emit(character_name, reply)
-          else:
-            self._save_chat_message("ai", reply, character_name=character_name)
-        if hasattr(self.team_d, "api_update_from_chat_emotion"):
-          try:
-            self.team_d.api_update_from_chat_emotion(event)
-          except Exception as exc:
-            print(f"[DesktopPet] 更新聊天情绪画像失败: {exc}")
-      wc = int(event.get("word_count", 0) or 0)
+      self._handle_team_c_chat_event(event)
+
+    self.team_c.api_register_logic_callback(on_chat_event)
+
+  def _handle_team_c_chat_event(self, event: Any) -> None:
+    if not isinstance(event, dict):
+      wc = int(event or 0)
       if hasattr(self.team_d, "api_on_chat_finished"):
         self.team_d.api_on_chat_finished(wc)
-      QTimer.singleShot(0, self._after_chat_status_update)
+      self._schedule_status_refresh(force=True)
+      return
 
-    if hasattr(self.team_c, "api_register_logic_callback"):
-      self.team_c.api_register_logic_callback(on_chat_event)
+    event_type = str(event.get("event_type") or event.get("event") or "")
+    if event_type == "user_chat":
+      reply = str(event.get("ai_reply") or "").strip()
+      if reply:
+        character_name = self._take_pending_chat_character(str(event.get("user_input") or ""))
+        if self._chat_stream is not None:
+          self._chat_stream.chat_reply_finished.emit(character_name, reply)
+        else:
+          self._save_chat_message("ai", reply, character_name=character_name)
+      if hasattr(self.team_d, "api_update_from_chat_emotion"):
+        try:
+          self.team_d.api_update_from_chat_emotion(event)
+        except Exception as exc:
+          print(f"[DesktopPet] 更新聊天情绪画像失败: {exc}")
+    wc = int(event.get("word_count", 0) or 0)
+    if hasattr(self.team_d, "api_on_chat_finished"):
+      self.team_d.api_on_chat_finished(wc)
+    self._schedule_status_refresh(force=True)
 
-  def _after_chat_status_update(self) -> None:
+  def _schedule_status_refresh(self, force: bool = False) -> None:
+    bridge = self._ui_bridge
+    if bridge is not None:
+      bridge.status_refresh.emit(force)
+      return
+    QTimer.singleShot(0, lambda: self._after_chat_status_update(force))
+
+  def _after_chat_status_update(self, force: bool = True) -> None:
+    self.refresh_pet_stats_ui(force=force)
+    if self._status_bar_enabled and self.info_bubble and self.info_bubble.isVisible():
+      self._reflow_visible_bubbles()
     self.play_action_from_decision()
-    if self._console:
-      self._console.sync_dashboard_stats()
+
+  def _sync_info_bubble_stats(self) -> None:
+    if self.info_bubble is None:
+      return
+    stats = self.stats_for_dashboard()
+    self.info_bubble.set_stats(
+      stats["mood"], stats["energy"], stats["affection"]
+    )
+
+  def refresh_pet_stats_ui(self, force: bool = False) -> None:
+    """同步队员 D 状态到状态栏、控制台仪表盘与角色详情页。"""
+    stats = self.stats_for_dashboard()
+    key = (stats["mood"], stats["energy"], stats["affection"])
+    if not force and key == self._last_pet_stats_key:
+      return
+    self._last_pet_stats_key = key
+
+    if self._console is not None:
+      try:
+        self._console.sync_dashboard_stats()
+      except RuntimeError:
+        self._console = None
+
+    if self._status_bar_enabled and self.info_bubble is not None:
+      self._sync_info_bubble_stats()
+      if self.info_bubble.isVisible():
+        self.info_bubble.refresh_label()
+
+  def _refresh_status_bar_ui(self, force: bool = False) -> None:
+    self.refresh_pet_stats_ui(force=force)
+
+  def _ensure_pet_stats_poll_timer(self) -> None:
+    if not self._running:
+      if self._pet_stats_poll_timer is not None:
+        try:
+          self._pet_stats_poll_timer.stop()
+        except RuntimeError:
+          pass
+      return
+    parent = self._app if self._app is not None else self._window
+    if self._pet_stats_poll_timer is None:
+      self._pet_stats_poll_timer = QTimer(parent)
+      self._pet_stats_poll_timer.setTimerType(Qt.TimerType.PreciseTimer)
+      self._pet_stats_poll_timer.timeout.connect(
+        lambda: self.refresh_pet_stats_ui(force=False)
+      )
+    try:
+      if not self._pet_stats_poll_timer.isActive():
+        self._pet_stats_poll_timer.start(200)
+    except RuntimeError:
+      self._pet_stats_poll_timer = None
+      self._ensure_pet_stats_poll_timer()
 
   @staticmethod
   def _scan_portrait_pet_ids() -> list[str]:
@@ -3066,6 +3201,8 @@ class DesktopPet:
 
     self._app = QApplication.instance() or QApplication(sys.argv)
     self._app.setStyleSheet(APP_GLOBAL_QSS)
+    self._ui_bridge = PetUiBridge()
+    self._ui_bridge.status_refresh.connect(self._after_chat_status_update)
     self._init_ui_widgets()
 
     size = self.window_size or (BASE_WINDOW_W, BASE_WINDOW_H)
@@ -3093,6 +3230,8 @@ class DesktopPet:
 
     self._init_auto_walk_timer()
     self._init_follow_timer()
+    self._ensure_pet_stats_poll_timer()
+    self.refresh_pet_stats_ui(force=True)
 
     self._start_computer_companion()
     self._start_state_speech_hints()
@@ -3181,6 +3320,12 @@ class DesktopPet:
         body_bottom = min(self._win_h - 8, rect.bottom())
     return cx, head_y, body_bottom
 
+  def _stable_bubble_preferred_y(self, stack_h: int) -> int:
+    """气泡纵向锚点（不随 GIF 每帧边界抖动）。"""
+    margin = 8
+    head_y = max(40, self._win_h // 2 - HEAD_CENTER_Y_OFFSET)
+    return max(margin, min(head_y - stack_h // 3, self._win_h - stack_h - margin))
+
   def _layout_bubbles(self, chat_text: str | None = None) -> None:
     """Place chat/status/input overlays beside the pet window."""
     if self._window is None:
@@ -3195,7 +3340,11 @@ class DesktopPet:
 
     items: list[tuple[QWidget, int, int]] = []
     if status_on and self.info_bubble:
-      self.info_bubble.show(0, 0)
+      self._sync_info_bubble_stats()
+      if self.info_bubble.isVisible():
+        self.info_bubble.refresh_label()
+      else:
+        self.info_bubble.show(0, 0)
       items.append((self.info_bubble, self.info_bubble.width(), self.info_bubble.height()))
     if input_on and self.input_box:
       self.input_box.show(0, 0)
@@ -3210,7 +3359,7 @@ class DesktopPet:
 
     stack_w = max(width for _widget, width, _height in items)
     stack_h = sum(height for _widget, _width, height in items) + gap * (len(items) - 1)
-    preferred_y = max(margin, min(head_y - stack_h // 3, self._win_h - stack_h - margin))
+    preferred_y = self._stable_bubble_preferred_y(stack_h)
     x, y = self._floating_overlay_pos(stack_w, stack_h, preferred_y)
 
     cursor_y = y
@@ -3222,26 +3371,33 @@ class DesktopPet:
     self._raise_ui_overlays()
 
   def _reflow_visible_bubbles(self) -> None:
-    """Reposition already-visible overlays without hiding/showing them."""
-    visible: list[QWidget] = []
-    for widget in (self.info_bubble, self.input_box, self.chat_bubble):
-      if widget is not None and widget.isVisible():
-        visible.append(widget)
-    if not visible:
+    """Reposition visible overlays when only the pet window moved."""
+    if self._window is None:
       return
-
     margin = 8
     gap = 10
-    stack_w = max(widget.width() for widget in visible)
-    stack_h = sum(widget.height() for widget in visible) + gap * (len(visible) - 1)
-    x = min(widget.x() for widget in visible)
-    y = max(margin, min(visible[0].y(), self._win_h - stack_h - margin))
-
+    items: list[tuple[QWidget, int, int]] = []
+    if self._status_bar_enabled and self.info_bubble and self.info_bubble.isVisible():
+      items.append((self.info_bubble, self.info_bubble.width(), self.info_bubble.height()))
+    if self._chat_open and self.input_box and self.input_box.isVisible():
+      items.append((self.input_box, self.input_box.width(), self.input_box.height()))
+    if (
+      (self._chat_open or self._companion_bubble_active)
+      and self.chat_bubble
+      and self.chat_bubble.isVisible()
+    ):
+      items.append((self.chat_bubble, self.chat_bubble.width(), self.chat_bubble.height()))
+    if not items:
+      return
+    stack_w = max(width for _widget, width, _height in items)
+    stack_h = sum(height for _widget, _width, height in items) + gap * (len(items) - 1)
+    preferred_y = self._stable_bubble_preferred_y(stack_h)
+    x, y = self._floating_overlay_pos(stack_w, stack_h, preferred_y)
     cursor_y = y
-    for widget in visible:
-      widget.move(x + (stack_w - widget.width()) // 2, cursor_y)
+    for widget, width, height in items:
+      widget.move(x + (stack_w - width) // 2, cursor_y)
       widget.raise_()
-      cursor_y += widget.height() + gap
+      cursor_y += height + gap
     self._raise_ui_overlays()
 
   def _remember_pending_chat_reply(self, character_name: str, user_text: str) -> None:
@@ -3302,6 +3458,8 @@ class DesktopPet:
   def _apply_window_size(self, w: int, h: int, save_memory: bool = True) -> None:
     w = max(220, w)
     h = max(280, h)
+    if w == self._win_w and h == self._win_h:
+      return
     self._win_w, self._win_h = w, h
     if self._window:
       self._window.setGeometry(self._window.x(), self._window.y(), w, h)
@@ -3316,7 +3474,7 @@ class DesktopPet:
       self._window._resize_overlay.setGeometry(0, 0, w, h)
     self._apply_ui_scale()
     if self._status_bar_enabled or self._chat_open:
-      self._layout_bubbles()
+      self._reflow_visible_bubbles()
     if save_memory:
       self._save_pet_memory()
   def _after_restore_last_pet_motion_sync(self) -> None:
@@ -3599,7 +3757,7 @@ class DesktopPet:
     if not moved:
       self._window.move(ix, iy)
     if self._status_bar_enabled or self._chat_open:
-      self._layout_bubbles()
+      self._reflow_visible_bubbles()
 
   def _motion_should_pause(self) -> bool:
     console_open = False
@@ -3783,7 +3941,14 @@ class DesktopPet:
     """仅程序退出时停止定时器；运行中勿调用。"""
     self._running = False
     self._stop_auto_walk_wait()
-    for attr in ("_timer", "_auto_walk_timer", "_follow_timer", "_computer_comment_timer", "_speech_hint_timer"):
+    for attr in (
+      "_timer",
+      "_auto_walk_timer",
+      "_follow_timer",
+      "_computer_comment_timer",
+      "_speech_hint_timer",
+      "_pet_stats_poll_timer",
+    ):
       timer = getattr(self, attr, None)
       if timer is not None:
         try:
@@ -4723,8 +4888,10 @@ class DesktopPet:
     if enabled and self.info_bubble:
       self.info_bubble.show(0, 0)
       self._layout_bubbles()
+      self.refresh_pet_stats_ui(force=True)
     elif self.info_bubble:
       self.info_bubble.hide()
+      self._last_pet_stats_key = None
     self._save_settings()
 
   def _set_chat_open(self, enabled: bool) -> None:
@@ -4759,7 +4926,7 @@ class DesktopPet:
     ny = self._drag_start_win[1] + dy
     self._move_pet_window(nx, ny)
     if self._status_bar_enabled or self._chat_open:
-      self._layout_bubbles()
+      self._reflow_visible_bubbles()
     self._save_pet_memory()
 
   def _on_mouse_move(self, pos: tuple[float, float]) -> None:
@@ -5173,8 +5340,11 @@ class DesktopPet:
     )
     self._console = console
     _apply_control_console_theme(console)
+    console.sync_dashboard_stats()
+    self.refresh_pet_stats_ui(force=True)
     console.run()
     self._console = None
+    self._last_pet_stats_key = None
 
   def _open_chat(self) -> None:
     self._set_chat_open(True)
@@ -5193,6 +5363,7 @@ class DesktopPet:
     self._save_chat_message("user", user_text, character_name=character_name)
     self._remember_pending_chat_reply(character_name, user_text)
     self._layout_bubbles(chat_text="")
+    self.refresh_pet_stats_ui(force=True)
     self.input_box.set_text("")
     self.team_c.api_user_speak(
       user_text,

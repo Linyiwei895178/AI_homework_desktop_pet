@@ -63,22 +63,20 @@ def main():
 
     # ====== 2. 初始化桌宠状态 (队员D) ======
     pet_state = PetState()
+    try:
+        pet_state.load_state()
+        logger.info("[队员D] 已从 logs/pet_state.json 恢复状态")
+    except Exception:
+        pass
     team_d = EchoTeamDInterface(pet_state)
     logger.info(f"[队员D] 状态初始化: mood={pet_state.mood}, energy={pet_state.energy}, intimacy={pet_state.intimacy}")
 
     # ====== 3. 初始化 TTS/NLP 接口 (队员C) ======
     team_c = EchoTeamCInterface()
+    pet.attach_team_interfaces(team_c=team_c, team_d=team_d, external=True)
 
-    # 队员C ← 注册队员D的状态回调（对话结束后通知队员D）
-    def _on_team_c_chat_event(event):
-        if isinstance(event, dict):
-            if hasattr(team_d, "api_update_from_chat_emotion"):
-                team_d.api_update_from_chat_emotion(event)
-            team_d.api_on_chat_finished(int(event.get("word_count", 0) or 0))
-        else:
-            team_d.api_on_chat_finished(int(event or 0))
-
-    team_c.api_register_logic_callback(_on_team_c_chat_event)
+    # 队员C ← 对话结束：更新队员D状态并刷新状态栏/仪表盘
+    team_c.api_register_logic_callback(pet._handle_team_c_chat_event)
 
     # 队员D ← 注册队员C的状态监听（状态变化时通知队员C）
     team_d.api_register_status_listener(lambda event: logger.info(f"[队员C←队员D] 状态事件: {event}"))
@@ -638,6 +636,8 @@ def main():
         team_d.api_apply_user_state(user_state)
         logger.info(f"[队员B→队员D] 用户状态: {user_state['state_code']} "
                     f"(置信度: {user_state['confidence']})")
+        if hasattr(pet, "refresh_pet_stats_ui"):
+            pet.refresh_pet_stats_ui(force=True)
 
         state_code = str(user_state.get("state_code", STATE_UNKNOWN) or STATE_UNKNOWN)
         suppress_pet_mood_hint = state_code in USER_STATE_SUPPRESS_D_HINT_CODES
