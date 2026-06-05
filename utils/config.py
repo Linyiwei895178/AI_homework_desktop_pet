@@ -56,6 +56,10 @@ class Config:
         self.DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
         self.TTS_API_KEY = os.getenv("TTS_API_KEY", "")
 
+        # Supabase
+        self.SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+        self.SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+
         # API URLs（带默认值）
         self.QWEN_VL_API_URL = os.getenv("QWEN_VL_API_URL", "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation")
         self.DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
