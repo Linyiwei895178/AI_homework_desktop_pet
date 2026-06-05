@@ -1,7 +1,7 @@
 {
   "pin_top": true,
   "hover_fade": false,
-  "status_bar": false,
+  "status_bar": true,
   "chat_open": true,
   "voice_pack_id": "",
   "desktop_behavior": {
@@ -100,5 +100,12 @@
       "comfort_level": "明显关心",
       "allow_close_expression": false
     }
-  }
+  },
+  "bubble_role_spacing": 10,
+  "status_bubble_x": 1.969626168224299,
+  "status_bubble_y": 0.9272727272727272,
+  "chat_bubble_x": 2.3317757009345796,
+  "chat_bubble_y": 0.9333333333333333,
+  "input_box_x": 2.2289719626168223,
+  "input_box_y": 1.2818181818181817
 }

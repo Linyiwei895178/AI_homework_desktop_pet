@@ -1144,11 +1144,15 @@ RadialMenu = ArcMotionMenu
 
 
 class InfoBubble(QFrame, ScalableOverlay):
+    _BASE_RADIUS = 16
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("glass")
-        self.setAutoFillBackground(True)
-        self.setStyleSheet(_glass_style(14))
+        self._radius = self._BASE_RADIUS
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.visible = False
         self.mood, self.energy, self.affection = 85, 72, 90
@@ -1156,15 +1160,27 @@ class InfoBubble(QFrame, ScalableOverlay):
         self._lay.setContentsMargins(12, 12, 12, 12)
         self._lbl = QLabel()
         self._lbl.setFont(_app_font(15))
+        self._lbl.setStyleSheet("background: transparent; border: none;")
         self._lay.addWidget(self._lbl)
         self.hide()
 
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), self._radius, self._radius)
+        painter.fillPath(path, QColor(255, 255, 255, 248))
+        painter.setPen(QPen(QColor(226, 232, 240, 220), 1))
+        painter.drawPath(path)
+        painter.end()
+        super().paintEvent(event)
+
     def apply_ui_scale(self, scale: float) -> None:
         super().apply_ui_scale(scale)
+        self._radius = _scaled_int(self._BASE_RADIUS, self._ui_scale, 10)
         m = _scaled_int(12, self._ui_scale, 6)
         self._lay.setContentsMargins(m, m, m, m)
         self._lbl.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
-        self.setStyleSheet(_glass_style(_scaled_int(14, self._ui_scale, 8)))
 
     def set_stats(self, mood: int, energy: int, affection: int) -> None:
         self.mood = int(mood)
@@ -1196,15 +1212,18 @@ class InfoBubble(QFrame, ScalableOverlay):
 
 class ChatBubble(QFrame, ScalableOverlay):
     _BASE_WIDTH = 280
-    _BASE_RADIUS = 20
+    _BASE_RADIUS = 16
     WIDTH = 280
-    RADIUS = 20
+    RADIUS = 16
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("glass")
-        self.setStyleSheet(_glass_style(self.RADIUS))
+        self._radius = self._BASE_RADIUS
         self.setFixedWidth(self.WIDTH)
+        self.setAutoFillBackground(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.visible = False
         self.text = ""
@@ -1213,18 +1232,30 @@ class ChatBubble(QFrame, ScalableOverlay):
         self._lbl = QLabel()
         self._lbl.setFont(_app_font(15))
         self._lbl.setWordWrap(True)
+        self._lbl.setStyleSheet("background: transparent; border: none;")
         self._lay.addWidget(self._lbl)
         self.hide()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), self._radius, self._radius)
+        painter.fillPath(path, QColor(255, 255, 255, 248))
+        painter.setPen(QPen(QColor(226, 232, 240, 220), 1))
+        painter.drawPath(path)
+        painter.end()
+        super().paintEvent(event)
 
     def apply_ui_scale(self, scale: float) -> None:
         super().apply_ui_scale(scale)
         self.WIDTH = _scaled_int(self._BASE_WIDTH, self._ui_scale, 160)
-        self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 12)
+        self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 10)
+        self._radius = self.RADIUS
         self.setFixedWidth(self.WIDTH)
         m = _scaled_int(14, self._ui_scale, 8)
         self._lay.setContentsMargins(m, m, m, m)
         self._lbl.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
-        self.setStyleSheet(_glass_style(self.RADIUS))
 
     @property
     def rect(self) -> QRect:

@@ -177,6 +177,7 @@ CHAT_GREETING = "你好呀！我是小黑，有什么可以帮我的吗？"
 DRAG_THRESHOLD = 5
 HOVER_FADE_ALPHA = int(255 * 0.7)
 HEAD_CENTER_Y_OFFSET = 60
+BUBBLE_BODY_GAP = 0
 ANGLE_X_MIN, ANGLE_X_MAX = -30.0, 30.0
 ANGLE_Y_MIN, ANGLE_Y_MAX = -20.0, 20.0
 WIN32_TRANSPARENT_COLORKEY = 0x0000FF00
@@ -1682,7 +1683,7 @@ def _glass_qss(radius: int = 20) -> str:
 def _bubble_qss(radius: int = 20) -> str:
   return f"""
     QFrame#glass {{
-      background-color: {_THEME_GLASS};
+      background: transparent;
       border: none;
       border-radius: {radius}px;
     }}
@@ -1890,7 +1891,7 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
     pet.status_submenu, pet.chat_submenu, pet.info_bubble, pet.chat_bubble, pet.input_box,
   )
   radii = {pet.context_menu: 20, pet.pin_submenu: 16, pet.hover_submenu: 16,
-           pet.status_submenu: 16, pet.chat_submenu: 16, pet.info_bubble: 20, pet.chat_bubble: 20,
+           pet.status_submenu: 16, pet.chat_submenu: 16, pet.info_bubble: 16, pet.chat_bubble: 16,
            pet.input_box: 24}
   for w in glass_widgets:
     if w is None:
@@ -1904,6 +1905,7 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
     w.setStyleSheet(style)
     if is_floating_bubble:
       w.setGraphicsEffect(None)
+      w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
     else:
       _soft_shadow(w, blur=16, offset_y=3, alpha=45)
   if pet.context_menu:
@@ -2971,6 +2973,7 @@ class DesktopPet:
       widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
       widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
       widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+      widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
       if was_visible:
         QWidget.show(widget)
     if self.input_box is not None:
@@ -2980,21 +2983,37 @@ class DesktopPet:
       if was_visible:
         QWidget.show(self.input_box)
 
+  def _bubble_body_anchor_screen(self) -> tuple[int, int, int]:
+    """角色包围盒屏幕坐标：(left, right, head_top)。"""
+    if self._window is None:
+      return 0, 0, 0
+    base = self._window.frameGeometry()
+    win_x, win_y = base.x(), base.y()
+    _cx, head_y, _body_bottom = self._character_layout()
+    if self._is_flat_mode():
+      player = self._plane_player()
+      if player and not player._pixmap_rect.isEmpty():
+        rect = player._pixmap_rect
+        return win_x + rect.left(), win_x + rect.right(), win_y + rect.top()
+    body_half_w = max(36, int(self._win_w * 0.2))
+    return win_x + _cx - body_half_w, win_x + _cx + body_half_w, win_y + head_y
+
   def _floating_overlay_pos(self, width: int, height: int, preferred_y: int) -> tuple[int, int]:
     if self._window is None:
       return 0, 0
-    gap = 12
+    gap = BUBBLE_BODY_GAP
     screen_margin = 8
     base = self._window.frameGeometry()
     screen = QApplication.screenAt(base.center()) or QApplication.primaryScreen()
     area = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
-    left_room = base.left() - area.left()
-    right_room = area.right() - base.right()
+    body_left, body_right, head_top = self._bubble_body_anchor_screen()
+    left_room = body_left - area.left()
+    right_room = area.right() - body_right
     if right_room >= width + gap or right_room >= left_room:
-      x = min(base.right() + gap, area.right() - width - screen_margin)
+      x = min(body_right + gap, area.right() - width - screen_margin)
     else:
-      x = max(area.left() + screen_margin, base.left() - width - gap)
-    y = base.top() + preferred_y
+      x = max(area.left() + screen_margin, body_left - width - gap)
+    y = head_top
     y = max(area.top() + screen_margin, min(y, area.bottom() - height - screen_margin))
     return x, y
 
@@ -3321,10 +3340,10 @@ class DesktopPet:
     return cx, head_y, body_bottom
 
   def _stable_bubble_preferred_y(self, stack_h: int) -> int:
-    """气泡纵向锚点（不随 GIF 每帧边界抖动）。"""
-    margin = 8
-    head_y = max(40, self._win_h // 2 - HEAD_CENTER_Y_OFFSET)
-    return max(margin, min(head_y - stack_h // 3, self._win_h - stack_h - margin))
+    """气泡纵向锚点（与角色头顶对齐，供布局堆叠高度计算）。"""
+    del stack_h
+    _cx, head_y, _body_bottom = self._character_layout()
+    return max(0, head_y)
 
   def _layout_bubbles(self, chat_text: str | None = None) -> None:
     """Place chat/status/input overlays beside the pet window."""
@@ -4795,9 +4814,17 @@ class DesktopPet:
     x, y = mouse_pos
     return 0 <= x < self._win_w and 0 <= y < self._win_h
 
+  def _transparent_bg_passthrough_enabled(self) -> bool:
+    return bool(
+      self._hover_fade_enabled
+      or self._status_bar_enabled
+      or self._chat_open
+      or self._companion_bubble_active
+    )
+
   def _prepare_mouse_at(self, pos: tuple[int, int]) -> None:
     """点击前先按位置取消穿透，避免 WS_EX_TRANSPARENT 吞掉 Qt 鼠标事件。"""
-    if not self._hover_fade_enabled:
+    if not self._transparent_bg_passthrough_enabled():
       return
     if self._is_mouse_on_body(pos) or self._point_on_ui(pos):
       self._set_window_click_through(False)
@@ -4826,23 +4853,16 @@ class DesktopPet:
     self._rbutton_was_down = down
 
   def _update_mouse_passthrough(self, mouse_pos: tuple[int, int]) -> None:
-    """悬停淡出开启时：仅窗口内透明背景穿透；关闭时：完全不穿透。"""
+    """透明背景区域点击穿透；角色身体与输入框等可交互区域保持响应。"""
     if self._any_menu_open() or self._resize_visible:
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(True)
-      return
-    if self._chat_open:
-      self._set_window_click_through(False)
-      if self._is_flat_mode():
-        self._set_gl_mouse_passthrough(True)
-      else:
-        self._set_gl_mouse_passthrough(False)
       return
     if self._dragging or self._resizing_corner:
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(False)
       return
-    if not self._hover_fade_enabled:
+    if not self._transparent_bg_passthrough_enabled():
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(False)
       return
@@ -5071,6 +5091,7 @@ class DesktopPet:
     elif self.info_bubble:
       self.info_bubble.hide()
       self._last_pet_stats_key = None
+    self._update_mouse_passthrough(self._local_mouse_pos())
     self._save_settings()
 
   def _set_chat_open(self, enabled: bool) -> None:
