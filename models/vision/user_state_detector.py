@@ -143,10 +143,12 @@ class UserStateDetector:
     def __init__(
         self,
         camera_index: int = 0,
-        detect_interval: float = 0.5,
+        detect_interval: float = 1.2,
         vlm_interval: float = 5.0,          # 按你的要求：每 5 秒调用一次 API
         emotion_interval: float = 4.0,
         enable_vlm: bool = False,
+        enable_deepface: bool = False,
+        enable_face_mimic: bool = False,
         study_long_seconds: float = 40 * 60,
         away_threshold: float = 12.0,       # 优化：离开阈值拉长，低头不会马上 away
         face_memory_seconds: float = 10.0,  # 最近识别到脸/头的记忆时间
@@ -164,6 +166,7 @@ class UserStateDetector:
         self._vlm_interval = max(5.0, float(vlm_interval))
         self._emotion_interval = max(3.0, float(emotion_interval))
         self._vlm_enabled = bool(enable_vlm)
+        self._face_mimic_enabled = bool(enable_face_mimic)
         self._study_long_seconds = float(study_long_seconds)
         self._away_threshold = float(away_threshold)
         self._face_memory_seconds = float(face_memory_seconds)
@@ -188,6 +191,8 @@ class UserStateDetector:
         self._last_debug_face_info: dict = {}
         self._last_debug_analysis_info: dict = {}
         self._face_mimic_state: dict = self._empty_face_mimic_state()
+        if not self._face_mimic_enabled:
+            self._face_mimic_state["source"] = ["face_mimic_disabled"]
         self._face_mimic_blendshape_enabled: bool = False
         self._face_mimic_blendshape_unavailable_logged: bool = False
         self._face_mimic_first_blendshape_logged: bool = False
@@ -217,7 +222,7 @@ class UserStateDetector:
 
         # DeepFace 表情识别增强模块。不可用时自动降级，不影响基础检测。
         self._emotion_recognizer: Any = None
-        self._emotion_enabled: bool = True
+        self._emotion_enabled: bool = bool(enable_deepface)
 
         now = time.time()
         self._last_face_seen_at: Optional[float] = None
@@ -309,6 +314,16 @@ class UserStateDetector:
     def set_vlm_enabled(self, enabled: bool):
         self._vlm_enabled = bool(enabled)
         print(f"[UserStateDetector] Qwen-VL 启用状态: {self._vlm_enabled}")
+
+    def set_deepface_enabled(self, enabled: bool):
+        self._emotion_enabled = bool(enabled)
+        print(f"[UserStateDetector] DeepFace 启用状态: {self._emotion_enabled}")
+
+    def set_face_mimic_enabled(self, enabled: bool):
+        self._face_mimic_enabled = bool(enabled)
+        if not self._face_mimic_enabled:
+            self._set_face_mimic_unavailable(["face_mimic_disabled"])
+        print(f"[UserStateDetector] Face Mimic 启用状态: {self._face_mimic_enabled}")
 
     def set_callback(self, callback_func: Callable[[dict], None]):
         self._callback = callback_func
@@ -552,11 +567,21 @@ class UserStateDetector:
             return vision.FaceLandmarkerOptions(**kwargs)
 
         try:
-            options = _make_options(enable_blendshapes=True)
+            options = _make_options(enable_blendshapes=self._face_mimic_enabled)
             face_landmarker = vision.FaceLandmarker.create_from_options(options)
-            self._face_mimic_blendshape_enabled = True
+            self._face_mimic_blendshape_enabled = self._face_mimic_enabled
         except Exception as blend_exc:
             self._face_mimic_blendshape_enabled = False
+            if not self._face_mimic_enabled:
+                self._mediapipe_init_reason = (
+                    f"MediaPipe Tasks FaceLandmarker 初始化失败: {blend_exc}; "
+                    f"mediapipe={version}; model={FACE_LANDMARKER_MODEL_PATH}"
+                )
+                print(
+                    "[UserStateDetector] MediaPipe Tasks FaceLandmarker 初始化失败，"
+                    f"将使用 OpenCV Haar + DeepFace/Qwen-VL 降级：{blend_exc}"
+                )
+                return False
             self._face_mimic_blendshape_unavailable_logged = True
             print("[队员B] Face Mimic BlendShape 不可用，使用 landmarks 规则兜底")
             print(f"[UserStateDetector] FaceLandmarker BlendShape 初始化失败：{blend_exc}")
@@ -923,7 +948,7 @@ class UserStateDetector:
             cy = (y + bh / 2) / max(1, h)
             self._last_face_center = (cx, cy)
             self._face_center_history.append((time.time(), cx, cy))
-        if not result.get("landmarks"):
+        if self._face_mimic_enabled and not result.get("landmarks"):
             self._set_face_mimic_unavailable(
                 ["opencv_haar"] if result.get("present") else ["no_face"]
             )
@@ -948,7 +973,8 @@ class UserStateDetector:
 
             landmarks = face_landmarks[0]
             bbox = self._bbox_from_landmarks(landmarks, w, h)
-            self._update_face_mimic_from_mediapipe_result(mp_result, landmarks, bbox, w, h)
+            if self._face_mimic_enabled:
+                self._update_face_mimic_from_mediapipe_result(mp_result, landmarks, bbox, w, h)
             result.update({
                 "present": True,
                 "bbox": bbox,

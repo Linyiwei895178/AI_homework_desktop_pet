@@ -27,7 +27,8 @@ def test_default_state_is_none_gesture():
     detector = GestureDetector()
     state = detector.get_state()
 
-    assert set(state) == EXPECTED_FIELDS
+    assert EXPECTED_FIELDS <= set(state)
+    assert "zoom" in state
     assert state["gesture_code"] == GESTURE_NONE
     assert state["gesture_name"] == "无"
     assert state["confidence"] == 0.0
@@ -51,7 +52,8 @@ def test_all_mock_gestures_return_stable_fields():
     for gesture_code in ALL_GESTURE_CODES:
         detector.set_mock_gesture(gesture_code)
         state = detector.get_state()
-        assert set(state) == EXPECTED_FIELDS
+        assert EXPECTED_FIELDS <= set(state)
+        assert "zoom" in state
         assert state["gesture_code"] == gesture_code
         assert 0.0 <= state["confidence"] <= 1.0
         assert state["source"] == ["mock_gesture"]

@@ -28,14 +28,14 @@ class VisionDebugPanel(QWidget):
         detector_getter: Optional[Callable[[], Any]] = None,
         gesture_getter: Optional[Callable[[], dict | None]] = None,
         camera_enabled_getter: Optional[Callable[[], bool]] = None,
-        refresh_ms: int = 150,
+        refresh_ms: int = 400,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._detector_getter = detector_getter
         self._gesture_getter = gesture_getter
         self._camera_enabled_getter = camera_enabled_getter
-        self._refresh_ms = max(50, int(refresh_ms))
+        self._refresh_ms = max(100, int(refresh_ms))
 
         self.setWindowTitle("Vision Debug Preview")
         self.resize(820, 680)

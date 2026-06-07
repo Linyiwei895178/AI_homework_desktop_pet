@@ -14,14 +14,14 @@ class SharedCameraCapture:
     def __init__(
         self,
         camera_index: int = 0,
-        width: int = 640,
-        height: int = 480,
-        read_interval: float = 0.03,
+        width: int = 320,
+        height: int = 240,
+        read_interval: float = 0.07,
     ):
         self.camera_index = int(camera_index)
         self.width = int(width)
         self.height = int(height)
-        self.read_interval = max(0.01, float(read_interval))
+        self.read_interval = max(0.03, float(read_interval))
 
         self._lock = threading.RLock()
         self._thread: Optional[threading.Thread] = None
@@ -81,6 +81,9 @@ class SharedCameraCapture:
             pass
         self._cap = None
         self._thread = None
+        with self._lock:
+            self._latest_frame = None
+            self._last_frame_at = 0.0
 
     def is_running(self) -> bool:
         return self._running

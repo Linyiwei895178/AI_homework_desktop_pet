@@ -22,14 +22,14 @@ GESTURE_NONE = "none"
 
 ZOOM_MIN_PINCH_DISTANCE = 0.04
 ZOOM_MAX_PINCH_DISTANCE = 0.30
-ZOOM_MIN_SCALE = 0.7
-ZOOM_MAX_SCALE = 1.6
-ZOOM_SCALE_DEAD_ZONE = 0.06
-ZOOM_SMOOTH_ALPHA = 0.4
-ZOOM_UPDATE_INTERVAL = 0.15
+ZOOM_MIN_SCALE = 0.75
+ZOOM_MAX_SCALE = 1.45
+ZOOM_SCALE_DEAD_ZONE = 0.10
+ZOOM_SMOOTH_ALPHA = 0.5
+ZOOM_UPDATE_INTERVAL = 0.30
 ZOOM_MIN_HAND_BBOX_AREA = 0.0
 ZOOM_SENSITIVITY_MODE = "simple"
-ZOOM_SPIKE_THRESHOLD = 0.18
+ZOOM_SPIKE_THRESHOLD = 0.20
 
 HAND_LANDMARKER_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
@@ -352,7 +352,7 @@ class GestureDetector:
             if solutions is not None and hasattr(solutions, "hands"):
                 self._hands = solutions.hands.Hands(
                     static_image_mode=False,
-                    max_num_hands=2,
+                    max_num_hands=1,
                     model_complexity=0,
                     min_detection_confidence=0.55,
                     min_tracking_confidence=0.55,
@@ -391,7 +391,7 @@ class GestureDetector:
         options = vision.HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path=model_path),
             running_mode=vision.RunningMode.IMAGE,
-            num_hands=2,
+            num_hands=1,
             min_hand_detection_confidence=0.55,
             min_hand_presence_confidence=0.55,
             min_tracking_confidence=0.55,

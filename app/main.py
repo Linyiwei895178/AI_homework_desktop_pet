@@ -94,26 +94,58 @@ def main():
     logger.info("[队员A] 鼠标事件回调绑定完成")
 
     # ====== 6. 队员B视觉模块配置 ======
+    def env_bool(name: str, default: bool = False) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return bool(default)
+        return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
     MOCK_ENABLED = os.getenv("DESKTOP_PET_MOCK_USER_STATE", "false").strip().lower() in {
         "1", "true", "yes", "y", "on"
     }  # 摄像头不可用或演示阶段可开启模拟状态
-    USER_STATE_ENABLED = os.getenv("DESKTOP_PET_USER_STATE_ENABLED", "true").strip().lower() in {
-        "1", "true", "yes", "y", "on"
-    }
-    GESTURE_ENABLED = os.getenv("DESKTOP_PET_GESTURE_ENABLED", "true").strip().lower() in {
-        "1", "true", "yes", "y", "on"
-    }
+    USER_STATE_ENABLED = env_bool("DESKTOP_PET_USER_STATE_ENABLED", True)
+    CAMERA_START_ENABLED = env_bool("DESKTOP_PET_CAMERA_ENABLED", False)
+    GESTURE_FEATURE_ENABLED = env_bool("DESKTOP_PET_GESTURE_FEATURE_ENABLED", True)
+    GESTURE_START_ENABLED = env_bool("DESKTOP_PET_GESTURE_ENABLED", False)
+    DEEPFACE_ENABLED = env_bool("DESKTOP_PET_DEEPFACE_ENABLED", False)
+    VLM_ENABLED = env_bool("DESKTOP_PET_QWEN_VL_ENABLED", env_bool("DESKTOP_PET_VLM_ENABLED", False))
+    FACE_MIMIC_ENABLED = env_bool("DESKTOP_PET_FACE_MIMIC_ENABLED", False)
     CAMERA_INDEX = int(os.getenv("DESKTOP_PET_CAMERA_INDEX", "0") or 0)
+    CAMERA_WIDTH = max(160, int(os.getenv("DESKTOP_PET_CAMERA_WIDTH", "320") or 320))
+    CAMERA_HEIGHT = max(120, int(os.getenv("DESKTOP_PET_CAMERA_HEIGHT", "240") or 240))
+    CAMERA_READ_INTERVAL_SECONDS = max(
+        0.03,
+        float(os.getenv("DESKTOP_PET_CAMERA_READ_INTERVAL", "0.07") or 0.07),
+    )
+    USER_DETECT_INTERVAL_SECONDS = max(
+        1.0,
+        float(os.getenv("DESKTOP_PET_USER_DETECT_INTERVAL", "1.2") or 1.2),
+    )
+    logger.info(
+        "[队员B] 轻量模式配置: "
+        f"camera_start={CAMERA_START_ENABLED}, gesture_start={GESTURE_START_ENABLED}, "
+        f"deepface={DEEPFACE_ENABLED}, qwen_vl={VLM_ENABLED}, face_mimic={FACE_MIMIC_ENABLED}, "
+        f"camera={CAMERA_WIDTH}x{CAMERA_HEIGHT}@{CAMERA_READ_INTERVAL_SECONDS:.2f}s, "
+        f"user_detect_interval={USER_DETECT_INTERVAL_SECONDS:.1f}s"
+    )
 
     # ====== 7. 初始化共享摄像头 (队员B) ======
     shared_camera = None
-    camera_needed = GESTURE_ENABLED or (USER_STATE_ENABLED and not MOCK_ENABLED)
-    if camera_needed:
+    initial_camera_requested = CAMERA_START_ENABLED or (GESTURE_FEATURE_ENABLED and GESTURE_START_ENABLED)
+    if initial_camera_requested:
         try:
-            shared_camera = SharedCameraCapture(camera_index=CAMERA_INDEX)
+            shared_camera = SharedCameraCapture(
+                camera_index=CAMERA_INDEX,
+                width=CAMERA_WIDTH,
+                height=CAMERA_HEIGHT,
+                read_interval=CAMERA_READ_INTERVAL_SECONDS,
+            )
             if shared_camera.start():
                 pet._shared_camera = shared_camera
-                logger.info(f"[队员B] 共享摄像头已启动(index={CAMERA_INDEX})")
+                logger.info(
+                    f"[队员B] 共享摄像头已启动(index={CAMERA_INDEX}, "
+                    f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}, interval={CAMERA_READ_INTERVAL_SECONDS:.2f}s)"
+                )
             else:
                 logger.warning(f"[队员B] 共享摄像头启动失败: {shared_camera.last_error()}")
                 shared_camera = None
@@ -121,7 +153,7 @@ def main():
             shared_camera = None
             logger.exception(f"[队员B] 共享摄像头启动异常，视觉模块将降级: {exc}")
     else:
-        logger.info("[队员B] 当前配置不需要启动摄像头")
+        logger.info("[队员B] 默认轻量启动：摄像头默认关闭，等待 q 键或 UI 开关手动开启。")
 
     # ====== 8. 初始化用户状态检测器 (队员B B-4) ======
     user_detector = None
@@ -129,7 +161,10 @@ def main():
     if USER_STATE_ENABLED and not MOCK_ENABLED and shared_camera is not None:
         try:
             user_detector = UserStateDetector(
-                enable_vlm=False,
+                detect_interval=USER_DETECT_INTERVAL_SECONDS,
+                enable_vlm=VLM_ENABLED,
+                enable_deepface=DEEPFACE_ENABLED,
+                enable_face_mimic=FACE_MIMIC_ENABLED,
                 frame_provider=shared_camera,
             )
             user_detector.start()
@@ -145,20 +180,26 @@ def main():
 
     # ====== 9. 初始化手势检测器 (队员B B-5) ======
     GESTURE_COOLDOWN_SECONDS = 3.0
-    GESTURE_POLL_INTERVAL_MS = max(100, int(os.getenv("DESKTOP_PET_GESTURE_POLL_MS", "100") or 100))
+    GESTURE_POLL_INTERVAL_MS = max(200, int(os.getenv("DESKTOP_PET_GESTURE_POLL_MS", "200") or 200))
     GESTURE_DETECT_INTERVAL_SECONDS = max(
-        0.10,
-        float(os.getenv("DESKTOP_PET_GESTURE_DETECT_INTERVAL", "0.12") or 0.12),
+        0.25,
+        float(os.getenv("DESKTOP_PET_GESTURE_DETECT_INTERVAL", "0.25") or 0.25),
     )
-    GESTURE_ZOOM_APPLY_INTERVAL_SECONDS = max(0.15, GESTURE_POLL_INTERVAL_MS / 1000.0)
-    GESTURE_ZOOM_MIN_DELTA = 0.06
+    GESTURE_ZOOM_APPLY_INTERVAL_SECONDS = max(
+        0.30,
+        float(os.getenv("DESKTOP_PET_GESTURE_ZOOM_APPLY_INTERVAL", "0.30") or 0.30),
+    )
+    GESTURE_ZOOM_MIN_DELTA = max(
+        0.10,
+        float(os.getenv("DESKTOP_PET_GESTURE_ZOOM_MIN_DELTA", "0.10") or 0.10),
+    )
     gesture_detector = None
     gesture_timer = None
     gesture_last_response_at = {}
     gesture_zoom_last_scale = None
     gesture_zoom_last_apply_at = 0.0
 
-    if GESTURE_ENABLED:
+    if GESTURE_FEATURE_ENABLED and GESTURE_START_ENABLED and shared_camera is not None:
         try:
             gesture_detector = GestureDetector(
                 enable_real=shared_camera is not None,
@@ -172,7 +213,7 @@ def main():
             gesture_detector = None
             logger.exception(f"[队员B] 手势检测器启动失败，桌宠继续运行: {exc}")
     else:
-        logger.info("[队员B] 手势检测器已通过 DESKTOP_PET_GESTURE_ENABLED 关闭")
+        logger.info("[队员B] 默认轻量启动：手势识别默认关闭，等待 UI 开关手动开启。")
 
     def apply_gesture_zoom(gesture_state: dict) -> bool:
         """Apply pinch zoom from MediaPipe Hands without triggering speech."""
@@ -274,9 +315,12 @@ def main():
             f"（每{GESTURE_POLL_INTERVAL_MS}ms一次，同手势3秒冷却，支持pinch缩放）"
         )
 
-    camera_detection_enabled = bool(camera_needed)
+    camera_detection_enabled = bool(shared_camera is not None and shared_camera.is_running())
+    gesture_detection_enabled = bool(gesture_detector is not None)
     camera_toggle_in_progress = False
+    gesture_toggle_in_progress = False
     last_camera_toggle_at = 0.0
+    last_gesture_toggle_at = 0.0
     CAMERA_TOGGLE_DEBOUNCE_SECONDS = 1.5
 
     def build_camera_off_state() -> dict:
@@ -292,123 +336,96 @@ def main():
             "source": ["camera_off"],
         }
 
-    def start_user_detector() -> bool:
-        """开启共享摄像头、用户状态检测，并恢复手势检测。"""
-        nonlocal shared_camera, user_detector, gesture_detector, gesture_timer, camera_detection_enabled
+    def ensure_shared_camera() -> bool:
+        """Start the shared camera once and reuse it across B modules."""
+        nonlocal shared_camera, camera_detection_enabled
 
-        if camera_detection_enabled:
+        if shared_camera is not None and shared_camera.is_running():
+            camera_detection_enabled = True
+            return True
+
+        try:
+            shared_camera = SharedCameraCapture(
+                camera_index=CAMERA_INDEX,
+                width=CAMERA_WIDTH,
+                height=CAMERA_HEIGHT,
+                read_interval=CAMERA_READ_INTERVAL_SECONDS,
+            )
+            if shared_camera.start():
+                pet._shared_camera = shared_camera
+                camera_detection_enabled = True
+                logger.info(
+                    f"[队员B] 共享摄像头已启动(index={CAMERA_INDEX}, "
+                    f"{CAMERA_WIDTH}x{CAMERA_HEIGHT}, interval={CAMERA_READ_INTERVAL_SECONDS:.2f}s)"
+                )
+                return True
+
+            logger.warning(f"[队员B] 共享摄像头启动失败: {shared_camera.last_error()}")
+        except Exception as exc:
+            logger.exception(f"[队员B] 共享摄像头启动异常，已降级: {exc}")
+
+        shared_camera = None
+        pet._shared_camera = None
+        camera_detection_enabled = False
+        return False
+
+    def start_user_detector() -> bool:
+        """开启共享摄像头和用户状态检测；不会自动开启手势。"""
+        nonlocal shared_camera, user_detector, camera_detection_enabled
+
+        if camera_detection_enabled and (not USER_STATE_ENABLED or MOCK_ENABLED or user_detector is not None):
             logger.info("[队员B] 摄像头检测已处于开启状态，忽略重复开启。")
             return True
 
-        if not camera_needed:
-            camera_detection_enabled = False
-            logger.info("[队员B] 当前配置未启用摄像头相关检测，q键开关无操作。")
+        if not ensure_shared_camera():
+            logger.warning("[队员B] 摄像头打开失败，主程序继续运行并降级为mock/unknown状态")
             return False
 
-        camera_ready = False
-        detector_ready = not (USER_STATE_ENABLED and not MOCK_ENABLED)
-
-        if shared_camera is None or not shared_camera.is_running():
-            try:
-                shared_camera = SharedCameraCapture(camera_index=CAMERA_INDEX)
-                camera_ready = shared_camera.start()
-                if camera_ready:
-                    pet._shared_camera = shared_camera
-                    logger.info(f"[队员B] 共享摄像头已启动(index={CAMERA_INDEX})")
-                else:
-                    logger.warning(f"[队员B] 共享摄像头重新打开失败: {shared_camera.last_error()}")
-                    shared_camera = None
-                    pet._shared_camera = None
-            except Exception as exc:
-                shared_camera = None
-                pet._shared_camera = None
-                logger.exception(f"[队员B] 共享摄像头重新打开异常，已降级: {exc}")
-        else:
-            camera_ready = True
-
-        if USER_STATE_ENABLED and not MOCK_ENABLED and shared_camera is not None:
+        if USER_STATE_ENABLED and not MOCK_ENABLED:
             try:
                 if user_detector is not None:
                     user_detector.stop()
                 user_detector = UserStateDetector(
-                    enable_vlm=False,
+                    detect_interval=USER_DETECT_INTERVAL_SECONDS,
+                    enable_vlm=VLM_ENABLED,
+                    enable_deepface=DEEPFACE_ENABLED,
+                    enable_face_mimic=FACE_MIMIC_ENABLED,
                     frame_provider=shared_camera,
                 )
                 user_detector.start()
                 pet._user_state_detector = user_detector
-                detector_ready = True
                 logger.info("[队员B] 用户状态检测器已启动，使用共享摄像头")
             except Exception as exc:
                 user_detector = None
                 pet._user_state_detector = None
-                detector_ready = False
-                logger.exception(f"[队员B] 用户状态检测器重新启动失败，将使用mock/unknown状态: {exc}")
+                try:
+                    if shared_camera is not None:
+                        shared_camera.stop()
+                except Exception:
+                    pass
+                shared_camera = None
+                pet._shared_camera = None
+                camera_detection_enabled = False
+                logger.exception(f"[队员B] 用户状态检测器启动失败，将使用mock/unknown状态: {exc}")
+                return False
         elif USER_STATE_ENABLED:
             user_detector = None
             pet._user_state_detector = None
-            detector_ready = True
             logger.info("[队员B] 用户状态检测器使用mock/unknown状态")
 
-        if GESTURE_ENABLED:
-            try:
-                if gesture_timer is not None:
-                    gesture_timer.stop()
-                    gesture_timer.deleteLater()
-                    gesture_timer = None
-                if gesture_detector is not None:
-                    gesture_detector.stop()
-                gesture_detector = GestureDetector(
-                    enable_real=shared_camera is not None,
-                    frame_provider=shared_camera,
-                    detect_interval=GESTURE_DETECT_INTERVAL_SECONDS,
-                )
-                gesture_detector.start()
-                pet._gesture_detector = gesture_detector
-                logger.info(f"[队员B] 手势检测器已启动(real={gesture_detector.is_real_active()})")
+        camera_detection_enabled = True
+        logger.info("[队员B] 摄像头检测已开启")
+        return True
 
-                gesture_timer = QTimer()
-                gesture_timer.setInterval(GESTURE_POLL_INTERVAL_MS)
-                gesture_timer.timeout.connect(check_gesture_state)
-                gesture_timer.start()
-                pet._gesture_timer = gesture_timer
-                logger.info(
-                    "[主循环] 手势检测轮询已恢复"
-                    f"（每{GESTURE_POLL_INTERVAL_MS}ms一次，支持pinch缩放）"
-                )
-            except Exception as exc:
-                gesture_detector = None
-                pet._gesture_detector = None
-                logger.exception(f"[队员B] 手势检测器恢复失败，桌宠继续运行: {exc}")
+    def stop_gesture_detector() -> None:
+        """关闭手势识别，不关闭用户状态检测摄像头。"""
+        nonlocal gesture_detector, gesture_timer, gesture_detection_enabled
 
-        if camera_ready and detector_ready:
-            camera_detection_enabled = True
-            logger.info("[队员B] 摄像头检测已开启")
-            return True
-
-        camera_detection_enabled = False
-        if not camera_ready:
-            logger.warning("[队员B] 摄像头重新打开失败，主程序继续运行并降级为mock/unknown状态")
-        elif not detector_ready:
-            logger.warning("[队员B] 用户状态检测器重新打开失败，保持摄像头检测关闭。")
-            stop_user_detector()
-        return False
-
-    def stop_user_detector() -> None:
-        """关闭用户状态检测、手势检测和共享摄像头。"""
-        nonlocal shared_camera, user_detector, gesture_detector, gesture_timer, camera_detection_enabled
-
-        if (
-            not camera_detection_enabled
-            and shared_camera is None
-            and user_detector is None
-            and gesture_detector is None
-            and gesture_timer is None
-        ):
-            logger.info("[队员B] 摄像头检测已处于关闭状态，忽略重复关闭。")
+        if gesture_detector is None and gesture_timer is None and not gesture_detection_enabled:
+            logger.info("[队员B] 手势识别已处于关闭状态，忽略重复关闭。")
             return
 
-        camera_detection_enabled = False
-
+        gesture_detection_enabled = False
         try:
             if gesture_timer is not None:
                 gesture_timer.stop()
@@ -425,6 +442,77 @@ def main():
                 pet._gesture_detector = None
         except Exception as exc:
             logger.warning(f"[队员B] 手势检测器关闭异常，已忽略: {exc}")
+
+        logger.info("[队员B] 手势识别已关闭")
+
+    def start_gesture_detector() -> bool:
+        """开启手势识别；摄像头关闭时自动先开启摄像头。"""
+        nonlocal gesture_detector, gesture_timer, gesture_detection_enabled
+
+        if not GESTURE_FEATURE_ENABLED:
+            logger.info("[队员B] 当前配置未启用手势识别功能。")
+            gesture_detection_enabled = False
+            return False
+
+        if gesture_detector is not None and gesture_detection_enabled:
+            logger.info("[队员B] 手势识别已处于开启状态，忽略重复开启。")
+            return True
+
+        if not camera_detection_enabled and not start_user_detector():
+            logger.warning("[队员B] 摄像头未开启，手势识别无法启动。")
+            gesture_detection_enabled = False
+            return False
+
+        try:
+            if gesture_timer is not None:
+                gesture_timer.stop()
+                gesture_timer.deleteLater()
+                gesture_timer = None
+            if gesture_detector is not None:
+                gesture_detector.stop()
+
+            gesture_detector = GestureDetector(
+                enable_real=shared_camera is not None,
+                frame_provider=shared_camera,
+                detect_interval=GESTURE_DETECT_INTERVAL_SECONDS,
+            )
+            gesture_detector.start()
+            pet._gesture_detector = gesture_detector
+
+            gesture_timer = QTimer()
+            gesture_timer.setInterval(GESTURE_POLL_INTERVAL_MS)
+            gesture_timer.timeout.connect(check_gesture_state)
+            gesture_timer.start()
+            pet._gesture_timer = gesture_timer
+            gesture_detection_enabled = True
+            logger.info(
+                f"[队员B] 手势识别已开启(real={gesture_detector.is_real_active()}, "
+                f"poll={GESTURE_POLL_INTERVAL_MS}ms, detect={GESTURE_DETECT_INTERVAL_SECONDS:.2f}s)"
+            )
+            return True
+        except Exception as exc:
+            gesture_detection_enabled = False
+            gesture_detector = None
+            pet._gesture_detector = None
+            logger.exception(f"[队员B] 手势识别启动失败，桌宠继续运行: {exc}")
+            return False
+
+    def stop_user_detector() -> None:
+        """关闭用户状态检测、手势检测和共享摄像头。"""
+        nonlocal shared_camera, user_detector, camera_detection_enabled
+
+        if (
+            not camera_detection_enabled
+            and shared_camera is None
+            and user_detector is None
+            and gesture_detector is None
+            and gesture_timer is None
+        ):
+            logger.info("[队员B] 摄像头检测已处于关闭状态，忽略重复关闭。")
+            return
+
+        stop_gesture_detector()
+        camera_detection_enabled = False
 
         try:
             if user_detector is not None:
@@ -463,8 +551,44 @@ def main():
                 stop_user_detector()
             else:
                 start_user_detector()
+            sync_vision_runtime_controls()
         finally:
             camera_toggle_in_progress = False
+
+    def toggle_gesture_detector() -> None:
+        """UI触发：开关 B 模块手势识别。"""
+        nonlocal gesture_toggle_in_progress, last_gesture_toggle_at
+
+        now = time.monotonic()
+        if gesture_toggle_in_progress:
+            logger.info("[队员B] 手势识别正在切换中，忽略重复操作。")
+            return
+        if now - last_gesture_toggle_at < CAMERA_TOGGLE_DEBOUNCE_SECONDS:
+            logger.info("[队员B] 手势识别切换防抖中，忽略本次操作。")
+            return
+
+        gesture_toggle_in_progress = True
+        last_gesture_toggle_at = now
+        try:
+            if gesture_detection_enabled:
+                stop_gesture_detector()
+            else:
+                start_gesture_detector()
+            sync_vision_runtime_controls()
+        finally:
+            gesture_toggle_in_progress = False
+
+    def get_vision_runtime_status() -> dict:
+        """给 A 组 UI 使用的 B 模块运行状态快照。"""
+        return {
+            "camera_enabled": bool(camera_detection_enabled),
+            "gesture_enabled": bool(gesture_detection_enabled),
+            "debug_preview_visible": is_vision_debug_panel_visible(),
+            "deepface_enabled": bool(DEEPFACE_ENABLED),
+            "vlm_enabled": bool(VLM_ENABLED),
+            "face_mimic_enabled": bool(FACE_MIMIC_ENABLED),
+            "camera_available": bool(shared_camera is not None and shared_camera.is_running()),
+        }
 
     class CameraToggleKeyFilter(QObject):
         """Qt 全局按键过滤器：q 切换摄像头；输入框聚焦时放行，不影响聊天输入。"""
@@ -521,6 +645,25 @@ def main():
         except Exception as exc:
             logger.warning(f"[队员B] 视觉调试控制台状态同步失败，已忽略: {exc}")
 
+    def sync_vision_runtime_controls() -> None:
+        console = getattr(pet, "_console", None)
+        if console is None:
+            return
+        for method_name in (
+            "sync_camera_detection_state",
+            "sync_gesture_detection_state",
+            "sync_vision_debug_state",
+        ):
+            sync = getattr(console, method_name, None)
+            if not callable(sync):
+                continue
+            try:
+                sync()
+            except RuntimeError:
+                return
+            except Exception as exc:
+                logger.warning(f"[队员B] 视觉控制台状态同步失败({method_name})，已忽略: {exc}")
+
     def ensure_vision_debug_panel() -> VisionDebugPanel:
         nonlocal vision_debug_panel
         if vision_debug_panel is None:
@@ -532,7 +675,7 @@ def main():
                     else (gesture_detector.get_state() if gesture_detector is not None else None)
                 ),
                 camera_enabled_getter=lambda: camera_detection_enabled,
-                refresh_ms=150,
+                refresh_ms=400,
             )
             vision_debug_panel.hide()
             pet._vision_debug_panel = vision_debug_panel
@@ -557,6 +700,22 @@ def main():
     pet._vision_debug_set_visible = set_vision_debug_panel_visible
     pet._vision_debug_is_visible = is_vision_debug_panel_visible
     pet._vision_debug_panel = None
+    pet._camera_detection_enabled = lambda: bool(camera_detection_enabled)
+    pet._gesture_detection_enabled = lambda: bool(gesture_detection_enabled)
+    pet._toggle_camera_detection = toggle_user_detector
+    pet._toggle_gesture_detection = toggle_gesture_detector
+    pet._start_user_detector = start_user_detector
+    pet._stop_user_detector = stop_user_detector
+    pet._start_gesture_detector = start_gesture_detector
+    pet._stop_gesture_detector = stop_gesture_detector
+    pet._get_vision_runtime_status = get_vision_runtime_status
+    pet.start_user_detector = start_user_detector
+    pet.stop_user_detector = stop_user_detector
+    pet.start_gesture_detector = start_gesture_detector
+    pet.stop_gesture_detector = stop_gesture_detector
+    pet.toggle_user_detector = toggle_user_detector
+    pet.toggle_gesture_detector = toggle_gesture_detector
+    pet.get_vision_runtime_status = get_vision_runtime_status
 
     # ====== 10. 启动定时状态检测 + 自动回应 ======
     SPEECH_HINT_COOLDOWN_SECONDS = 300.0
@@ -748,16 +907,19 @@ def main():
                 gesture_detector.stop()
             except Exception as exc:
                 logger.warning(f"[队员B] 手势检测器清理异常，已忽略: {exc}")
+        logger.info("[AI_Desktop_Pet] GestureDetector 已停止")
         if user_detector is not None:
             try:
                 user_detector.stop()
             except Exception as exc:
                 logger.warning(f"[队员B] 用户状态检测器清理异常，已忽略: {exc}")
+        logger.info("[AI_Desktop_Pet] UserStateDetector 已停止")
         if shared_camera is not None:
             try:
                 shared_camera.stop()
             except Exception as exc:
                 logger.warning(f"[队员B] 共享摄像头清理异常，已忽略: {exc}")
+        logger.info("[AI_Desktop_Pet] 共享摄像头已释放")
         try:
             if vision_debug_panel is not None:
                 vision_debug_panel.shutdown()
