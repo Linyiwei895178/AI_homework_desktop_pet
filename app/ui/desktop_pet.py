@@ -177,7 +177,6 @@ CHAT_GREETING = "你好呀！我是小黑，有什么可以帮我的吗？"
 DRAG_THRESHOLD = 5
 HOVER_FADE_ALPHA = int(255 * 0.7)
 HEAD_CENTER_Y_OFFSET = 60
-BUBBLE_BODY_GAP = 0
 ANGLE_X_MIN, ANGLE_X_MAX = -30.0, 30.0
 ANGLE_Y_MIN, ANGLE_Y_MAX = -20.0, 20.0
 WIN32_TRANSPARENT_COLORKEY = 0x0000FF00
@@ -1088,6 +1087,62 @@ class PetControlConsole(ControlConsole):
       self._log("视觉调试预览入口尚未初始化")
     self.sync_vision_debug_state()
 
+  def _camera_enabled(self) -> bool:
+    getter = getattr(self._desk, "_camera_detection_enabled", None)
+    if callable(getter):
+      try:
+        return bool(getter())
+      except Exception:
+        return False
+    return False
+
+  def _toggle_camera_detection(self, checked: bool) -> None:
+    toggle = getattr(self._desk, "_toggle_camera_detection", None)
+    if callable(toggle):
+      try:
+        toggle()
+      except Exception as exc:
+        self._log(f"摄像头检测切换失败: {exc}")
+    self.sync_camera_detection_state()
+
+  def sync_camera_detection_state(self) -> None:
+    btn = getattr(self, "_camera_detection_btn", None)
+    if btn is None:
+      return
+    enabled = self._camera_enabled()
+    btn.blockSignals(True)
+    btn.setChecked(enabled)
+    btn.setText("摄像头检测：开启" if enabled else "摄像头检测：关闭")
+    btn.blockSignals(False)
+
+  def _gesture_enabled(self) -> bool:
+    getter = getattr(self._desk, "_gesture_detection_enabled", None)
+    if callable(getter):
+      try:
+        return bool(getter())
+      except Exception:
+        return False
+    return False
+
+  def _toggle_gesture_detection(self, checked: bool) -> None:
+    toggle = getattr(self._desk, "_toggle_gesture_detection", None)
+    if callable(toggle):
+      try:
+        toggle()
+      except Exception as exc:
+        self._log(f"手势识别切换失败: {exc}")
+    self.sync_gesture_detection_state()
+
+  def sync_gesture_detection_state(self) -> None:
+    btn = getattr(self, "_gesture_detection_btn", None)
+    if btn is None:
+      return
+    enabled = self._gesture_enabled()
+    btn.blockSignals(True)
+    btn.setChecked(enabled)
+    btn.setText("手势识别：开启" if enabled else "手势识别：关闭")
+    btn.blockSignals(False)
+
   def _current_pet(self) -> dict | None:
     return self._get_pet(self._current_pet_id)
 
@@ -1139,6 +1194,18 @@ class PetControlConsole(ControlConsole):
     desc.setWordWrap(True)
     desc.setStyleSheet("color:#64748b;")
     vl.addWidget(desc)
+    # 摄像头检测
+    self._camera_detection_btn = QPushButton("摄像头检测：关闭")
+    self._camera_detection_btn.setCheckable(True)
+    self._camera_detection_btn.setStyleSheet(BTN_GLASS)
+    self._camera_detection_btn.clicked.connect(self._toggle_camera_detection)
+    vl.addWidget(self._camera_detection_btn)
+    # 手势识别
+    self._gesture_detection_btn = QPushButton("手势识别：关闭")
+    self._gesture_detection_btn.setCheckable(True)
+    self._gesture_detection_btn.setStyleSheet(BTN_GLASS)
+    self._gesture_detection_btn.clicked.connect(self._toggle_gesture_detection)
+    vl.addWidget(self._gesture_detection_btn)
     self._vision_debug_btn = QPushButton("视觉预览：关闭")
     self._vision_debug_btn.setCheckable(True)
     self._vision_debug_btn.setStyleSheet(BTN_GLASS)
@@ -1146,6 +1213,8 @@ class PetControlConsole(ControlConsole):
     vl.addWidget(self._vision_debug_btn)
     lay.addWidget(vision)
     self.sync_vision_debug_state()
+    self.sync_camera_detection_state()
+    self.sync_gesture_detection_state()
     lay.addWidget(QLabel("<h3>当前宠物简介</h3>"))
     intro = QFrame()
     intro.setStyleSheet(_glass_style(14))
@@ -1683,7 +1752,7 @@ def _glass_qss(radius: int = 20) -> str:
 def _bubble_qss(radius: int = 20) -> str:
   return f"""
     QFrame#glass {{
-      background: transparent;
+      background-color: {_THEME_GLASS};
       border: none;
       border-radius: {radius}px;
     }}
@@ -1891,7 +1960,7 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
     pet.status_submenu, pet.chat_submenu, pet.info_bubble, pet.chat_bubble, pet.input_box,
   )
   radii = {pet.context_menu: 20, pet.pin_submenu: 16, pet.hover_submenu: 16,
-           pet.status_submenu: 16, pet.chat_submenu: 16, pet.info_bubble: 16, pet.chat_bubble: 16,
+           pet.status_submenu: 16, pet.chat_submenu: 16, pet.info_bubble: 20, pet.chat_bubble: 20,
            pet.input_box: 24}
   for w in glass_widgets:
     if w is None:
@@ -1905,7 +1974,6 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
     w.setStyleSheet(style)
     if is_floating_bubble:
       w.setGraphicsEffect(None)
-      w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
     else:
       _soft_shadow(w, blur=16, offset_y=3, alpha=45)
   if pet.context_menu:
@@ -2973,7 +3041,6 @@ class DesktopPet:
       widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
       widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
       widget.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-      widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
       if was_visible:
         QWidget.show(widget)
     if self.input_box is not None:
@@ -2983,37 +3050,21 @@ class DesktopPet:
       if was_visible:
         QWidget.show(self.input_box)
 
-  def _bubble_body_anchor_screen(self) -> tuple[int, int, int]:
-    """角色包围盒屏幕坐标：(left, right, head_top)。"""
-    if self._window is None:
-      return 0, 0, 0
-    base = self._window.frameGeometry()
-    win_x, win_y = base.x(), base.y()
-    _cx, head_y, _body_bottom = self._character_layout()
-    if self._is_flat_mode():
-      player = self._plane_player()
-      if player and not player._pixmap_rect.isEmpty():
-        rect = player._pixmap_rect
-        return win_x + rect.left(), win_x + rect.right(), win_y + rect.top()
-    body_half_w = max(36, int(self._win_w * 0.2))
-    return win_x + _cx - body_half_w, win_x + _cx + body_half_w, win_y + head_y
-
   def _floating_overlay_pos(self, width: int, height: int, preferred_y: int) -> tuple[int, int]:
     if self._window is None:
       return 0, 0
-    gap = BUBBLE_BODY_GAP
+    gap = 12
     screen_margin = 8
     base = self._window.frameGeometry()
     screen = QApplication.screenAt(base.center()) or QApplication.primaryScreen()
     area = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
-    body_left, body_right, head_top = self._bubble_body_anchor_screen()
-    left_room = body_left - area.left()
-    right_room = area.right() - body_right
+    left_room = base.left() - area.left()
+    right_room = area.right() - base.right()
     if right_room >= width + gap or right_room >= left_room:
-      x = min(body_right + gap, area.right() - width - screen_margin)
+      x = min(base.right() + gap, area.right() - width - screen_margin)
     else:
-      x = max(area.left() + screen_margin, body_left - width - gap)
-    y = head_top
+      x = max(area.left() + screen_margin, base.left() - width - gap)
+    y = base.top() + preferred_y
     y = max(area.top() + screen_margin, min(y, area.bottom() - height - screen_margin))
     return x, y
 
@@ -3340,10 +3391,10 @@ class DesktopPet:
     return cx, head_y, body_bottom
 
   def _stable_bubble_preferred_y(self, stack_h: int) -> int:
-    """气泡纵向锚点（与角色头顶对齐，供布局堆叠高度计算）。"""
-    del stack_h
-    _cx, head_y, _body_bottom = self._character_layout()
-    return max(0, head_y)
+    """气泡纵向锚点（不随 GIF 每帧边界抖动）。"""
+    margin = 8
+    head_y = max(40, self._win_h // 2 - HEAD_CENTER_Y_OFFSET)
+    return max(margin, min(head_y - stack_h // 3, self._win_h - stack_h - margin))
 
   def _layout_bubbles(self, chat_text: str | None = None) -> None:
     """Place chat/status/input overlays beside the pet window."""
@@ -4334,8 +4385,8 @@ class DesktopPet:
     return gp.x(), gp.y()
 
   def _init_model_gl(self) -> None:
-    # Patch model3.json to discover all unregistered motions and expressions
-    patched_path = self._prepare_model3_with_discovered_assets(self.model_path)
+    # Patch model3.json if it lacks Expressions (e.g. elf_count)
+    patched_path = self._prepare_model3_with_discovered_expressions(self.model_path)
     self._model = live2d.LAppModel()
     self._model.LoadModelJson(patched_path, maskBufferCount=2)
     self._model.Resize(self._win_w, self._win_h)
@@ -4348,273 +4399,94 @@ class DesktopPet:
     self._start_idle_motion()
 
 
-
-  def _model_runtime_dir(self, model_path: str | None = None) -> str:
-      """Return the runtime directory (dirname) of the model3.json."""
-      return os.path.dirname(model_path or self.model_path)
-
-  def _load_model3_json(self, model_path: str | None = None) -> dict:
-      """Load model3.json and return parsed dict, or empty dict on error."""
-      mp = model_path or self.model_path
-      try:
-          with open(mp, encoding="utf-8-sig") as f:
-              return json.load(f)
-      except (OSError, json.JSONDecodeError) as exc:
-          print(f"[DesktopPet] Failed to load model3.json: {mp}, error={exc}")
-          return {}
+  def _prepare_model3_with_discovered_expressions(self, model_path: str) -> str:
+    """If model3.json lacks Expressions but .exp3.json files exist, create a patched copy."""
+    runtime = os.path.dirname(model_path)
+    try:
+      with open(model_path, encoding="utf-8") as f:
+        data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+      return model_path
+    fr = data.get("FileReferences", {})
+    if "Expressions" in fr and len(fr["Expressions"]) > 0:
+      return model_path  # already declared
+    # Scan for .exp3.json files
+    exp3_files: list[str] = []
+    for root, _dirs, files in os.walk(runtime):
+      for fn in files:
+        if fn.endswith(".exp3.json"):
+          rel = os.path.relpath(os.path.join(root, fn), runtime)
+          exp3_files.append(rel.replace("\\", "/"))
+    if not exp3_files:
+      return model_path  # no expression files at all
+    exp3_files.sort()
+    new_expressions = [
+      {"Name": os.path.basename(f)[: -len(".exp3.json")], "File": f}
+      for f in exp3_files
+    ]
+    data.setdefault("FileReferences", {})["Expressions"] = new_expressions
+    # Write patched copy next to original
+    patched_path = model_path[: -len(".model3.json")] + ".patched.model3.json"
+    try:
+      with open(patched_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+      print(f"[DesktopPet] Patched model3 with {len(new_expressions)} expressions: {patched_path}")
+      return patched_path
+    except OSError:
+      return model_path
 
   def _iter_live2d_expression_files(self, model_path: str | None = None) -> list[str]:
-      """Recursively scan runtime dir for all .exp3.json files, return sorted relative paths."""
-      mp = model_path or self.model_path
-      runtime = os.path.dirname(mp)
-      exp3_files: list[str] = []
-      if os.path.isdir(runtime):
-          skip_dirs = {"__pycache__", ".git", "data/cache"}
-          for root, dirs, files in os.walk(runtime):
-              dirs[:] = [d for d in dirs if d not in skip_dirs]
-              for fn in files:
-                  if fn.endswith(".exp3.json"):
-                      rel = os.path.relpath(os.path.join(root, fn), runtime)
-                      exp3_files.append(rel.replace("\\", "/"))
-      exp3_files.sort()
-      return exp3_files
+    """Scan runtime dir for all .exp3.json files, return sorted list."""
+    mp = model_path or self.model_path
+    runtime = os.path.dirname(mp)
+    exp3_files: list[str] = []
+    if os.path.isdir(runtime):
+      for root, _dirs, files in os.walk(runtime):
+        for fn in files:
+          if fn.endswith(".exp3.json"):
+            exp3_files.append(os.path.join(root, fn))
+    exp3_files.sort()
+    return exp3_files
 
-  def _iter_live2d_motion_files(self, model_path: str | None = None) -> list[str]:
-      """Recursively scan runtime dir for all .motion3.json files, return sorted relative paths."""
-      mp = model_path or self.model_path
-      runtime = os.path.dirname(mp)
-      motion_files: list[str] = []
-      if os.path.isdir(runtime):
-          skip_dirs = {"__pycache__", ".git", "data/cache"}
-          for root, dirs, files in os.walk(runtime):
-              dirs[:] = [d for d in dirs if d not in skip_dirs]
-              for fn in files:
-                  if fn.endswith(".motion3.json"):
-                      rel = os.path.relpath(os.path.join(root, fn), runtime)
-                      motion_files.append(rel.replace("\\", "/"))
-      motion_files.sort()
-      return motion_files
-
-  def _expression_id_from_file(self, path: str) -> str:
-      """Extract expression id from a file path (relative or absolute)."""
-      base = os.path.basename(path)
-      if base.lower().endswith(".exp3.json"):
-          return base[:-len(".exp3.json")]
-      return os.path.splitext(base)[0]
-
-  def _motion_id_from_file(self, path: str) -> str:
-      """Extract motion id from a file path (relative or absolute)."""
-      base = os.path.basename(path)
-      if base.lower().endswith(".motion3.json"):
-          return base[:-len(".motion3.json")]
-      return os.path.splitext(base)[0]
   @staticmethod
-  def _motion_stem_from_path(file_path: str) -> str:
-    base = os.path.basename(file_path)
-    if base.endswith(".motion3.json"):
-      return base[: -len(".motion3.json")]
+  def _expression_id_from_file(path: str) -> str:
+    base = os.path.basename(path)
+    if base.lower().endswith(".exp3.json"):
+      return base[: -len(".exp3.json")]
     return os.path.splitext(base)[0]
 
-
-  def _prepare_model3_with_discovered_assets(self, model_path: str) -> str:
-      """
-      Read original model3.json, discover undisclosed .exp3.json and .motion3.json files,
-      generate a patched model3.json, return its path.
-      The patched file is saved alongside the original as *.desktop_pet.generated.model3.json.
-      """
-      runtime = os.path.dirname(model_path)
-      try:
-          with open(model_path, encoding="utf-8-sig") as f:
-              data = json.load(f)
-      except (OSError, json.JSONDecodeError):
-          return model_path
-
-      discovered_expressions = self._iter_live2d_expression_files(model_path)
-      discovered_motions = self._iter_live2d_motion_files(model_path)
-
-      # Ensure FileReferences exists
-      if "FileReferences" not in data:
-          data["FileReferences"] = {}
-      fr = data["FileReferences"]
-
-      # --- Patch Expressions ---
-      existing_expr_names: set[str] = set()
-      existing_expr_files: set[str] = set()
-      if "Expressions" in fr and isinstance(fr["Expressions"], list):
-          for entry in fr["Expressions"]:
-              name = entry.get("Name", "")
-              fpath = entry.get("File", "")
-              if name:
-                  existing_expr_names.add(name)
-              if fpath:
-                  existing_expr_files.add(fpath.replace("\\", "/"))
-      else:
-          fr["Expressions"] = []
-
-      added_expressions = 0
-      for rel_path in discovered_expressions:
-          if rel_path in existing_expr_files:
-              continue
-          eid = self._expression_id_from_file(rel_path)
-          if eid in existing_expr_names:
-              continue
-          fr["Expressions"].append({"Name": eid, "File": rel_path})
-          existing_expr_names.add(eid)
-          existing_expr_files.add(rel_path)
-          added_expressions += 1
-
-      # --- Patch Motions ---
-      if "Motions" not in fr or not isinstance(fr["Motions"], dict):
-          fr["Motions"] = {}
-
-      existing_motion_files: set[str] = set()
-      for group_name, entries in list(fr["Motions"].items()):
-          if isinstance(entries, list):
-              for entry in entries:
-                  fpath = entry.get("File", "")
-                  if fpath:
-                      existing_motion_files.add(fpath.replace("\\", "/"))
-
-      existing_motion_ids: set[str] = set()
-      for group_name, entries in list(fr["Motions"].items()):
-          if isinstance(entries, list):
-              for entry in entries:
-                  fpath = entry.get("File", "")
-                  if fpath:
-                      mid = self._motion_id_from_file(fpath)
-                      existing_motion_ids.add(mid)
-
-      added_motions = 0
-      auto_entries: list[dict] = []
-      for rel_path in discovered_motions:
-          if rel_path in existing_motion_files:
-              continue
-          mid = self._motion_id_from_file(rel_path)
-          if mid in existing_motion_ids:
-              continue
-          auto_entries.append({"File": rel_path})
-          existing_motion_files.add(rel_path)
-          existing_motion_ids.add(mid)
-          added_motions += 1
-
-      if auto_entries:
-          if "Auto" in fr["Motions"] and isinstance(fr["Motions"]["Auto"], list):
-              existing_auto_files = {e.get("File", "") for e in fr["Motions"]["Auto"]}
-              for entry in auto_entries:
-                  if entry["File"] not in existing_auto_files:
-                      fr["Motions"]["Auto"].append(entry)
-          else:
-              fr["Motions"]["Auto"] = auto_entries
-
-      if added_expressions == 0 and added_motions == 0:
-          return model_path
-
-      # Write patched file alongside original
-      base_name = os.path.basename(model_path)
-      if base_name.endswith(".model3.json"):
-          patched_name = base_name[:-len(".model3.json")] + ".desktop_pet.generated.model3.json"
-      else:
-          patched_name = "desktop_pet.generated." + base_name
-      patched_path = os.path.join(runtime, patched_name)
-
-      try:
-          with open(patched_path, "w", encoding="utf-8") as f:
-              json.dump(data, f, ensure_ascii=False, indent=2)
-          print(
-              f"[DesktopPet] Prepared patched model3: "
-              f"original={model_path}, patched={patched_path}, "
-              f"added_motions={added_motions}, added_expressions={added_expressions}"
-          )
-          return patched_path
-      except OSError as exc:
-          print(f"[DesktopPet] Failed to write patched model3: {exc}")
-          return model_path
-
-  def _build_motion_index(self) -> None:
-      """Build motion index from the currently loaded model3.json (patched)."""
-      self._motion_index.clear()
-      data = self._load_model3_json()
-      if not data:
-          print("[DesktopPet] Cannot build motion index: no model3 data")
-          self._motion_index["idle"] = ("Idle", 0)
-          return
-
-      motion_groups = data.get("FileReferences", {}).get("Motions", {})
-      if not motion_groups:
-          print("[DesktopPet] No Motions in model3.json, using idle fallback")
-          self._motion_index["idle"] = ("Idle", 0)
-          return
-
-      for group, entries in motion_groups.items():
-          if not isinstance(entries, list):
-              continue
-          group_key = group.lower() if group else "default"
-          if group:
-              self._motion_index[group.lower()] = (group, 0)
-          else:
-              self._motion_index["default"] = ("", 0)
-
-          for idx, entry in enumerate(entries):
-              file_path = entry.get("File", "")
-              stem = self._motion_id_from_file(file_path)
-              if not stem:
-                  continue
-              motion_id = stem.lower()
-              if motion_id == group_key:
-                  self._motion_index[f"{group_key}:{idx}"] = (group, idx)
-              else:
-                  if motion_id in self._motion_index:
-                      self._motion_index[f"{group_key}/{motion_id}"] = (group, idx)
-                  else:
-                      self._motion_index[motion_id] = (group, idx)
-                  self._motion_index[f"{group_key}:{idx}"] = (group, idx)
-
   def _build_expression_index(self) -> None:
-      """Build expression index from the currently loaded model3.json (patched)."""
-      self._expression_index.clear()
-      data = self._load_model3_json()
-      if not data:
-          return
-
+    """Build self._expression_index from model3.json Expressions + file scan."""
+    self._expression_index.clear()
+    # 1. Read model3.json FileReferences.Expressions
+    try:
+      with open(self.model_path, encoding="utf-8") as f:
+        data = json.load(f)
       expr_list = data.get("FileReferences", {}).get("Expressions", [])
-      if not isinstance(expr_list, list):
-          return
-
       for entry in expr_list:
-          name = entry.get("Name", "")
-          fpath = entry.get("File", "")
-          if name:
-              self._expression_index[name] = name
-
-      # Also scan files for any expressions not caught by patched model3
-      scanned = self._iter_live2d_expression_files()
-      for fp in scanned:
-          eid = self._expression_id_from_file(fp)
-          if eid not in self._expression_index:
-              self._expression_index[eid] = eid
-
-  def _load_available_motions(self) -> None:
-      """Populate self.available_motions from self._motion_index."""
-      self.available_motions = sorted(
-          k for k in self._motion_index.keys()
-          if not k.startswith("_OFF_") and ":" not in k and "/" not in k
-      )
-      model_id = self._current_live2d_model_id()
-      print(
-          f"[DesktopPet] Loaded motions: model_id={model_id}, "
-          f"count={len(self.available_motions)}, "
-          f"names={self.available_motions}"
-      )
+        name = entry.get("Name", "")
+        fpath = entry.get("File", "")
+        if name and fpath:
+          full = os.path.join(os.path.dirname(self.model_path), fpath.replace("/", os.sep))
+          self._expression_index[name] = full if os.path.isfile(full) else name
+    except (OSError, json.JSONDecodeError):
+      pass
+    # 2. Scan all .exp3.json files (catch files not in model3)
+    scanned = self._iter_live2d_expression_files()
+    for fp in scanned:
+      eid = self._expression_id_from_file(fp)
+      if eid not in self._expression_index:
+        self._expression_index[eid] = fp
 
   def _load_available_expressions(self) -> None:
-      """Populate self.available_expressions from self._expression_index."""
-      self.available_expressions = sorted(self._expression_index.keys())
-      model_id = self._current_live2d_model_id()
-      print(
-          f"[DesktopPet] Loaded expressions: model_id={model_id}, "
-          f"count={len(self.available_expressions)}, "
-          f"names={self.available_expressions}"
-      )
+    self.available_expressions = sorted(self._expression_index.keys())
+    model_id = self._current_live2d_model_id()
+    print(
+      f"[DesktopPet] Loaded expressions: id={model_id}, "
+      f"count={len(self.available_expressions)}, "
+      f"names={self.available_expressions}"
+    )
+
   def _current_live2d_model_id(self) -> str:
     """Return identifier for current Live2D model, for LIVE2D_VIEW_OVERRIDES lookup."""
     if self._active_pet and self._active_pet.get("id"):
@@ -4814,17 +4686,9 @@ class DesktopPet:
     x, y = mouse_pos
     return 0 <= x < self._win_w and 0 <= y < self._win_h
 
-  def _transparent_bg_passthrough_enabled(self) -> bool:
-    return bool(
-      self._hover_fade_enabled
-      or self._status_bar_enabled
-      or self._chat_open
-      or self._companion_bubble_active
-    )
-
   def _prepare_mouse_at(self, pos: tuple[int, int]) -> None:
     """点击前先按位置取消穿透，避免 WS_EX_TRANSPARENT 吞掉 Qt 鼠标事件。"""
-    if not self._transparent_bg_passthrough_enabled():
+    if not self._hover_fade_enabled:
       return
     if self._is_mouse_on_body(pos) or self._point_on_ui(pos):
       self._set_window_click_through(False)
@@ -4853,16 +4717,23 @@ class DesktopPet:
     self._rbutton_was_down = down
 
   def _update_mouse_passthrough(self, mouse_pos: tuple[int, int]) -> None:
-    """透明背景区域点击穿透；角色身体与输入框等可交互区域保持响应。"""
+    """悬停淡出开启时：仅窗口内透明背景穿透；关闭时：完全不穿透。"""
     if self._any_menu_open() or self._resize_visible:
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(True)
+      return
+    if self._chat_open:
+      self._set_window_click_through(False)
+      if self._is_flat_mode():
+        self._set_gl_mouse_passthrough(True)
+      else:
+        self._set_gl_mouse_passthrough(False)
       return
     if self._dragging or self._resizing_corner:
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(False)
       return
-    if not self._transparent_bg_passthrough_enabled():
+    if not self._hover_fade_enabled:
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(False)
       return
@@ -5091,7 +4962,6 @@ class DesktopPet:
     elif self.info_bubble:
       self.info_bubble.hide()
       self._last_pet_stats_key = None
-    self._update_mouse_passthrough(self._local_mouse_pos())
     self._save_settings()
 
   def _set_chat_open(self, enabled: bool) -> None:
@@ -5606,11 +5476,36 @@ class DesktopPet:
   def _start_idle_motion(self, *_args: Any) -> None:
     if self._model is None:
       return
+    self._model.StartMotion("Idle", 0, MotionPriority.FORCE)
+
+  def _build_motion_index(self) -> None:
+    self._motion_index.clear()
     try:
-      self._model.StartMotion("Idle", 0, MotionPriority.FORCE)
-    except Exception as exc:
-      # Model may not have idle motions (expression-only models)
-      pass
+      with open(self.model_path, encoding="utf-8") as f:
+        data = json.load(f)
+      motion_groups = data.get("FileReferences", {}).get("Motions", {})
+    except (OSError, json.JSONDecodeError) as exc:
+      print(f"[DesktopPet] 读取动作配置失败: {exc}")
+      self._motion_index["idle"] = ("Idle", 0)
+      return
+    for group, entries in motion_groups.items():
+      group_key = group.lower() if group else "default"
+      if group:
+        self._motion_index[group.lower()] = (group, 0)
+      else:
+        self._motion_index["default"] = ("", 0)
+      for idx, entry in enumerate(entries):
+        file_path = entry.get("File", "")
+        stem = self._motion_stem_from_path(file_path).lower()
+        self._motion_index[stem] = (group, idx)
+        self._motion_index[f"{group_key}:{idx}"] = (group, idx)
+
+  @staticmethod
+  def _motion_stem_from_path(file_path: str) -> str:
+    base = os.path.basename(file_path)
+    if base.endswith(".motion3.json"):
+      return base[: -len(".motion3.json")]
+    return os.path.splitext(base)[0]
 
   def _motions_dir(self) -> str:
     return os.path.join(os.path.dirname(self.model_path), "motions")
@@ -5639,6 +5534,13 @@ class DesktopPet:
         if stem and stem not in names:
           names.append(stem)
     return names
+
+  def _load_available_motions(self) -> None:
+    motions = self._scan_motions_from_folder()
+    if not motions:
+      motions = self._scan_motions_from_model_json()
+    # 过滤掉 _OFF_ 开头的动作（关闭动作，不可叠加，对用户无意义）
+    self.available_motions = [m for m in motions if not m.startswith("_OFF_")]
 
   def _resolve_motion(self, motion_name: str) -> tuple[Optional[str], int]:
     key = motion_name.strip().lower()
