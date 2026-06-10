@@ -143,9 +143,9 @@ class UserStateDetector:
     def __init__(
         self,
         camera_index: int = 0,
-        detect_interval: float = 1.2,
+        detect_interval: float = 0.4,
         vlm_interval: float = 5.0,          # 按你的要求：每 5 秒调用一次 API
-        emotion_interval: float = 4.0,
+        emotion_interval: float = 0.7,
         enable_vlm: bool = False,
         enable_deepface: bool = False,
         enable_face_mimic: bool = False,
@@ -164,7 +164,7 @@ class UserStateDetector:
         self.camera_index = camera_index
         self._detect_interval = max(0.1, float(detect_interval))
         self._vlm_interval = max(5.0, float(vlm_interval))
-        self._emotion_interval = max(3.0, float(emotion_interval))
+        self._emotion_interval = max(0.5, float(emotion_interval))
         self._vlm_enabled = bool(enable_vlm)
         self._face_mimic_enabled = bool(enable_face_mimic)
         self._study_long_seconds = float(study_long_seconds)

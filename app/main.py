@@ -118,15 +118,20 @@ def main():
         float(os.getenv("DESKTOP_PET_CAMERA_READ_INTERVAL", "0.07") or 0.07),
     )
     USER_DETECT_INTERVAL_SECONDS = max(
-        1.0,
-        float(os.getenv("DESKTOP_PET_USER_DETECT_INTERVAL", "1.2") or 1.2),
+        0.2,
+        float(os.getenv("DESKTOP_PET_USER_DETECT_INTERVAL", "0.4") or 0.4),
+    )
+    EMOTION_INTERVAL_SECONDS = max(
+        0.5,
+        float(os.getenv("DESKTOP_PET_EMOTION_INTERVAL", "0.7") or 0.7),
     )
     logger.info(
         "[队员B] 轻量模式配置: "
         f"camera_start={CAMERA_START_ENABLED}, gesture_start={GESTURE_START_ENABLED}, "
         f"deepface={DEEPFACE_ENABLED}, qwen_vl={VLM_ENABLED}, face_mimic={FACE_MIMIC_ENABLED}, "
         f"camera={CAMERA_WIDTH}x{CAMERA_HEIGHT}@{CAMERA_READ_INTERVAL_SECONDS:.2f}s, "
-        f"user_detect_interval={USER_DETECT_INTERVAL_SECONDS:.1f}s"
+        f"user_detect_interval={USER_DETECT_INTERVAL_SECONDS:.1f}s, "
+        f"emotion_interval={EMOTION_INTERVAL_SECONDS:.1f}s"
     )
 
     # ====== 7. 初始化共享摄像头 (队员B) ======
@@ -162,6 +167,7 @@ def main():
         try:
             user_detector = UserStateDetector(
                 detect_interval=USER_DETECT_INTERVAL_SECONDS,
+                emotion_interval=EMOTION_INTERVAL_SECONDS,
                 enable_vlm=VLM_ENABLED,
                 enable_deepface=DEEPFACE_ENABLED,
                 enable_face_mimic=FACE_MIMIC_ENABLED,
@@ -387,6 +393,7 @@ def main():
                     user_detector.stop()
                 user_detector = UserStateDetector(
                     detect_interval=USER_DETECT_INTERVAL_SECONDS,
+                    emotion_interval=EMOTION_INTERVAL_SECONDS,
                     enable_vlm=VLM_ENABLED,
                     enable_deepface=DEEPFACE_ENABLED,
                     enable_face_mimic=FACE_MIMIC_ENABLED,
