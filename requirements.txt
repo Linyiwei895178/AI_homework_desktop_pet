@@ -9,6 +9,7 @@ python-dotenv>=1.0.0    # .env 配置读取
 opencv-python>=4.8.0    # 摄像头读取、图像处理
 numpy>=1.24.0           # 数值计算
 requests>=2.31.0        # 调用 Qwen-VL API
+scikit-learn>=1.4.0     # B模块用户状态特征 RandomForest 训练
 
 # B模块增强：表情识别
 deepface>=0.0.90        # 现成面部表情识别库
