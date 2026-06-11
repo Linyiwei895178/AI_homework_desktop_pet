@@ -5,8 +5,8 @@
   "chat_open": true,
   "voice_pack_id": "",
   "desktop_behavior": {
-    "auto_walk": false,
-    "follow_mouse_mode": 0
+    "auto_walk": true,
+    "follow_mouse_mode": 1
   },
   "tts_settings": {
     "enabled": true,

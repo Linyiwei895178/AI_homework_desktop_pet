@@ -128,58 +128,106 @@ class PetState:
         self._last_user_state: Optional[dict] = None
         self._last_user_state_effect_code: Optional[str] = None
         self._last_user_state_effect_at: float = 0.0
-        self._history = []
+        self._last_interaction_at: float = time.time()  # 上次与用户互动的时间戳
+        self._history: List[Dict[str, Any]] = []
 
     def update_state(self, event: str):
         """
         根据事件更新桌宠状态（心情/能量/亲密度 + 等级系统）
 
-        :param event: 事件名称（如 "click", "feed", "play", "idle", "chat", "work", "study"）
+        数值设计原则：
+          - 普通聊天：亲密度小幅增加，心情不一定增加
+          - 正向聊天（long_chat）：心情增加，亲密度增加，能量略降
+          - 喂食：能量增加，心情小幅改善（不直接变 happy）
+          - 玩耍：心情增加，能量下降
+          - 打工：经验/金币增加，能量下降
+          - 空闲：能量缓慢恢复；长时间不互动 → 心情缓慢下降
+
+        :param event: 事件名称（如 "click", "feed", "play", "idle", "chat", "long_chat", "work", "study"）
         """
         self._last_event = event
+        now = time.time()
 
         # ── 基础心情/能量/亲密度变化 ──
         if event == "click":
             self.intimacy = min(100, self.intimacy + 2)
             self.energy = max(0, self.energy - 1)
             self.mood = "happy"
+            self._last_interaction_at = now
 
         elif event == "feed":
+            # 喂食：能量大幅增加，心情小幅改善（不直接变 happy）
             self.energy = min(100, self.energy + 20)
             self.intimacy = min(100, self.intimacy + 5)
-            self.mood = "happy"
-
-        elif event == "play":
-            self.energy = max(0, self.energy - 10)
-            self.intimacy = min(100, self.intimacy + 3)
-            self.mood = "happy"
-
-        elif event == "chat":
-            # 聊天：消耗少量能量，增加亲密度
-            self.energy = max(0, self.energy - 2)
-            self.intimacy = min(100, self.intimacy + 2)
             if self.mood in ("sad", "angry"):
                 self.mood = "neutral"
+            elif self.mood == "hungry":
+                self.mood = "neutral"
+            # 已经是 neutral/happy 就不再强制变化
+            self._last_interaction_at = now
+
+        elif event == "play":
+            # 玩耍：心情增加，能量下降
+            self.energy = max(0, self.energy - 10)
+            self.intimacy = min(100, self.intimacy + 3)
+            if self.mood in ("sad", "angry", "hungry"):
+                self.mood = "neutral"
+            elif self.mood == "neutral":
+                self.mood = "happy"
+            self._last_interaction_at = now
+
+        elif event == "chat":
+            # 普通聊天：亲密度小幅增加，心情不一定增加
+            self.energy = max(0, self.energy - 1)
+            self.intimacy = min(100, self.intimacy + 1)
+            if self.mood in ("sad", "angry"):
+                self.mood = "neutral"
+            # neutral/happy 时心情不变，避免"无脑加满"
+            self._last_interaction_at = now
+
+        elif event == "long_chat":
+            # 长时间/正向聊天：亲密度增加，能量略降，sad/angry → neutral
+            self.energy = max(0, self.energy - 5)
+            self.intimacy = min(100, self.intimacy + 3)
+            if self.mood in ("sad", "angry"):
+                self.mood = "neutral"
+            # neutral/happy 时心情不变，由 on_chat_finished 根据对话质量决定
+            self._last_interaction_at = now
 
         elif event == "work":
-            # 工作陪伴：消耗能量，增加经验
+            # 打工：经验/金币增加，能量下降
             self.energy = max(0, self.energy - 15)
             if self.mood == "sad":
                 self.mood = "neutral"
+            # 工作不改变心情为 happy
+            self._last_interaction_at = now
 
         elif event == "study":
             # 学习陪伴：同 work 逻辑
             self.energy = max(0, self.energy - 10)
             if self.mood == "sad":
                 self.mood = "neutral"
+            self._last_interaction_at = now
 
         elif event == "idle":
             # 空闲：能量缓慢恢复
             self.energy = min(100, self.energy + 1)
             if self.energy < 30:
                 self.mood = "hungry"
-            elif self.energy > 80:
+            elif self.energy > 80 and self.mood == "hungry":
                 self.mood = "neutral"
+
+            # 长时间不互动 → 心情缓慢下降（每 idle tick 约 60s，30min 不互动开始降）
+            idle_duration = now - self._last_interaction_at
+            if idle_duration > 1800:  # 30 分钟
+                # 缓慢降低 intimacy（单次降 1，但不低于 0）
+                if self.intimacy > 0:
+                    self.intimacy = max(0, self.intimacy - 1)
+                # 心情缓慢趋向 sad
+                if self.mood == "happy":
+                    self.mood = "neutral"
+                elif self.mood == "neutral":
+                    self.mood = "sad"
 
         elif event == "sad":
             self.mood = "sad"
@@ -211,7 +259,7 @@ class PetState:
             "coins": self.coins,
             "hunger": self.hunger,
             "bond_score": self.bond_score,
-            "timestamp": time.time(),
+            "timestamp": now,
         })
 
     def update_from_user_state(self, user_state: dict):
@@ -251,21 +299,43 @@ class PetState:
             and now - self._last_user_state_effect_at < 120.0
         )
 
-        # 根据置信度和持续时间调整能量。同一用户状态短时间连续上报时不重复扣。
-        if need_response and confidence > 0.7 and not same_state_effect_recent:
-            # 用户需要响应时，桌宠消耗一些能量来回应
+        # ── 用户离开：静默等待，不反复触发动作 ──
+        if state_code == "away":
+            # 不改变任何数值，仅记录状态
+            pass
+
+        # ── 用户疲劳：宠物关心用户，不扣亲密度 ──
+        elif state_code == "tired":
+            if not same_state_effect_recent:
+                # 关心但不扣属性；仅标记 mood 已由映射表设为 neutral
+                self._last_user_state_effect_code = state_code
+                self._last_user_state_effect_at = now
+
+        # ── 用户分心：轻提醒，不持续扣亲密度 ──
+        elif state_code == "distracted":
+            if not same_state_effect_recent:
+                # 轻提醒，不扣亲密度；仅记录防抖时间
+                self._last_user_state_effect_code = state_code
+                self._last_user_state_effect_at = now
+
+        # ── 用户归来：亲密度上升 ──
+        elif state_code == "return":
+            self.intimacy = min(100, self.intimacy + 3)
+            self._last_interaction_at = now
+
+        # ── 用户专注：陪伴中，亲密度微升（有冷却） ──
+        elif state_code == "focused":
+            if not same_state_effect_recent:
+                self.intimacy = min(100, self.intimacy + 1)
+                self._last_user_state_effect_code = state_code
+                self._last_user_state_effect_at = now
+
+        # ── 需要响应的状态：消耗少量能量 ──
+        elif need_response and confidence > 0.7 and not same_state_effect_recent:
             energy_cost = min(5, int(duration / 10) + 1) if duration > 0 else 2
             self.energy = max(0, self.energy - energy_cost)
             self._last_user_state_effect_code = state_code
             self._last_user_state_effect_at = now
-
-        # 用户分心/疲劳/离开是需要陪伴或等待的状态，不视为宠物自身受伤。
-        if state_code == "return":
-            # 用户回来时亲密度上升
-            self.intimacy = min(100, self.intimacy + 3)
-        elif state_code == "focused":
-            # 用户专注时亲密度微升（陪伴）
-            self.intimacy = min(100, self.intimacy + 1)
 
         print(f"[PetState] 根据用户状态更新: {state_code} → mood={self.mood}, "
               f"energy={self.energy}, intimacy={self.intimacy}")

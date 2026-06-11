@@ -31,6 +31,8 @@ class CloudPetState:
     coins: int = 0
     hunger: int = 50
     bond_score: int = 0
+    current_action: str = "idle"
+    last_event: str = ""
     updated_at: Optional[str] = None
     updated_by: Optional[str] = None
 

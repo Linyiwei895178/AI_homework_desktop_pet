@@ -76,19 +76,19 @@ from models.state.pet_state import PetState
 
 
 # ===== 主动语音提示模板 =====
-# key: (条件字段, 条件, 比较方式)  →  value: 提示文本
+# (条件函数, 提示文本, 分类标签)
+# 分类: "hunger" | "intimacy_high" | "intimacy_low" | "mood"
 SPEECH_HINTS = [
-    # (条件函数, 提示文本)
-    (lambda s: s.energy <= 10, "我要饿晕了…快救救我…🆘"),
-    (lambda s: s.energy <= 20, "我好饿，快给我些吃的吧！🍔"),
-    (lambda s: s.energy <= 30, "肚子有点饿了…有没有好吃的？🍪"),
-    (lambda s: s.intimacy >= 90, "最喜欢你啦！💖"),
-    (lambda s: s.intimacy >= 80, "和你在一起好开心呀！😊"),
-    (lambda s: s.intimacy <= 15, "你都不理我了…😿"),
-    (lambda s: s.intimacy <= 5, "呜呜…你是不是不喜欢我了…💔"),
-    (lambda s: s.mood == "sad", "今天有点难过…陪陪我好不好？🥺"),
-    (lambda s: s.mood == "angry", "哼！我生气了！🔥"),
-    (lambda s: s.mood == "hungry", "好饿好饿…求投喂！"),
+    (lambda s: s.energy <= 10, "我要饿晕了…快救救我…🆘", "hunger"),
+    (lambda s: s.energy <= 20, "我好饿，快给我些吃的吧！🍔", "hunger"),
+    (lambda s: s.energy <= 30, "肚子有点饿了…有没有好吃的？🍪", "hunger"),
+    (lambda s: s.intimacy >= 90, "最喜欢你啦！💖", "intimacy_high"),
+    (lambda s: s.intimacy >= 80, "和你在一起好开心呀！😊", "intimacy_high"),
+    (lambda s: s.intimacy <= 15, "你都不理我了…😿", "intimacy_low"),
+    (lambda s: s.intimacy <= 5, "呜呜…你是不是不喜欢我了…💔", "intimacy_low"),
+    (lambda s: s.mood == "sad", "今天有点难过…陪陪我好不好？🥺", "mood"),
+    (lambda s: s.mood == "angry", "哼！我生气了！🔥", "mood"),
+    (lambda s: s.mood == "hungry", "好饿好饿…求投喂！", "hunger"),
 ]
 
 
@@ -121,6 +121,32 @@ class BehaviorRules:
             "neutral": "idle",
         }
 
+        # ── 动作去重 ──
+        # 上一次决策的动作名称、时间戳、状态哈希
+        self._last_action: str = ""
+        self._last_action_at: float = 0.0
+        self._last_action_state_hash: str = ""
+        # 每种动作类型的最小重复间隔（秒）
+        self._action_cooldown_map: Dict[str, float] = {
+            "idle": 10.0,
+            "happy": 6.0,
+            "sad": 10.0,
+            "hungry": 8.0,
+            "angry": 8.0,
+        }
+
+        # ── 语音提示去重 ──
+        self._last_hint_text: str = ""
+        self._last_hint_at: float = 0.0
+        self._last_hint_category: str = ""
+        # 不同类别提示的最小间隔（秒）
+        self._hint_interval_map: Dict[str, float] = {
+            "hunger": 180.0,          # 饥饿提示 ≥ 3 分钟
+            "intimacy_high": 240.0,   # 高亲密度 ≥ 4 分钟
+            "intimacy_low": 300.0,    # 低亲密度 ≥ 5 分钟
+            "mood": 300.0,            # 情绪提示 ≥ 5 分钟
+        }
+
         # ── 队友接口回调 ──
         # 接口3: NLP/TTS 队友注册的回调（AI对话结束时触发）
         self._logic_status_callback: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -130,27 +156,54 @@ class BehaviorRules:
         self._last_chat_data: Dict[str, Any] = {}
 
     # ═══════════════════════════════════════════════════════════
+    # 内部：状态哈希（用于去重判断）
+    # ═══════════════════════════════════════════════════════════
+
+    def _state_hash(self) -> str:
+        """计算当前 pet_state 关键字段的哈希字符串，用于判断状态是否变化。"""
+        ps = self.pet_state
+        last_code = ""
+        if isinstance(ps._last_user_state, dict):
+            last_code = str(ps._last_user_state.get("state_code", "") or "")
+        return f"{ps.mood}|{ps.energy}|{ps.intimacy}|{last_code}"
+
+    # ═══════════════════════════════════════════════════════════
     # 核心方法: get_action()
     # 对接 app/ui/desktop_pet.py、app/ui/widgets.py
     # ═══════════════════════════════════════════════════════════
 
     def get_action(self) -> str:
         """
-        根据当前 pet_state 决策应执行的动作名称
+        根据当前 pet_state 决策应执行的动作名称（带去重）
 
         决策优先级:
-          1. 用户处于 distracted/tired/away → "idle"（由主动提醒链路处理，不触发 sad 动作）
+          1. 用户处于 distracted/tired/away → ""（不触发视觉动作）
           2. energy < 30 → "hungry"（饥饿优先）
           3. mood 映射 → mood → 动作
           4. intimacy > 80 且 idle → "happy"（高亲密度额外互动）
 
-        :return: 动作名称字符串
-                 可能值: "idle", "happy", "sad", "hungry", "angry", "feed", "play", "click"
+        去重规则:
+          - 状态未变化 + 上次动作仍在冷却期 → 返回 ""（跳过）
+          - idle 动作在状态稳定时不强制重播
+          - 状态变化时立刻触发对应动作
+
+        :return: 动作名称字符串；返回 "" 表示无需切换动作
+                 可能值: ""（跳过）, "idle", "happy", "sad", "hungry", "angry"
 
         对接说明:
           - desktop_pet.py: pet_controller.trigger_action(pet, action)
           - widgets.py:       StatusPanel.update_display(pet_state)
         """
+        now = time.time()
+        state_hash = self._state_hash()
+
+        # ── 去重：状态未变化 + 上次动作在冷却期 → 跳过 ──
+        if state_hash == self._last_action_state_hash and self._last_action:
+            cooldown = self._action_cooldown_map.get(self._last_action, 8.0)
+            if now - self._last_action_at < cooldown:
+                return ""
+
+        # ── 决策逻辑 ──
         last_user_state = None
         getter = getattr(self.pet_state, "get_last_user_state", None)
         if callable(getter):
@@ -161,18 +214,33 @@ class BehaviorRules:
         if isinstance(last_user_state, dict):
             state_code = str(last_user_state.get("state_code", "") or "").strip()
             if state_code in {"distracted", "tired", "away"}:
-                return "idle"
+                action = "idle"
+                # 用户分心/离开时状态稳定，不强制重复 idle
+                if action == self._last_action and state_hash == self._last_action_state_hash:
+                    return ""
+                self._last_action = action
+                self._last_action_at = now
+                self._last_action_state_hash = state_hash
+                return action
 
         # 饥饿优先
         if self.pet_state.energy < 30:
-            return "hungry"
+            action = "hungry"
+        else:
+            # 心情映射
+            action = self._mood_action_map.get(self.pet_state.mood, "idle")
+            # 高亲密度时即使中性也表现开心
+            if self.pet_state.intimacy > 80 and action == "idle":
+                action = "happy"
 
-        # 心情映射
-        action = self._mood_action_map.get(self.pet_state.mood, "idle")
+        # ── idle 特殊处理：状态稳定时跳过 ──
+        if action == "idle" and state_hash == self._last_action_state_hash:
+            return ""
 
-        # 高亲密度时即使中性也表现开心
-        if self.pet_state.intimacy > 80 and action == "idle":
-            action = "happy"
+        # ── 记录本次决策 ──
+        self._last_action = action
+        self._last_action_at = now
+        self._last_action_state_hash = state_hash
 
         return action
 
@@ -208,10 +276,14 @@ class BehaviorRules:
 
         self.pet_state.update_from_user_state(user_state)
 
-        # 如果用户需要回应 且 队友C注册了回调，通知队友C
-        if user_state.get("need_response", False):
+        # 用户分心/疲劳/离开时，不需要 NLP 回应，不触发回调
+        silent_states = {"distracted", "tired", "away", "unknown"}
+        state_code = user_state.get("state_code", "unknown")
+
+        # 只有真正需要回应时才通知队友C
+        if user_state.get("need_response", False) and state_code not in silent_states:
             self._notify_callback("user_state_updated", {
-                "state_code": user_state.get("state_code", "unknown"),
+                "state_code": state_code,
                 "need_response": True,
                 "suggestion": user_state.get("suggestion", ""),
             })
@@ -225,10 +297,11 @@ class BehaviorRules:
         """
         对话结束后调用，根据对话长度更新宠物状态。
 
-        规则:
-          - 每次对话消耗少量能量（说话也累）
-          - 对话越长，亲密度增长越多（交流促进感情）
-          - 对话后心情趋向 happy
+        规则（梯度变化，避免无脑加满）:
+          - 短对话（<20字）：亲密度 +1，心情不变，能量 -1
+          - 中等对话（20-80字）：亲密度 +2，sad/angry → neutral，能量 -2
+          - 长对话（>80字）：亲密度 +3，sad → neutral → happy，能量 -3
+          - 极长对话（>200字）：亲密度 +4，neutral → happy，能量 -5
 
         :param word_count: 本次对话的字数（来自 TTS 文本长度或 NLG 输出长度）
 
@@ -238,17 +311,37 @@ class BehaviorRules:
         """
         ps = self.pet_state
 
-        # 对话消耗能量（字越多越累，但上限合理）
-        energy_cost = min(3, max(1, word_count // 30))
+        # ── 根据字数梯度变化 ──
+        if word_count < 20:
+            # 短对话：仅小幅增加亲密度
+            energy_cost = 1
+            intimacy_gain = 1
+            # 心情不变
+        elif word_count < 80:
+            # 中等对话：亲密度增加，负面情绪缓解
+            energy_cost = 2
+            intimacy_gain = 2
+            if ps.mood in ("sad", "angry"):
+                ps.mood = "neutral"
+        elif word_count < 200:
+            # 长对话：正向增长
+            energy_cost = 3
+            intimacy_gain = 3
+            if ps.mood in ("sad", "angry"):
+                ps.mood = "neutral"
+            elif ps.mood == "neutral":
+                ps.mood = "happy"
+        else:
+            # 极长对话：显著正向
+            energy_cost = 5
+            intimacy_gain = 4
+            if ps.mood in ("sad", "angry"):
+                ps.mood = "neutral"
+            elif ps.mood == "neutral":
+                ps.mood = "happy"
+
         ps.energy = max(0, ps.energy - energy_cost)
-
-        # 对话增进亲密度（字数越多越亲近）
-        intimacy_gain = min(5, max(1, word_count // 20))
         ps.intimacy = min(100, ps.intimacy + intimacy_gain)
-
-        # 交流后心情变好
-        if ps.mood in ("sad", "angry", "neutral"):
-            ps.mood = "happy"
 
         print(f"[BehaviorRules] 对话完成 (字数={word_count}): "
               f"energy -{energy_cost}, intimacy +{intimacy_gain}, mood={ps.mood}")
@@ -274,7 +367,7 @@ class BehaviorRules:
 
     def get_speech_hint(self) -> Optional[str]:
         """
-        根据当前 pet_state 返回一句主动提示语音文本。
+        根据当前 pet_state 返回一句主动提示语音文本（带去重冷却）。
 
         触发条件（按优先级）:
           - energy <= 10: 极度饥饿求救
@@ -288,15 +381,34 @@ class BehaviorRules:
           - mood == "angry": 生气发脾气
           - mood == "hungry": 饥饿呼喊
 
-        :return: 提示文本字符串，如果无需提示则返回 None
+        去重规则:
+          - 同类别提示（如 hunger/intimacy_high/mood）有独立冷却间隔
+          - 同一提示文本在冷却期内不重复
+
+        :return: 提示文本字符串，如果无需提示或冷却中则返回 None
 
         对接说明:
           - 返回值可直接传入 tts_manager.speak(text)
           - 主循环中定时调用，如每分钟检查一次
         """
-        for condition, hint_text in SPEECH_HINTS:
-            if condition(self.pet_state):
-                return hint_text
+        now = time.time()
+        for condition, hint_text, category in SPEECH_HINTS:
+            if not condition(self.pet_state):
+                continue
+
+            # 同类别冷却检查
+            min_interval = self._hint_interval_map.get(category, 120.0)
+            if category == self._last_hint_category and now - self._last_hint_at < min_interval:
+                return None
+
+            # 同文本冷却（完全相同的提示）
+            if hint_text == self._last_hint_text and now - self._last_hint_at < 60.0:
+                return None
+
+            self._last_hint_text = hint_text
+            self._last_hint_at = now
+            self._last_hint_category = category
+            return hint_text
 
         return None
 
@@ -362,6 +474,14 @@ class BehaviorRules:
 
         # 清空最近聊天缓存
         self._last_chat_data.clear()
+
+        # 清空去重状态
+        self._last_action = ""
+        self._last_action_at = 0.0
+        self._last_action_state_hash = ""
+        self._last_hint_text = ""
+        self._last_hint_at = 0.0
+        self._last_hint_category = ""
 
         # 清空注册的回调（断开与队友C的连接）
         self._logic_status_callback = None

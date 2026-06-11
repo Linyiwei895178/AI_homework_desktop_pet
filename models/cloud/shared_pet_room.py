@@ -162,6 +162,20 @@ class SharedPetRoomManager:
             return {"ok": False, "error": "not_in_room", "data": None}
         return self._service.fetch_recent_pet_events(self._room_code, limit=limit)
 
+    # -- Presence / Online Members --
+
+    def send_heartbeat(self, member_id: str, pet_name: str = "Echo") -> Dict[str, Any]:
+        """Send a presence heartbeat for this member."""
+        if not self.is_in_room():
+            return {"ok": False, "error": "not_in_room", "data": None}
+        return self._service.presence_heartbeat(self._room_code, member_id, pet_name)
+
+    def get_online_members(self, ttl_sec: float = 15.0) -> Dict[str, Any]:
+        """Fetch online members whose heartbeat is within ttl_sec."""
+        if not self.is_in_room():
+            return {"ok": False, "error": "not_in_room", "data": None}
+        return self._service.fetch_online_members(self._room_code, ttl_sec)
+
     def _build_payload(self, state: Any) -> Dict[str, Any]:
         if hasattr(state, "to_dict") and callable(state.to_dict):
             raw = state.to_dict()
@@ -179,7 +193,12 @@ class SharedPetRoomManager:
                 "intimacy": getattr(state, "intimacy", 50),
                 "hunger": getattr(state, "hunger", 50),
                 "bond_score": getattr(state, "bond_score", 0),
+                "current_action": getattr(state, "current_action", "idle"),
+                "last_event": getattr(state, "_last_event", ""),
             }
 
         raw["updated_at"] = raw.get("updated_at") or datetime.now(timezone.utc).isoformat()
+        # ensure new fields always present
+        raw.setdefault("current_action", getattr(state, "current_action", "idle") if hasattr(state, "current_action") else "idle")
+        raw.setdefault("last_event", getattr(state, "_last_event", "") if hasattr(state, "_last_event") else "")
         return raw

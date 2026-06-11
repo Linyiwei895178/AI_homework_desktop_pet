@@ -119,6 +119,14 @@ class CloudPanel(QWidget):
         self._use_mock_display = False
         self._build_ui()
 
+    def set_room_manager(self, mgr: SharedPetRoomManager) -> None:
+        """Switch to an external SharedPetRoomManager (shared with main.py)."""
+        self._room_manager = mgr
+        # Re-evaluate connection state
+        if mgr.is_in_room():
+            self._set_connection_ui(True)
+            self._refresh_recent_events()
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 16, 24, 24)
@@ -232,7 +240,7 @@ class CloudPanel(QWidget):
             for line in MOCK_RECENT_EVENTS:
                 self._event_list.addItem(line)
             return
-        result = self._room_manager.fetch_recent_events(limit=5)
+        result = self._room_manager.fetch_recent_events(limit=10)
         if not result.get("ok"):
             for line in MOCK_RECENT_EVENTS:
                 self._event_list.addItem(line)
@@ -249,7 +257,7 @@ class CloudPanel(QWidget):
             for line in MOCK_RECENT_EVENTS:
                 self._event_list.addItem(line)
             return
-        for item in events[:5]:
+        for item in events[:10]:
             self._event_list.addItem(_format_cloud_event(item))
 
     def _on_join_room(self) -> None:
@@ -283,7 +291,7 @@ class CloudPanel(QWidget):
         show_feedback_message(self, "加入房间失败")
 
     def _on_sync(self) -> None:
-        if not self._connected:
+        if not self._room_manager.is_in_room():
             show_feedback_message(self, "请先加入房间")
             return
 

@@ -13,6 +13,7 @@ from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtWidgets import QApplication
 
 from app.services.demo_mode import MockUserStateProvider
+from app.services.sync_scheduler import CloudSyncScheduler
 from app.ui.desktop_pet import DesktopPet
 from app.ui.vision_debug_panel import VisionDebugPanel
 from app.controller.event_handler import EventHandler
@@ -33,6 +34,8 @@ from models.vision.user_state_detector import (
 )
 from models.vision.gesture_detector import GESTURE_NONE, GestureDetector
 from models.vision.shared_camera import SharedCameraCapture
+from models.cloud.shared_pet_room import SharedPetRoomManager
+from models.cloud.cloud_service import SupabaseCloudService
 from utils.logger import setup_logger
 
 
@@ -93,12 +96,54 @@ def main():
     pet.on_right_click_callback = pet.close
     logger.info("[队员A] 鼠标事件回调绑定完成")
 
-    # ====== 6. 队员B视觉模块配置 ======
+    # ====== 5.5. 初始化云端共养同步 ======
     def env_bool(name: str, default: bool = False) -> bool:
         raw = os.getenv(name)
         if raw is None:
             return bool(default)
         return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    cloud_enabled = env_bool("DESKTOP_PET_CLOUD_ENABLED", True)
+    cloud_room_code = os.getenv("DESKTOP_PET_CLOUD_ROOM_CODE", "").strip()
+    cloud_service = SupabaseCloudService()
+    cloud_manager = SharedPetRoomManager(cloud_service, room_code=cloud_room_code)
+    sync_scheduler = CloudSyncScheduler(
+        cloud_manager=cloud_manager,
+        state_interval_sec=4.0,
+        presence_interval_sec=8.0,
+    )
+    sync_scheduler.set_local_state_provider(lambda: pet_state)
+
+    # Generate a stable member_id for this device
+    import uuid as _uuid
+    member_id = os.getenv("DESKTOP_PET_MEMBER_ID", str(_uuid.getnode()))
+    sync_scheduler.set_member_id(str(member_id))
+    sync_scheduler.set_pet_name(pet_state.pet_id)
+
+    # Wire event handler to cloud for instant event sync
+    event_handler.set_cloud_manager(cloud_manager)
+
+    # Auto-join room if configured
+    if cloud_enabled and cloud_room_code:
+        try:
+            join_result = cloud_manager.join_room(cloud_room_code, pet_state.pet_id)
+            if join_result.get("ok"):
+                logger.info(f"[Cloud] 已加入房间 {cloud_room_code}")
+                sync_scheduler.start()
+                logger.info("[Cloud] 双频同步已启动 (状态4s / 成员8s)")
+            else:
+                logger.info(f"[Cloud] 房间加入跳过: {join_result.get('error', 'unknown')}")
+        except Exception as exc:
+            logger.warning(f"[Cloud] 云端初始化失败(已降级): {exc}")
+    else:
+        logger.info(f"[Cloud] 跳过: enabled={cloud_enabled}, room_code='{cloud_room_code}'")
+        if cloud_enabled and not cloud_room_code:
+            logger.info("[Cloud] 提示: 设置环境变量 DESKTOP_PET_CLOUD_ROOM_CODE 后可通过 UI 加入房间")
+
+    pet._cloud_manager = cloud_manager
+    pet._sync_scheduler = sync_scheduler
+
+    # ====== 6. 队员B视觉模块配置 ======
 
     MOCK_ENABLED = os.getenv("DESKTOP_PET_MOCK_USER_STATE", "false").strip().lower() in {
         "1", "true", "yes", "y", "on"

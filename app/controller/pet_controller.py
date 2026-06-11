@@ -38,12 +38,28 @@ class PetController:
     # TO_DO: 定义动作触发函数
     def trigger_action(self, pet, action: str):
         """
-        根据动作名称触发桌宠行为
+        根据动作名称触发桌宠行为（带去重优化）
+
+        去重规则:
+          - action 为空字符串时直接跳过
+          - 与上次视觉效果相同且在冷却期内跳过
+          - 当前 pet 状态已经是目标状态时跳过
+
         :param pet: DesktopPet对象
-        :param action: 动作名称（如 "idle", "happy", "sad", "hungry"）
+        :param action: 动作名称（如 "idle", "happy", "sad", "hungry"）;
+                       空字符串表示跳过
         """
-        # TO_DO: 根据pet_state调用对应动画/声音/对话
-        action = (action or "idle").strip().lower() or "idle"
+        # 空动作直接跳过（behavior_rules 去重返回）
+        if not action or not str(action).strip():
+            return
+
+        action = str(action).strip().lower()
+
+        # 如果当前已经是目标状态，跳过重复设置
+        current_state = getattr(pet, "current_state", None)
+        if current_state == action:
+            return
+
         now = time.time()
         if (
             action == self._last_visual_action

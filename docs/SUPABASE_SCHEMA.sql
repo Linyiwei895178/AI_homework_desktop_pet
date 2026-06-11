@@ -30,8 +30,22 @@ create table if not exists public.cloud_pets (
     coins       int not null default 0,
     hunger      int not null default 50,
     bond_score  int not null default 0,
+    current_action text not null default 'idle',
+    last_event  text not null default '',
     updated_at  timestamptz not null default now()
 );
+
+-- ── Pet Presence (online member heartbeat) ───────────────────
+create table if not exists public.pet_presence (
+    room_code       text not null references public.pet_rooms(room_code) on delete cascade,
+    member_id       text not null,
+    pet_name        text not null default 'Echo',
+    last_heartbeat  timestamptz not null default now(),
+    primary key (room_code, member_id)
+);
+
+create index if not exists idx_pet_presence_room_heartbeat
+    on public.pet_presence(room_code, last_heartbeat desc);
 
 -- ── Pet Events ────────────────────────────────────────────────
 create table if not exists public.pet_events (
@@ -53,6 +67,7 @@ create index if not exists idx_pet_events_room_code_created_at
 alter table public.pet_rooms enable row level security;
 alter table public.cloud_pets enable row level security;
 alter table public.pet_events enable row level security;
+alter table public.pet_presence enable row level security;
 
 -- 允许所有人读取/插入/更新（第一版简化）
 create policy "Allow all on pet_rooms"
@@ -67,5 +82,10 @@ create policy "Allow all on cloud_pets"
 
 create policy "Allow all on pet_events"
     on public.pet_events for all
+    using (true)
+    with check (true);
+
+create policy "Allow all on pet_presence"
+    on public.pet_presence for all
     using (true)
     with check (true);

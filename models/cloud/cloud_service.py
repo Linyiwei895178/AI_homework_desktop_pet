@@ -22,9 +22,9 @@ from models.cloud.cloud_models import CloudPetEvent, CloudPetState
 
 
 _ALLOWED_SYNC_FIELDS = frozenset({
-    "mood", "energy", "intimacy", "level", "exp",
-    "coins", "hunger", "bond_score",
-    "pet_name", "pet_id", "updated_at", "room_code",
+    "pet_id", "mood", "energy", "intimacy", "level",
+    "current_action", "last_event",
+    "updated_at", "room_code",
 })
 
 _ALLOWED_EVENT_FIELDS = frozenset({
@@ -448,3 +448,97 @@ class SupabaseCloudService:
                 rows = [rows]
             return self._ok_response({"events": rows})
         return self._mock_fetch_recent_pet_events(room_code, limit)
+
+    # -- Presence: online member tracking --
+
+    def presence_heartbeat(self, room_code: str, member_id: str, pet_name: str = "Echo") -> Dict[str, Any]:
+        """
+        Send a heartbeat to indicate this member is online.
+
+        Uses UPSERT via POST with Prefer: resolution=merge-duplicates,
+        or PATCH + fallback to POST.
+
+        Returns:
+            {"ok": bool, "error": str|None, "data": {"heartbeat": True}}
+        """
+        err = self._check_ready()
+        if err:
+            return err
+        client = self._get_client()
+        if client is not None:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            body = {
+                "room_code": room_code,
+                "member_id": member_id,
+                "pet_name": pet_name,
+                "last_heartbeat": now_iso,
+            }
+            # Try PATCH first (update existing)
+            patch_path = f"/rest/v1/pet_presence?room_code=eq.{room_code}&member_id=eq.{member_id}"
+            patch_result = self._rest_patch(patch_path, {
+                "pet_name": pet_name,
+                "last_heartbeat": now_iso,
+            })
+            if patch_result["ok"]:
+                patched = patch_result["data"]
+                if patched is not None and patched != [] and patched != {}:
+                    return self._ok_response({"heartbeat": True, "pet_name": pet_name})
+            # Not existing yet — insert
+            insert_result = self._rest_post("/rest/v1/pet_presence", body)
+            if insert_result["ok"]:
+                return self._ok_response({"heartbeat": True, "pet_name": pet_name})
+            if self._is_409_conflict(insert_result):
+                return self._ok_response({"heartbeat": True, "note": "already present"})
+            return insert_result
+        return self._ok_response({"heartbeat": True, "note": "mock"})
+
+    def fetch_online_members(self, room_code: str, ttl_sec: float = 15.0) -> Dict[str, Any]:
+        """
+        Fetch members whose last_heartbeat is within ttl_sec.
+
+        Uses Supabase filter: last_heartbeat >= now() - interval 'ttl_sec seconds'
+
+        Returns:
+            {"ok": bool, "error": str|None, "data": {"members": list}}
+        """
+        err = self._check_ready()
+        if err:
+            return err
+        client = self._get_client()
+        if client is not None:
+            cutoff = datetime.now(timezone.utc).isoformat()
+            params = {
+                "room_code": f"eq.{room_code}",
+                "last_heartbeat": f"gte.{cutoff}",
+                "select": "member_id,pet_name,last_heartbeat",
+                "order": "last_heartbeat.desc",
+            }
+            # Actually, Supabase REST doesn't easily support gte with ISO timestamps.
+            # Instead fetch all members for this room and filter client-side.
+            params_simple = {
+                "room_code": f"eq.{room_code}",
+                "select": "member_id,pet_name,last_heartbeat",
+                "order": "last_heartbeat.desc",
+            }
+            result = self._rest_get("/rest/v1/pet_presence", params=params_simple)
+            if not result["ok"]:
+                return result
+            rows = result["data"] or []
+            if isinstance(rows, dict):
+                rows = [rows]
+            # Client-side TTL filter
+            import time as _time
+            now_ts = _time.time()
+            online = []
+            for row in rows:
+                hb = row.get("last_heartbeat") or ""
+                try:
+                    from datetime import datetime as _dt
+                    hb_dt = _dt.fromisoformat(hb.replace("Z", "+00:00"))
+                    hb_ts = hb_dt.timestamp()
+                except Exception:
+                    hb_ts = 0
+                if now_ts - hb_ts < ttl_sec:
+                    online.append(row)
+            return self._ok_response({"members": online})
+        return self._ok_response({"members": []})

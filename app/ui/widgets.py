@@ -3307,11 +3307,12 @@ class ControlConsole(QMainWindow):
         on_stop_read_text: Callable[[], None] | None = None,
         on_pet_settings_changed: Callable[[dict[str, dict[str, Any]]], None] | None = None,
         get_local_pet_status: Callable[[], dict[str, Any]] | None = None,
+        cloud_manager: Any = None,
     ) -> None:
         super().__init__()
         self._project_root = project_root
         self._get_local_pet_status_fn = get_local_pet_status
-        self.model_path = model_path
+        self._cloud_manager = cloud_manager
         self.available_motions = available_motions
         self.motion_name_map = motion_name_map
         self.on_play_motion = on_play_motion
@@ -3944,6 +3945,8 @@ class ControlConsole(QMainWindow):
 
     def _page_cloud_share(self) -> QWidget:
         panel = CloudPanel(get_local_pet_status=self._resolve_local_pet_status)
+        if self._cloud_manager is not None:
+            panel.set_room_manager(self._cloud_manager)
         try:
             panel._join_btn.setStyleSheet(BTN_GLASS)
             panel._sync_btn.setStyleSheet(BTN_PRIMARY)

@@ -979,6 +979,7 @@ class PetControlConsole(ControlConsole):
     motion_name_map: dict[str, str],
   ) -> None:
     self._desk = desktop_pet
+    cloud_mgr = getattr(desktop_pet, "_cloud_manager", None)
     super().__init__(
       project_root=project_root,
       model_path=model_path,
@@ -993,6 +994,7 @@ class PetControlConsole(ControlConsole):
       on_read_text=desktop_pet.read_text_aloud,
       on_stop_read_text=desktop_pet.stop_text_reading,
       on_pet_settings_changed=desktop_pet.update_pet_personalization_settings,
+      cloud_manager=cloud_mgr,
     )
     self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
     self._flat = desktop_pet.list_flat_pets_enriched()
@@ -3201,6 +3203,7 @@ class DesktopPet:
       except Exception:
         pass
       print(f"[DesktopPet] 播放动作: {motion_name}")
+      self._sync_motion_event(motion_name)
     return True
 
   def set_expression(self, emotion: str) -> bool:
@@ -3220,11 +3223,36 @@ class DesktopPet:
       self._model.SetExpression(expression_id)
       self.current_state = expression_id
       print(f"[DesktopPet] 设置表情成功: {expression_id}")
+      # ── 云端同步：右键菜单播放动作/表情时记录互动 ──
+      self._sync_motion_event(expression_id)
       return True
     except Exception as exc:
       avail_summary = self.available_expressions[:8] if hasattr(self, 'available_expressions') else []
       print(f"[DesktopPet] 设置表情失败: expression_id={expression_id}, available={avail_summary}, error={exc}")
       return False
+
+  def _sync_motion_event(self, action: str) -> None:
+    """右键菜单 / 动作播放时同步互动到云端。"""
+    mgr = getattr(self, "_cloud_manager", None)
+    if mgr is None or not hasattr(mgr, "is_in_room") or not mgr.is_in_room():
+        return
+    try:
+        delta = {}
+        low = action.lower()
+        if "happy" in low or "开心" in low:
+            delta = {"mood": 5}
+        elif "sad" in low or "伤心" in low or "难过" in low:
+            delta = {"mood": -5}
+        elif "angry" in low or "生气" in low:
+            delta = {"mood": -5}
+        elif "hungry" in low or "饿" in low:
+            delta = {"hunger": -10}
+        elif "surprised" in low or "惊讶" in low:
+            delta = {"mood": 3}
+        mgr.append_interaction(action_type=action, actor_name="我", delta=delta)
+        print(f"[DesktopPet] 云端同步: {action} (delta={delta})")
+    except Exception as exc:
+        print(f"[DesktopPet] 云端同步动作失败(已降级): {exc}")
 
   def on_click(self, x: int, y: int) -> dict[str, Any]:
     result: dict[str, Any] = {
