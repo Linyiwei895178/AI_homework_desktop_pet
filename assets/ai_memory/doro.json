@@ -1,50 +1,50 @@
 [
   {
     "role": "user",
-    "content": "嘿嘿"
-  },
-  {
-    "role": "assistant",
-    "content": "我们接着刚才的话聊“嘿嘿”吧。你最在意的那个点，我会顺着它陪你说下去。"
-  },
-  {
-    "role": "user",
-    "content": "1"
-  },
-  {
-    "role": "assistant",
-    "content": "我们接着刚才的话聊“1”吧。你最在意的那个点，我会顺着它陪你说下去。"
-  },
-  {
-    "role": "user",
-    "content": "2"
-  },
-  {
-    "role": "assistant",
-    "content": "我们接着刚才的话聊“2”吧。你最在意的那个点，我会顺着它陪你说下去。"
-  },
-  {
-    "role": "user",
-    "content": "3"
-  },
-  {
-    "role": "assistant",
-    "content": "我们接着刚才的话聊“3”吧。你最在意的那个点，我会顺着它陪你说下去。"
-  },
-  {
-    "role": "user",
-    "content": "跟我说好多话"
-  },
-  {
-    "role": "assistant",
-    "content": "听起来这句话和你自己有关：“跟我说好多话”。我会先站在你这边，陪你把它慢慢说清楚。"
-  },
-  {
-    "role": "user",
     "content": "再多一些"
   },
   {
     "role": "assistant",
     "content": "我们接着刚才的话聊“再多一些”吧。你最在意的那个点，我会顺着它陪你说下去。"
+  },
+  {
+    "role": "user",
+    "content": "不是"
+  },
+  {
+    "role": "assistant",
+    "content": "我们接着刚才的话聊“不是”吧。你最在意的那个点，我会顺着它陪你说下去。"
+  },
+  {
+    "role": "user",
+    "content": "？"
+  },
+  {
+    "role": "assistant",
+    "content": "关于“？”，我先给你一个短短的想法：可以从最容易确认的一点开始。"
+  },
+  {
+    "role": "user",
+    "content": "你好"
+  },
+  {
+    "role": "assistant",
+    "content": "主人，收到：你好。需要我陪你处理哪一步？"
+  },
+  {
+    "role": "user",
+    "content": "宝宝你多说几句话"
+  },
+  {
+    "role": "assistant",
+    "content": "你是在对我说“宝宝你多说几句话”呀，我听到了，也会认真回应你，不只是放进记忆里。"
+  },
+  {
+    "role": "user",
+    "content": "再多说嘛，说得越多越好"
+  },
+  {
+    "role": "assistant",
+    "content": "我们接着刚才的话聊“再多说嘛，说得越多越好”吧。你最在意的那个点，我会顺着它陪你说下去。"
   }
 ]

@@ -39,6 +39,8 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QTextDocument,
+    QTextOption,
     QWheelEvent,
 )
 from PySide6.QtWidgets import (
@@ -1222,6 +1224,7 @@ class InfoBubble(QFrame, ScalableOverlay):
 class ChatBubble(QFrame, ScalableOverlay):
     _BASE_WIDTH = 280
     _BASE_RADIUS = 16
+    _BASE_MAX_CONTENT_HEIGHT = 200
     WIDTH = 280
     RADIUS = 16
 
@@ -1229,6 +1232,8 @@ class ChatBubble(QFrame, ScalableOverlay):
         super().__init__(parent)
         self.setObjectName("glass")
         self._radius = self._BASE_RADIUS
+        self._max_content_height = self._BASE_MAX_CONTENT_HEIGHT
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.setFixedWidth(self.WIDTH)
         self.setAutoFillBackground(False)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -1238,11 +1243,21 @@ class ChatBubble(QFrame, ScalableOverlay):
         self.text = ""
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(14, 14, 14, 14)
-        self._lbl = QLabel()
-        self._lbl.setFont(_app_font(15))
-        self._lbl.setWordWrap(True)
-        self._lbl.setStyleSheet("background: transparent; border: none;")
-        self._lay.addWidget(self._lbl)
+        self._lay.setSpacing(0)
+        self._text_edit = QTextEdit()
+        self._text_edit.setReadOnly(True)
+        self._text_edit.setFrameShape(QFrame.Shape.NoFrame)
+        self._text_edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self._text_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._text_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._text_edit.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._text_edit.setFont(_app_font(15))
+        self._text_edit.document().setDocumentMargin(0)
+        self._text_edit.setStyleSheet(
+            "QTextEdit { background: transparent; border: none; color: #1e293b; padding: 0px; }"
+        )
+        self._text_edit.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._lay.addWidget(self._text_edit)
         self.hide()
 
     def paintEvent(self, event) -> None:
@@ -1261,10 +1276,59 @@ class ChatBubble(QFrame, ScalableOverlay):
         self.WIDTH = _scaled_int(self._BASE_WIDTH, self._ui_scale, 160)
         self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 10)
         self._radius = self.RADIUS
+        self._max_content_height = _scaled_int(self._BASE_MAX_CONTENT_HEIGHT, self._ui_scale, 100)
         self.setFixedWidth(self.WIDTH)
         m = _scaled_int(14, self._ui_scale, 8)
         self._lay.setContentsMargins(m, m, m, m)
-        self._lbl.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
+        self._text_edit.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
+        if self.text:
+            self._sync_text_geometry()
+
+    def _inner_content_width(self) -> int:
+        margins = self._lay.contentsMargins()
+        return max(40, self.WIDTH - margins.left() - margins.right())
+
+    def _min_content_height(self) -> int:
+        fm = self._text_edit.fontMetrics()
+        return max(fm.height(), _scaled_int(20, self._ui_scale, 14))
+
+    def _document_text_height(self, text: str, inner_w: int) -> int:
+        """用 QTextDocument 计算文字在固定宽度下实际需要的高度。"""
+        doc = self._text_edit.document().clone()
+        doc.setDocumentMargin(0)
+        doc.setDefaultFont(self._text_edit.font())
+        option = QTextOption()
+        option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        doc.setDefaultTextOption(option)
+        doc.setTextWidth(float(inner_w))
+        doc.setPlainText(text or "")
+        layout = doc.documentLayout()
+        if layout is not None:
+            doc_h = float(layout.documentSize().height())
+        else:
+            doc_h = float(doc.size().height())
+        return max(self._min_content_height(), int(math.ceil(doc_h)))
+
+    def _sync_text_geometry(self) -> None:
+        inner_w = self._inner_content_width()
+        self._text_edit.setFixedWidth(inner_w)
+        doc = self._text_edit.document()
+        doc.setDocumentMargin(0)
+        doc.setTextWidth(float(inner_w))
+        text_h = self._document_text_height(self.text, inner_w)
+        max_h = self._max_content_height
+        inner_h = min(text_h, max_h)
+        scroll_needed = text_h > max_h
+        self._text_edit.setFixedHeight(inner_h)
+        self._text_edit.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if scroll_needed else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        margins = self._lay.contentsMargins()
+        total_h = inner_h + margins.top() + margins.bottom()
+        self.setFixedSize(self.WIDTH, total_h)
+        if scroll_needed:
+            bar = self._text_edit.verticalScrollBar()
+            bar.setValue(bar.maximum())
 
     @property
     def rect(self) -> QRect:
@@ -1272,11 +1336,11 @@ class ChatBubble(QFrame, ScalableOverlay):
 
     def set_text(self, text: str) -> None:
         self.text = text
-        self._lbl.setText(text)
+        self._text_edit.setPlainText(text)
+        self._sync_text_geometry()
 
     def show(self, x: int, y: int, text: str) -> None:
         self.set_text(text)
-        self.adjustSize()
         self.move(x, y)
         self.visible = True
         super().show()

@@ -1999,6 +1999,10 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
   for bubble in (pet.info_bubble, pet.chat_bubble):
     if bubble and hasattr(bubble, "_lbl"):
       bubble._lbl.setFont(_pet_font(15))
+    if bubble is pet.chat_bubble and hasattr(bubble, "_text_edit"):
+      bubble._text_edit.setFont(_pet_font(15))
+      if getattr(bubble, "text", ""):
+        bubble._sync_text_geometry()
   if pet.input_box and hasattr(pet.input_box, "_field"):
     pet.input_box._field.setFont(_pet_font(15))
     if hasattr(pet.input_box, "_apply_field_style"):
@@ -3411,8 +3415,7 @@ class DesktopPet:
       return
     old_height = self.chat_bubble.height()
     self.chat_bubble.set_text(next_text)
-    self.chat_bubble.adjustSize()
-    if abs(self.chat_bubble.height() - old_height) > 8:
+    if abs(self.chat_bubble.height() - old_height) > 4:
       self._reflow_visible_bubbles()
     else:
       self.chat_bubble.update()
@@ -3472,9 +3475,17 @@ class DesktopPet:
     return max(0, cx - body_half_w)
 
   def _stable_bubble_preferred_y(self, stack_h: int) -> int:
-    """气泡纵向锚点（不因 GIF 每帧边界抖动）。"""
+    """气泡纵向锚点（不因 GIF 每帧边界抖动）；堆叠较高时上移以免超出屏幕底部。"""
     margin = 8
     head_y = max(40, self._win_h // 2 - HEAD_CENTER_Y_OFFSET)
+    screen_margin = FLOATING_OVERLAY_SCREEN_MARGIN
+    if self._window is not None:
+      base = self._window.frameGeometry()
+      screen = QApplication.screenAt(base.center()) or QApplication.primaryScreen()
+      if screen is not None:
+        area = screen.availableGeometry()
+        max_top = area.bottom() - base.top() - stack_h - screen_margin
+        head_y = min(head_y, max_top)
     return max(margin, min(head_y - stack_h // 3, self._win_h - stack_h - margin))
 
   def _layout_bubbles(self, chat_text: str | None = None) -> None:
@@ -3501,6 +3512,7 @@ class DesktopPet:
     if chat_on and self.chat_bubble:
       text = chat_text if chat_text is not None else self.chat_bubble.text
       self.chat_bubble.show(0, 0, text)
+      self.chat_bubble._sync_text_geometry()
       items.append((self.chat_bubble, self.chat_bubble.width(), self.chat_bubble.height()))
 
     if not items:
