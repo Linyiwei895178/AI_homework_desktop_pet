@@ -68,6 +68,7 @@ from app.ui.widgets import (
     is_mao_pro_zh_model,
     load_custom_pet_ids,
     motion_label_from_filename,
+    MOOD_DISPLAY_LABELS,
     normalize_tts_settings,
     scan_flat_pets,
 )
@@ -268,6 +269,11 @@ MOOD_STAT_VALUES: dict[str, int] = {
   "idle": 70,
   "normal": 75,
 }
+
+FLOATING_OVERLAY_PET_GAP = 0
+FLOATING_OVERLAY_PET_OVERLAP = 8
+FLOATING_OVERLAY_SCREEN_MARGIN = 4
+FLOATING_OVERLAY_STACK_GAP = 10
 
 SYSTEM_VOICE_ON_CLICK = "喵～你好呀，我是你的桌面小伙伴！"
 
@@ -2217,16 +2223,21 @@ class Live2DWidget(QOpenGLWidget):
     self._pet._model.Draw()
 
   def mouseMoveEvent(self, event: QMouseEvent) -> None:
+    if self._pet._dragging and self._pet._click_moved:
+      self._pet._drag_window_by_global(event.globalPosition().toPoint())
+      event.accept()
+      return
     pos = (event.position().x(), event.position().y())
     self._pet._on_mouse_move(pos)
 
   def mousePressEvent(self, event: QMouseEvent) -> None:
     pos = (int(event.position().x()), int(event.position().y()))
-    self._pet._prepare_mouse_at(pos)
+    global_pos = event.globalPosition().toPoint()
     if event.button() == Qt.MouseButton.RightButton:
+      self._pet._prepare_mouse_at(pos)
       self._pet._open_context_menu(pos)
     elif event.button() == Qt.MouseButton.LeftButton:
-      self._pet._on_left_press(pos)
+      self._pet._on_left_press(pos, global_pos)
 
   def mouseReleaseEvent(self, event: QMouseEvent) -> None:
     if event.button() == Qt.MouseButton.LeftButton:
@@ -2338,6 +2349,10 @@ class PetWindow(QWidget):
       pass
 
   def mouseMoveEvent(self, event: QMouseEvent) -> None:
+    if self._pet._dragging and self._pet._click_moved:
+      self._pet._drag_window_by_global(event.globalPosition().toPoint())
+      event.accept()
+      return
     if self._pet._is_flat_mode():
       pos = (event.position().x(), event.position().y())
       self._pet._on_mouse_move(pos)
@@ -2345,19 +2360,17 @@ class PetWindow(QWidget):
 
   def mousePressEvent(self, event: QMouseEvent) -> None:
     pos = (int(event.position().x()), int(event.position().y()))
-    self._pet._prepare_mouse_at(pos)
-    if self._pet._is_flat_mode():
-      if event.button() == Qt.MouseButton.RightButton:
-        self._pet._open_context_menu(pos)
-      elif event.button() == Qt.MouseButton.LeftButton:
+    global_pos = event.globalPosition().toPoint()
+    if event.button() == Qt.MouseButton.RightButton:
+      self._pet._prepare_mouse_at(pos)
+      self._pet._open_context_menu(pos)
+    elif event.button() == Qt.MouseButton.LeftButton:
+      if self._pet._is_flat_mode():
         if self._pet._any_menu_open():
           self._pet._on_window_left_press(pos)
         else:
-          self._pet._on_left_press(pos)
-    else:
-      if event.button() == Qt.MouseButton.RightButton:
-        self._pet._open_context_menu(pos)
-      elif event.button() == Qt.MouseButton.LeftButton:
+          self._pet._on_left_press(pos, global_pos)
+      else:
         self._pet._on_window_left_press(pos)
     super().mousePressEvent(event)
 
@@ -2424,10 +2437,13 @@ class DesktopPet:
     self._window_alpha = 255
     self._click_through_active = False
     self._rbutton_was_down = False
+    self._lbutton_was_down = False
 
     self._dragging = False
     self._drag_start_screen: tuple[int, int] = (0, 0)
     self._drag_start_win: tuple[int, int] = (0, 0)
+    self._drag_global_start: QPoint | None = None
+    self._drag_win_global_start: QPoint | None = None
     self._click_start: tuple[int, int] = (0, 0)
     self._click_moved = False
 
@@ -2590,13 +2606,23 @@ class DesktopPet:
       self._reflow_visible_bubbles()
     self.play_action_from_decision()
 
+  def _mood_display_label(self, mood: Any) -> str:
+    if isinstance(mood, (int, float)):
+      return str(int(mood))
+    raw = str(mood or "happy").strip()
+    if not raw:
+      return "happy"
+    key = raw.lower()
+    return MOOD_DISPLAY_LABELS.get(key, raw)
+
   def _sync_info_bubble_stats(self) -> None:
     if self.info_bubble is None:
       return
-    stats = self.stats_for_dashboard()
-    self.info_bubble.set_stats(
-      stats["mood"], stats["energy"], stats["affection"]
-    )
+    raw = self.team_d.api_get_pet_status()
+    mood_label = self._mood_display_label(raw.get("mood", "happy"))
+    energy = int(raw.get("energy", 72))
+    affection = int(raw.get("intimacy", raw.get("affection", 72)))
+    self.info_bubble.set_stats(mood_label, energy, affection)
 
   def refresh_pet_stats_ui(self, force: bool = False) -> None:
     """同步队员 D 状态到状态栏、控制台仪表盘与角色详情页。"""
@@ -3053,19 +3079,25 @@ class DesktopPet:
         QWidget.show(self.input_box)
 
   def _floating_overlay_pos(self, width: int, height: int, preferred_y: int) -> tuple[int, int]:
+    """独立浮动气泡：锚定在角色身体右侧，可与身体透明区重叠。"""
     if self._window is None:
       return 0, 0
-    gap = 12
-    screen_margin = 8
+    gap = FLOATING_OVERLAY_PET_GAP
+    overlap = FLOATING_OVERLAY_PET_OVERLAP
+    screen_margin = FLOATING_OVERLAY_SCREEN_MARGIN
     base = self._window.frameGeometry()
     screen = QApplication.screenAt(base.center()) or QApplication.primaryScreen()
     area = screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
-    left_room = base.left() - area.left()
-    right_room = area.right() - base.right()
-    if right_room >= width + gap or right_room >= left_room:
-      x = min(base.right() + gap, area.right() - width - screen_margin)
+    body_right_screen = base.left() + self._character_body_right_local()
+    left_room = body_right_screen - area.left()
+    right_room = area.right() - body_right_screen
+    if right_room >= width + gap - overlap or right_room >= left_room:
+      x = body_right_screen + gap - overlap
+      x = min(x, area.right() - width - screen_margin)
+      x = max(area.left() + screen_margin, x)
     else:
-      x = max(area.left() + screen_margin, base.left() - width - gap)
+      body_left_screen = base.left() + self._character_body_left_local()
+      x = max(area.left() + screen_margin, body_left_screen - width - gap + overlap)
     y = base.top() + preferred_y
     y = max(area.top() + screen_margin, min(y, area.bottom() - height - screen_margin))
     return x, y
@@ -3320,6 +3352,7 @@ class DesktopPet:
       self._layout_bubbles()
     if self._chat_open:
       self._set_chat_open(True)
+    QTimer.singleShot(0, lambda: self._update_mouse_passthrough(self._local_mouse_pos()))
     self._running = True
 
     self._timer = QTimer()
@@ -3418,19 +3451,37 @@ class DesktopPet:
         body_bottom = min(self._win_h - 8, rect.bottom())
     return cx, head_y, body_bottom
 
+  def _character_body_right_local(self) -> int:
+    """角色身体右边界（窗口内 X，用于气泡水平锚点）。"""
+    if self._is_flat_mode():
+      player = self._plane_player()
+      if player and not player._pixmap_rect.isEmpty():
+        return player._pixmap_rect.right()
+    cx, _, _ = self._character_layout()
+    body_half_w = max(36, int(self._win_w * 0.22))
+    return min(self._win_w - 1, cx + body_half_w)
+
+  def _character_body_left_local(self) -> int:
+    """角色身体左边界（窗口内 X）。"""
+    if self._is_flat_mode():
+      player = self._plane_player()
+      if player and not player._pixmap_rect.isEmpty():
+        return player._pixmap_rect.left()
+    cx, _, _ = self._character_layout()
+    body_half_w = max(36, int(self._win_w * 0.22))
+    return max(0, cx - body_half_w)
+
   def _stable_bubble_preferred_y(self, stack_h: int) -> int:
-    """气泡纵向锚点（不随 GIF 每帧边界抖动）。"""
+    """气泡纵向锚点（不因 GIF 每帧边界抖动）。"""
     margin = 8
     head_y = max(40, self._win_h // 2 - HEAD_CENTER_Y_OFFSET)
     return max(margin, min(head_y - stack_h // 3, self._win_h - stack_h - margin))
 
   def _layout_bubbles(self, chat_text: str | None = None) -> None:
-    """Place chat/status/input overlays beside the pet window."""
+    """独立浮动窗口：贴在桌宠外侧垂直堆叠。"""
     if self._window is None:
       return
-    _cx, head_y, _body_bottom = self._character_layout()
-    margin = 8
-    gap = 10
+    gap = FLOATING_OVERLAY_STACK_GAP
 
     status_on = bool(self._status_bar_enabled and self.info_bubble)
     chat_on = bool((self._chat_open or self._companion_bubble_active) and self.chat_bubble)
@@ -3462,18 +3513,17 @@ class DesktopPet:
 
     cursor_y = y
     for widget, width, height in items:
-      widget.move(x + (stack_w - width) // 2, cursor_y)
+      widget.move(x, cursor_y)
       widget.raise_()
       cursor_y += height + gap
 
     self._raise_ui_overlays()
 
   def _reflow_visible_bubbles(self) -> None:
-    """Reposition visible overlays when only the pet window moved."""
+    """桌宠移动/缩放后重新定位独立浮动气泡。"""
     if self._window is None:
       return
-    margin = 8
-    gap = 10
+    gap = FLOATING_OVERLAY_STACK_GAP
     items: list[tuple[QWidget, int, int]] = []
     if self._status_bar_enabled and self.info_bubble and self.info_bubble.isVisible():
       items.append((self.info_bubble, self.info_bubble.width(), self.info_bubble.height()))
@@ -3493,7 +3543,7 @@ class DesktopPet:
     x, y = self._floating_overlay_pos(stack_w, stack_h, preferred_y)
     cursor_y = y
     for widget, width, height in items:
-      widget.move(x + (stack_w - width) // 2, cursor_y)
+      widget.move(x, cursor_y)
       widget.raise_()
       cursor_y += height + gap
     self._raise_ui_overlays()
@@ -3707,19 +3757,7 @@ class DesktopPet:
     ratio = min(1.0, max(0.8, dist * speed) / dist) if dist >= 1e-4 else 0.0
     new_x = wx + dx * ratio
     new_y = wy + dy * ratio
-    screen = QApplication.primaryScreen()
-    if screen is not None:
-      geo = screen.availableGeometry()
-      new_x, new_y = clamp_window_position(
-        new_x,
-        new_y,
-        float(geo.x()),
-        float(geo.y()),
-        float(geo.width()),
-        float(geo.height()),
-        float(self._win_w),
-        float(self._win_h),
-      )
+    new_x, new_y = self._clamp_window_to_screen(int(round(new_x)), int(round(new_y)))
     self._set_auto_walk_motion("walk")
     self._move_pet_window(new_x, new_y)
 
@@ -3762,19 +3800,19 @@ class DesktopPet:
     geo = self._window.frameGeometry()
     return float(geo.x()), float(geo.y())
 
-  def _clamp_follow_position(self, x: float, y: float) -> tuple[float, float]:
+  def _clamp_window_to_screen(self, x: int, y: int) -> tuple[int, int]:
+    """限制桌宠窗口在屏幕范围内。"""
     screen = QApplication.primaryScreen()
     if screen is None:
-      return x, y
-    geo = screen.availableGeometry()
-    min_x = float(geo.x())
-    min_y = float(geo.y())
-    max_x = min_x + float(geo.width()) - float(self._win_w)
-    max_y = min_y + float(geo.height()) - float(self._win_h)
-    return (
-      max(min_x, min(max_x, x)),
-      max(min_y, min(max_y, y)),
-    )
+      return max(0, x), max(0, y)
+    geo = screen.geometry()
+    max_x = max(0, geo.width() - self._win_w)
+    max_y = max(0, geo.height() - self._win_h)
+    return max(0, min(x, max_x)), max(0, min(y, max_y))
+
+  def _clamp_follow_position(self, x: float, y: float) -> tuple[float, float]:
+    cx, cy = self._clamp_window_to_screen(int(round(x)), int(round(y)))
+    return float(cx), float(cy)
 
   def _follow_tick(self) -> None:
     """独立追鼠标帧更新（仅本定时器驱动）。"""
@@ -3832,28 +3870,49 @@ class DesktopPet:
     self._move_pet_window(new_x, new_y)
 
   def _move_pet_window(self, x: float, y: float) -> None:
-    """移动桌宠窗口（优先 Win32 SetWindowPos，避免分层窗口 move 不生效）。"""
+    """移动桌宠窗口。"""
     if self._window is None:
       return
-    ix, iy = int(round(x)), int(round(y))
+    ix, iy = self._clamp_window_to_screen(int(round(x)), int(round(y)))
     self.position = [ix, iy]
-    moved = False
-    if win32gui and self._hwnd:
-      try:
-        win32gui.SetWindowPos(
-          self._hwnd,
-          0,
-          ix,
-          iy,
-          0,
-          0,
-          win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
-        )
-        moved = True
-      except Exception:
-        pass
-    if not moved:
+    if self._dragging:
       self._window.move(ix, iy)
+    else:
+      moved = False
+      if win32gui and self._hwnd:
+        try:
+          win32gui.SetWindowPos(
+            self._hwnd,
+            0,
+            ix,
+            iy,
+            0,
+            0,
+            win32con.SWP_NOSIZE | win32con.SWP_NOZORDER | win32con.SWP_NOACTIVATE,
+          )
+          moved = True
+        except Exception:
+          pass
+      if not moved:
+        self._window.move(ix, iy)
+    if self._status_bar_enabled or self._chat_open:
+      self._reflow_visible_bubbles()
+
+  def _drag_window_by_global(self, global_pos: QPoint) -> None:
+    """拖拽时用全局坐标差直接 move()，并限制在屏幕内。"""
+    if (
+      self._window is None
+      or self._drag_global_start is None
+      or self._drag_win_global_start is None
+    ):
+      return
+    nx = self._drag_win_global_start.x() + global_pos.x() - self._drag_global_start.x()
+    ny = self._drag_win_global_start.y() + global_pos.y() - self._drag_global_start.y()
+    nx, ny = self._clamp_window_to_screen(nx, ny)
+    if self._window.x() == nx and self._window.y() == ny:
+      return
+    self._window.move(nx, ny)
+    self.position = [nx, ny]
     if self._status_bar_enabled or self._chat_open:
       self._reflow_visible_bubbles()
 
@@ -4020,8 +4079,13 @@ class DesktopPet:
     self._dismiss_menus()
 
   def _set_window_click_through(self, enabled: bool) -> None:
-    if not win32gui or not self._hwnd:
+    if not win32gui or not win32con or self._window is None:
       return
+    if not self._hwnd:
+      try:
+        self._hwnd = int(self._window.winId())
+      except Exception:
+        return
     if enabled == self._click_through_active:
       return
     try:
@@ -4031,9 +4095,33 @@ class DesktopPet:
       else:
         style &= ~win32con.WS_EX_TRANSPARENT
       win32gui.SetWindowLong(self._hwnd, win32con.GWL_EXSTYLE, style)
+      win32gui.SetWindowPos(
+        self._hwnd,
+        0,
+        0,
+        0,
+        0,
+        0,
+        win32con.SWP_NOMOVE
+        | win32con.SWP_NOSIZE
+        | win32con.SWP_NOZORDER
+        | win32con.SWP_NOACTIVATE
+        | win32con.SWP_FRAMECHANGED,
+      )
       self._click_through_active = enabled
     except Exception:
       pass
+
+  def _apply_transparent_passthrough(self, mouse_pos: tuple[int, int]) -> None:
+    """按鼠标位置切换：透明区穿透，角色身体可交互。"""
+    if not self._cursor_in_window(mouse_pos):
+      self._set_window_click_through(False)
+      self._set_gl_mouse_passthrough(True)
+      return
+    on_body = self._is_mouse_on_body(mouse_pos)
+    on_ui = self._point_on_ui(mouse_pos)
+    self._set_gl_mouse_passthrough(not on_body)
+    self._set_window_click_through(not on_body and not on_ui)
 
   def _stop_runtime_timers(self) -> None:
     """仅程序退出时停止定时器；运行中勿调用。"""
@@ -4184,6 +4272,7 @@ class DesktopPet:
     if self.arc_menu:
       self.arc_menu.tick(1.0 / 60.0)
     self._poll_right_button_menu()
+    self._poll_left_button_on_body()
 
   def _start_computer_companion(self) -> None:
     if not self._computer_companion_enabled or self._computer_activity_detector is None:
@@ -4716,8 +4805,6 @@ class DesktopPet:
 
   def _prepare_mouse_at(self, pos: tuple[int, int]) -> None:
     """点击前先按位置取消穿透，避免 WS_EX_TRANSPARENT 吞掉 Qt 鼠标事件。"""
-    if not self._hover_fade_enabled:
-      return
     if self._is_mouse_on_body(pos) or self._point_on_ui(pos):
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(not self._is_mouse_on_body(pos))
@@ -4725,7 +4812,7 @@ class DesktopPet:
 
   def _poll_right_button_menu(self) -> None:
     """穿透开启时 Qt 收不到右键；在 tick 里用 Win32 检测角色身上的右键。"""
-    if not self._hover_fade_enabled or not win32api or not win32con:
+    if not win32api or not win32con:
       self._rbutton_was_down = False
       return
     try:
@@ -4744,35 +4831,33 @@ class DesktopPet:
         self._open_context_menu(pos)
     self._rbutton_was_down = down
 
+  def _poll_left_button_on_body(self) -> None:
+    """穿透开启时左键落在身体区域：临时取消穿透以支持拖拽/点击。"""
+    if not self._click_through_active or not win32api or not win32con:
+      self._lbutton_was_down = False
+      return
+    try:
+      down = bool(win32api.GetAsyncKeyState(win32con.VK_LBUTTON) & 0x8000)
+    except Exception:
+      return
+    if down and not self._lbutton_was_down:
+      pos = self._local_mouse_pos()
+      if self._cursor_in_window(pos) and self._is_mouse_on_body(pos):
+        self._set_window_click_through(False)
+        self._set_gl_mouse_passthrough(False)
+    self._lbutton_was_down = down
+
   def _update_mouse_passthrough(self, mouse_pos: tuple[int, int]) -> None:
-    """悬停淡出开启时：仅窗口内透明背景穿透；关闭时：完全不穿透。"""
+    """窗口内透明背景穿透；角色身体与菜单区域不穿透。"""
     if self._any_menu_open() or self._resize_visible:
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(True)
-      return
-    if self._chat_open:
-      self._set_window_click_through(False)
-      if self._is_flat_mode():
-        self._set_gl_mouse_passthrough(True)
-      else:
-        self._set_gl_mouse_passthrough(False)
       return
     if self._dragging or self._resizing_corner:
       self._set_window_click_through(False)
       self._set_gl_mouse_passthrough(False)
       return
-    if not self._hover_fade_enabled:
-      self._set_window_click_through(False)
-      self._set_gl_mouse_passthrough(False)
-      return
-    if not self._cursor_in_window(mouse_pos):
-      self._set_window_click_through(False)
-      self._set_gl_mouse_passthrough(True)
-      return
-    on_body = self._is_mouse_on_body(mouse_pos)
-    on_ui = self._point_on_ui(mouse_pos)
-    self._set_gl_mouse_passthrough(not on_body)
-    self._set_window_click_through(not on_body and not on_ui)
+    self._apply_transparent_passthrough(mouse_pos)
 
   def _set_gl_mouse_passthrough(self, enabled: bool) -> None:
     if self._window and self._window._gl:
@@ -4973,8 +5058,7 @@ class DesktopPet:
     if not enabled:
       self._hovering_window = False
       self._apply_window_opacity(255)
-      self._set_window_click_through(False)
-      self._set_gl_mouse_passthrough(False)
+      self._update_mouse_passthrough(self._local_mouse_pos())
     else:
       self._update_hover_alpha(self._local_mouse_pos())
     self._save_settings()
@@ -5023,9 +5107,6 @@ class DesktopPet:
     nx = self._drag_start_win[0] + dx
     ny = self._drag_start_win[1] + dy
     self._move_pet_window(nx, ny)
-    if self._status_bar_enabled or self._chat_open:
-      self._reflow_visible_bubbles()
-    self._save_pet_memory()
 
   def _on_mouse_move(self, pos: tuple[float, float]) -> None:
     ipos = (int(pos[0]), int(pos[1]))
@@ -5058,8 +5139,7 @@ class DesktopPet:
       if abs(dx) > DRAG_THRESHOLD or abs(dy) > DRAG_THRESHOLD:
         self._click_moved = True
       if self._click_moved:
-        sx, sy = self._screen_pos()
-        self._move_window(sx, sy)
+        self._drag_window_by_global(QCursor.pos())
         return
     self._update_hover_alpha(ipos)
 
@@ -5088,7 +5168,11 @@ class DesktopPet:
         return True
     return False
 
-  def _on_left_press(self, pos: tuple[int, int]) -> None:
+  def _on_left_press(
+    self,
+    pos: tuple[int, int],
+    global_pos: QPoint | None = None,
+  ) -> None:
     if self._any_menu_open():
       self._on_window_left_press(pos)
       if self._point_on_ui(pos):
@@ -5104,11 +5188,16 @@ class DesktopPet:
     self._dragging = True
     if self._auto_walk_enabled:
       self._set_auto_walk_motion("idle")
-    self._drag_start_screen = self._screen_pos()
-    if self._window:
-      self._drag_start_win = (self._window.x(), self._window.y())
+    gp = global_pos if global_pos is not None else QCursor.pos()
+    self._drag_global_start = QPoint(gp)
+    if self._window is not None:
+      win_pt = self._window.pos()
+      self._drag_win_global_start = QPoint(win_pt)
+      self._drag_start_win = (win_pt.x(), win_pt.y())
     else:
+      self._drag_win_global_start = QPoint(int(self.position[0]), int(self.position[1]))
       self._drag_start_win = tuple(self.position)
+    self._drag_start_screen = (gp.x(), gp.y())
 
   def _on_left_release(self, pos: tuple[int, int]) -> None:
     self._edge_hold_timer.stop()
@@ -5120,6 +5209,10 @@ class DesktopPet:
       return
     was_drag = self._dragging and self._click_moved
     self._dragging = False
+    self._drag_global_start = None
+    self._drag_win_global_start = None
+    if was_drag:
+      self._save_pet_memory()
     if self._any_menu_open():
       return
     if self._ui_consumes_click(pos):

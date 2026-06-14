@@ -1,22 +1,6 @@
 [
   {
     "role": "user",
-    "content": "你真好"
-  },
-  {
-    "role": "assistant",
-    "content": "你是在对我说“你真好”呀，我听到了，也会认真回应你，不只是放进记忆里。"
-  },
-  {
-    "role": "user",
-    "content": "嘿嘿"
-  },
-  {
-    "role": "assistant",
-    "content": "我们接着刚才的话聊“嘿嘿”吧。你最在意的那个点，我会顺着它陪你说下去。"
-  },
-  {
-    "role": "user",
     "content": "嘿嘿"
   },
   {
@@ -46,5 +30,21 @@
   {
     "role": "assistant",
     "content": "我们接着刚才的话聊“3”吧。你最在意的那个点，我会顺着它陪你说下去。"
+  },
+  {
+    "role": "user",
+    "content": "跟我说好多话"
+  },
+  {
+    "role": "assistant",
+    "content": "听起来这句话和你自己有关：“跟我说好多话”。我会先站在你这边，陪你把它慢慢说清楚。"
+  },
+  {
+    "role": "user",
+    "content": "再多一些"
+  },
+  {
+    "role": "assistant",
+    "content": "我们接着刚才的话聊“再多一些”吧。你最在意的那个点，我会顺着它陪你说下去。"
   }
 ]

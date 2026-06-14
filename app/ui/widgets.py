@@ -127,6 +127,15 @@ D_ACTION_LABELS = {
     "idle": "待机",
 }
 
+MOOD_DISPLAY_LABELS: dict[str, str] = {
+    "happy": "开心",
+    "sad": "伤心",
+    "hungry": "饥饿",
+    "neutral": "平静",
+    "angry": "生气",
+    "idle": "待机",
+}
+
 
 def _glass_style(radius: int) -> str:
     return GLASS_FRAME.format(radius=radius)
@@ -1155,7 +1164,7 @@ class InfoBubble(QFrame, ScalableOverlay):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.visible = False
-        self.mood, self.energy, self.affection = 85, 72, 90
+        self.mood, self.energy, self.affection = "开心", 72, 90
         self._lay = QVBoxLayout(self)
         self._lay.setContentsMargins(12, 12, 12, 12)
         self._lbl = QLabel()
@@ -1182,8 +1191,8 @@ class InfoBubble(QFrame, ScalableOverlay):
         self._lay.setContentsMargins(m, m, m, m)
         self._lbl.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
 
-    def set_stats(self, mood: int, energy: int, affection: int) -> None:
-        self.mood = int(mood)
+    def set_stats(self, mood: str, energy: int, affection: int) -> None:
+        self.mood = str(mood)
         self.energy = int(energy)
         self.affection = int(affection)
 
