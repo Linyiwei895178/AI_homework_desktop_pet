@@ -1,568 +1,297 @@
-# AI_Desktop_Pet 🐱🎮
+# AI Homework Desktop Pet
 
-**具身AI桌面宠物** — 基于 PySide6 + Live2D 的智能桌面虚拟宠物程序
+基于 PySide6、Live2D、视觉感知、NLP/TTS 和云端同步框架的智能桌面宠物项目。项目源自山东大学《人工智能引论》课程设计，采用模块化分工方式组织 UI、Vision、TTS/NLP、State 与 Cloud Sync 能力。
 
-> 本项目是山东大学《人工智能引论》课程设计（大作业），由五人团队协作开发。
-> 采用模块化接口架构，实现 **队员A (UI)**、**队员B (Vision)**、**队员C (TTS/NLP)**、**队员D (State)** 之间的低耦合协作。
+仓库地址：[SWT-0407/AI_homework_desktop_pet](https://github.com/SWT-0407/AI_homework_desktop_pet)
 
-## 项目简介
+## 项目概览
 
-AI_Desktop_Pet 是一个基于 **PySide6 (Qt)** + **Live2D** 构建的智能桌面虚拟宠物程序。它是一款能"看见"你的状态、能主动和你聊天、能感知你电脑前活动的具身AI桌宠。项目采用模块化设计，内置四大模块的接口管理层，实现 **队员A (UI)**、**队员B (Vision)**、**队员C (TTS/NLP)**、**队员D (State)** 之间的低耦合协作。
+AI Homework Desktop Pet 是一个运行在桌面的虚拟陪伴应用。桌宠以透明置顶窗口显示，支持 Live2D 模型渲染、鼠标交互、聊天气泡、语音播报、用户状态检测、手势控制、宠物状态管理和 Supabase 云端共养接口。
 
-## 功能特性
+核心目标不是单一聊天窗口，而是把多个 AI 能力集成到桌宠行为中：
 
-### ✅ 已实现
+- UI 层负责桌宠窗口、Live2D 渲染、菜单、控制台、设置面板和云端面板。
+- Vision 层负责摄像头采集、用户状态检测、手势识别、表情/光照/屏幕使用分析。
+- TTS/NLP 层负责 DeepSeek 对话、Prompt 构建、聊天记忆、情绪分析和语音合成。
+- State 层负责宠物心情、能量、亲密度、用户画像、行为决策和状态持久化。
+- Cloud 层负责 Supabase 房间、状态同步、互动事件和联机共养的接口封装。
 
-#### 🖥️ UI 交互（队员A）
-- ✅ **Live2D 模型渲染**（基于 `live2d-py` + OpenGL），支持流畅动画
-- ✅ **多 Live2D 模型支持**：mao（日文版）、mao_pro_zh（中文版）、吗喽、精灵伯爵、红发等
-- ✅ **运行时模型切换**：`model_switcher` 模块支持热切换模型，失败自动回滚
-- ✅ **Pinch 手势缩放**：通过 `set_pet_scale()` 接口调整桌宠窗口大小（0.6x ~ 1.8x）
-- ✅ 桌面无边框置顶窗口，透明背景
-- ✅ 鼠标拖拽移动桌宠 + 左键点击触发动作
-- ✅ 右键菜单（退出、设置面板、切换角色）
-- ✅ 弧形动作菜单（`ArcMotionMenu`）
-- ✅ 设置面板（AI对话、语音包切换、TTS 设置、Pin顶置顶、悬浮淡出）
-- ✅ 状态栏显示心情/能量/亲密度
-- ✅ 聊天气泡/输入框（支持流式打字机效果）
-- ✅ 控制台面板
+## 主要功能
 
-#### 👁️ 视觉感知（队员B）
-- ✅ **共享摄像头架构**（`SharedCameraCapture`）—— 多 B 模块复用同一 OpenCV 摄像头流
-- ✅ **MediaPipe 手势识别**（`GestureDetector`）—— 支持挥手、比心、OK、举手等手势检测
-- ✅ **捏合缩放控制**（`ZoomGestureController`）—— 拇指与食指 pinch 控制桌宠缩放
-- ✅ **视觉调试面板**（`VisionDebugPanel`）—— 实时预览摄像头画面、人脸/手势关键点
-- ✅ **Q 键一键开关**摄像头/用户状态检测/手势检测（防连按，输入框聚焦时放行）
-- ✅ 摄像头 → MediaPipe 人脸检测 → 用户状态分类（正常/专注/分心/疲劳/离开/返回）
-- ✅ Qwen-VL API 接口（支持 stub 模拟和真实 API）
-- ✅ 表情识别（基于 MediaPipe 人脸特征点）
-- ✅ 低光照/长时间学习检测
-- ✅ **电脑活动识别**（`ComputerActivityDetector`）—— 自动检测前台窗口（游戏/看剧/编程/办公/聊天/浏览等）
-- ✅ **屏幕使用追踪**（`ScreenUsageTracker`）—— 按活动类型统计连续/每日时长，超时自动提醒
+### 桌面宠物与 UI
 
-#### 🗣️ TTS/NLP（队员C）
-- ✅ **DeepSeek API 真实接口**（配置 `DEEPSEEK_API_KEY` 后调用，失败自动降级本地回复）
-- ✅ **Edge TTS 神经语音**（微软在线语音，支持语速/音调/音量调节）
-- ✅ **pyttsx3 离线回退**（无网络时可用）
-- ✅ **自定义语音包导入与切换**
-- ✅ 状态/情绪驱动的音频选择
-- ✅ 聊天记忆（滚动窗口，支持 JSON 持久化）
-- ✅ Prompt 构建器（根据用户状态/电脑活动动态生成系统提示词）
-- ✅ 流式打字机效果 + 主动语音提示系统
-- ✅ **聊天情绪分析**（`emotion_analyzer.py`）—— 基于关键字的规则引擎，支持 positive/neutral/stress/sad/angry/tired/confused 分类
-- ✅ **主动事件构建器**（`proactive_event_builder.py`）—— 构建屏显提醒、聊天情绪、手势、云端宠物事件
+- 透明、无边框、置顶桌宠窗口。
+- 支持鼠标拖拽、左键互动、右键菜单、弧形动作菜单。
+- 支持 Live2D 模型加载、动作播放、表情切换和运行时模型切换。
+- 内置角色库、Live2D 库、设置面板、聊天气泡、输入框、状态栏和控制台。
+- 支持桌宠自动漫游、跟随鼠标、靠边休息、悬浮淡出等桌面行为。
 
-#### 📊 状态管理（队员D）
-- ✅ **三围状态系统**：`mood`（心情）/ `energy`（能量）/ `intimacy`（亲密度）
-- ✅ 数值自然衰减与增长机制
-- ✅ 用户状态映射到桌宠状态（疲惫→安抚、分心→提醒等）
-- ✅ 行为决策规则引擎（基于当前状态自动选择动作）
-- ✅ 对话后状态更新（消耗能量 + 增加亲密度）
-- ✅ 持久化保存/恢复状态
-- ✅ **聊天情绪反馈**（`api_update_from_chat_emotion()`）—— 根据情绪分析结果更新用户画像和桌宠状态
+### 视觉感知
 
-#### 🎮 虚拟宠物系统（VPet 移植）
-- ✅ **物品系统**：食物分类（主食/零食/功能食品）、道具
-- ✅ **商店目录**：可配置的商品列表
-- ✅ **打工系统**：多种工作类型，支持限时任务
-- ✅ **主题系统**：可切换 UI 主题配色
-- ✅ **游戏存档**：支持多种模式（标准/休闲/困难/自定义）
-- ✅ **文本规则引擎**：根据状态自动匹配对话文本
+- 使用 OpenCV 共享摄像头流，避免多个视觉模块重复占用摄像头。
+- 使用 MediaPipe 进行手势、人脸和关键点相关检测。
+- 支持挥手、比心、OK、举手等手势响应。
+- 支持 pinch 捏合手势缩放桌宠。
+- 支持用户状态检测：正常、专注、分心、疲劳、离开、返回、学习过久、低光照等。
+- 支持视觉调试面板，便于查看摄像头画面和检测结果。
+- 支持前台窗口活动分类和屏幕使用时长追踪。
 
-#### ☁️ 云端联机框架（预置）
-- ✅ **云端面板**（`CloudPanel`）—— 房间 ID 输入、加入/创建、同步按钮、在线宠物状态展示
-- ✅ **云端同步调度器**（`CloudSyncScheduler`）—— 定时同步线程，支持 set_on_sync_result 回调
-- ✅ **AppContext** 集中上下文 —— 持有所有模块实例引用，便于跨模块访问
-- ✅ **EventBus** 事件总线 —— subscribe/emit/unsubscribe 模式，支持一次性监听
+### 对话、语音与情绪
 
-#### 🧪 测试覆盖
-- ✅ 状态模块测试（7 个测试用例）
-- ✅ 队员C 模块测试（`test_team_c_module.py`）
-- ✅ 虚拟宠物功能测试
-- ✅ 电脑活动检测测试
+- DeepSeek API 对话封装，未配置或调用失败时可降级为本地回复。
+- Prompt 会结合用户状态、电脑活动、宠物状态等上下文生成。
+- 支持聊天记忆、用户画像和聊天情绪分析。
+- 支持 Edge TTS、pyttsx3 离线回退、GPT-SoVITS、OpenVoice 后处理和本地语音包。
+- 支持按宠物、情绪、动作选择语音风格或语音片段。
 
-### 🔲 待开发
-- 🔲 真实 Qwen-VL 视觉 API 全面对接
-- 🔲 动画系统增强（帧序列播放）
-- 🔲 语音交互（麦克风输入）
-- 🔲 多桌宠支持（同时显示多个角色）
-- 🔲 云端房间全面对接（`SharedPetRoomManager` + `CloudService`）
-- 🔲 Mac/Linux 跨平台支持
+### 状态与 VPet 系统
 
----
+- 宠物状态包含心情、能量、亲密度、饥饿、等级、经验、金币等字段。
+- 行为规则会根据用户状态和宠物状态自动选择动作。
+- 聊天、投喂、陪玩、打工等行为会影响宠物状态。
+- 移植了部分 VPet 风格系统：物品、食物、商店、工作、主题、存档和文本规则。
 
-## 交互演示
+### 云端共养
 
-| 操作 | 效果 |
-|------|------|
-| **左键点击** | 触发点击回调，桌宠做出反应动作 |
-| **左键拖拽** | 桌宠跟随鼠标移动 |
-| **右键点击** | 弹出右键菜单（设置、切换角色、退出等） |
-| **Q 键** | 开关摄像头/用户状态检测/手势检测 |
-| **设置面板** | 可配置 AI 对话角色、语音包、TTS 参数、Pin顶置顶 |
-| **聊天输入** | 输入文字与桌宠 AI 对话，流式显示在气泡中 |
-| **自动感知** | 桌宠每 3 秒检测用户状态，主动关心/提醒/陪伴 |
-| **手势控制** | 挥手/比心/OK → 桌宠回应；捏合缩放 → 调整桌宠大小 |
+- 使用 Supabase 作为云端同步后端。
+- `SharedPetRoomManager` 封装房间加入、状态上传、状态拉取、互动事件上传和最近事件读取。
+- `CloudSyncScheduler` 提供定时同步线程。
+- UI 层通过云端面板操作房间，不直接访问 Supabase。
+- 详细云端表结构见 [docs/SUPABASE_SCHEMA.sql](docs/SUPABASE_SCHEMA.sql)。
 
-## 交互演示
+## 技术栈
 
-| 操作 | 效果 |
-|------|------|
-| **左键点击** | 触发点击回调，桌宠做出反应动作 |
-| **左键拖拽** | 桌宠跟随鼠标移动 |
-| **右键点击** | 弹出右键菜单（设置、切换角色、退出等） |
-| **设置面板** | 可配置 AI 对话角色、语音包、TTS 参数、Pin顶置顶 |
-| **聊天输入** | 输入文字与桌宠 AI 对话，流式显示在气泡中 |
-| **自动感知** | 桌宠每 3 秒检测用户状态，主动关心/提醒/陪伴 |
+- Python 3.10+，项目当前代码也包含 Python 3.13 兼容处理。
+- PySide6 / Qt：桌面窗口与控件。
+- live2d-py / OpenGL：Live2D 模型渲染。
+- OpenCV / MediaPipe / DeepFace：摄像头、手势、人脸与表情相关能力。
+- DeepSeek API / Qwen-VL / DashScope：文本与多模态能力接口。
+- Edge TTS / pyttsx3 / GPT-SoVITS / OpenVoice：语音合成与语音风格处理。
+- Supabase：云端共养数据同步。
+- pytest：单元测试。
 
-## 项目结构
+## 目录结构
 
+```text
+AI_homework_desktop_pet/
+├── app/
+│   ├── main.py                       # 应用入口，串联 UI、Vision、TTS/NLP、State、Cloud
+│   ├── live2d_scanner.py             # Live2D 模型扫描
+│   ├── model_switcher.py             # Live2D 运行时模型切换
+│   ├── live2d_action_presets.py      # Live2D 动作预设
+│   ├── controller/                   # 鼠标、键盘、动作触发等控制逻辑
+│   ├── services/                     # 事件总线、同步调度、Mock 数据、应用上下文
+│   └── ui/                           # 桌宠窗口、控件、云端面板、视觉调试面板
+├── models/
+│   ├── cloud/                        # Supabase 服务、云端模型、共享房间管理
+│   ├── nlp/                          # DeepSeek、Prompt、记忆、情绪分析、主动事件
+│   ├── state/                        # 宠物状态、行为规则、用户画像、接口层
+│   ├── tts/                          # TTS 管理、语音包、GPT-SoVITS、OpenVoice
+│   ├── vision/                       # 摄像头、用户状态、手势、表情、屏幕活动
+│   └── vpet/                         # 物品、商店、工作、主题、存档、文本规则
+├── assets/
+│   ├── models/                       # Live2D 模型资源
+│   ├── images/                       # 静态桌宠图像
+│   ├── animations/                   # GIF 和帧动画资源
+│   ├── live2d_modeling/              # Live2D 建模参考、姿势、外观目录
+│   ├── action_mapping.json           # 动作映射
+│   ├── synonyms.json                 # 同义动作映射
+│   └── pet_memory.json               # 本地宠物记忆
+├── docs/
+│   ├── API_CONTRACTS.md              # 云端共养 API 合约
+│   ├── CLOUD_SYNC_RULES.md           # 云同步规则
+│   └── SUPABASE_SCHEMA.sql           # Supabase 表结构
+├── scripts/                          # 配置检查、真实连接测试、数据采集脚本
+├── tests/                            # 单元测试
+├── tools/                            # Live2D 资源生成、压缩、目录构建工具
+├── utils/                            # 配置、日志、JSON、文件与事件工具
+├── requirements.txt                  # Python 依赖
+├── run_demo.bat                      # Windows 轻量演示启动脚本
+└── README.md
 ```
-AI_Desktop_Pet/
-├── app/                              # 应用程序入口和UI
-│   ├── main.py                       # 🚀 程序入口（集成四模块接口）
-│   ├── __init__.py
-│   ├── live2d_scanner.py             # 🔍 Live2D 模型扫描器（扫描 assets/models/）
-│   ├── model_switcher.py             # 🔄 Live2D 运行时模型切换器（热切换+回滚）
-│   ├── live2d_action_presets.py      # 🎬 Live2D 动作预设
-│   ├── ui/
-│   │   ├── desktop_pet.py            # 🐱 Live2D 桌宠主窗口（含 OpenGL 渲染）
-│   │   ├── widgets.py                # 🎨 UI控件（菜单、气泡、设置面板等）
-│   │   ├── vision_debug_panel.py     # 🎥 视觉调试面板（实时预览摄像头+手势骨架）
-│   │   ├── cloud_panel.py            # ☁️ 云端联机面板（房间/同步/事件）
-│   │   ├── feedback_bubble.py        # 💬 快速反馈文字气泡
-│   │   ├── pet_motion.py             # 🏃 桌宠自由漫游/跟随鼠标/靠边休息
-│   │   └── ui_settings_store.py      # ⚙️ UI 个性化设置持久化
-│   ├── services/
-│   │   ├── demo_mode.py              # 🎭 Mock 状态提供器（用户状态/手势/云端事件）
-│   │   ├── event_bus.py              # 📡 事件总线（subscribe/emit/unsubscribe）
-│   │   ├── app_context.py            # 📋 集中上下文（持有所有模块实例引用）
-│   │   └── sync_scheduler.py         # ⏱️ 云端同步调度器（定时 sync 线程）
-│   └── controller/
-│       ├── event_handler.py          # 🖱️ 事件处理（鼠标/键盘/Q键切换）
-│       └── pet_controller.py         # 🎮 动作触发（表情/动画切换）
-│
-├── models/                           # 🧠 核心业务逻辑
-│   ├── nlp/                          #   自然语言处理（队员C）
-│   │   ├── deepseek_api.py           #      DeepSeek API 调用 + 本地降级
-│   │   ├── prompt_builder.py         #      Prompt 构建器
-│   │   ├── chat_memory.py            #      聊天记忆（滚动窗口+持久化）
-│   │   ├── emotion_analyzer.py       #      💬 聊天情绪分析（规则引擎）
-│   │   └── proactive_event_builder.py #     🔔 主动事件构建器
-│   ├── tts/                          #   语音合成（队员C）
-│   │   ├── tts_manager.py            #      TTS 管理器（Edge / pyttsx3 路由）
-│   │   ├── ai_voice_assistant.py     #      AI 对话语音助手（核心类）
-│   │   ├── echo_team_c_interface.py  #      【队员C接口层】8个API
-│   │   └── voice_pack.py             #      语音包管理
-│   ├── vision/                       #   视觉感知（队员B）
-│   │   ├── user_state_detector.py    #      用户状态检测器（摄像头→MediaPipe）
-│   │   ├── computer_activity_detector.py # 💻 电脑活动检测（前台窗口分析）
-│   │   ├── gesture_detector.py       #      🖐️ 手势识别器（MediaPipe Hands）
-│   │   ├── shared_camera.py          #      🎥 共享摄像头流（多模块复用）
-│   │   ├── emotion_recognizer.py     #      表情识别（MediaPipe特征点）
-│   │   ├── qwen_vl_api.py            #      Qwen-VL API（Stub + 真实API）
-│   │   └── screen_usage_tracker.py   #      📐 屏幕使用追踪（活动类型统计+超时提醒）
-│   ├── state/                        #   状态管理（队员D）
-│   │   ├── pet_state.py              #      桌宠三围状态（mood/energy/intimacy）
-│   │   ├── behavior_rules.py         #      行为决策引擎
-│   │   ├── user_profile.py           #      👤 用户画像（从聊天情绪学习）
-│   │   └── echo_team_d_interface.py  #      【队员D接口层】14+ API
-│   └── vpet/                         #   🎮 虚拟宠物系统（VPet 移植）
-│       ├── items.py                  #      物品/食物定义
-│       ├── catalog.py                #      商店目录
-│       ├── work.py                   #      打工系统
-│       ├── service.py                #      功能服务
-│       ├── texts.py                  #      文本规则引擎
-│       ├── themes.py                 #      UI主题
-│       ├── save.py                   #      游戏存档
-│       └── lps.py                    #      LPS 文件解析器
-│
-├── assets/                           # 🎨 资源文件
-│   ├── models/                       #   Live2D 模型
-│   │   ├── mao/                      #     猫娘模型 mao（日文版）
-│   │   ├── mao_pro_zh/               #     猫娘模型 mao_pro_zh（中文版）
-│   │   ├── monkey/                   #     吗喽模型
-│   │   ├── elf_count/                #     精灵伯爵模型
-│   │   ├── doro/                     #     Doro 模型
-│   │   └── red_hair/                 #     红发模型
-│   ├── live2d_modeling/              #   🎨 Live2D 建模资产
-│   │   ├── anatomy_lineart_bases/    #     解剖线稿基底（男/女）
-│   │   ├── base_front_template/      #     正脸模板（旧版参考）
-│   │   ├── pose_study/               #     姿势研究（PDF/分类/rig规范）
-│   │   └── appearance_catalog/       #     外观目录（头发/服装/配饰等）
-│   ├── images/                       #   静态图片
-│   │   ├── cat_image_smile_001.png
-│   │   ├── 这狗_idle_frame.png
-│   │   └── 这狗_idle_frame_001.png
-│   ├── animations/                   #   GIF 动画
-│   │   └── 这狗_anim_*.gif           #     柴犬动画（待机/吃饭/幸福/生气等）
-│   ├── voice_packs/                  #   🎵 语音包（TTS 音色配置，可从 UI 导入）
-│   ├── chat_history/                 #   聊天历史存档
-│   ├── sounds/                       #   运行时生成的语音缓存
-│   ├── synonyms.json                 #   情绪→动作 映射表
-│   ├── pet_memory.json               #   桌宠记忆（持久化状态）
-│   └── action_mapping.json           #   动作映射表
-│
-├── data/                             # 📊 运行时配置数据
-│   └── pet_ui_settings.json          #   UI 设置持久化
-│
-├── tests/                            # 🧪 单元测试
-│   ├── test_pet_state.py             #   状态模块测试
-│   ├── test_team_c_module.py         #   队员C模块测试
-│   ├── test_vpet_features.py         #   虚拟宠物功能测试
-│   └── test_computer_activity_detector.py  # 电脑活动检测测试
-│
-├── utils/                            # 🔧 工具模块
-│   ├── config.py                     #   .env 配置读取（单例）
-│   ├── logger.py                     #   日志记录（控制台+文件+追踪）
-│   └── file_manager.py               #   资产管理
-│
-├── scripts/                          # 📜 辅助脚本
-│   ├── check_supabase_config.py      #   Supabase 配置检查
-│   └── test_supabase_real_connection.py  # Supabase 连接测试
-│
-├── requirements.txt                  # 📦 Python 依赖
-├── README.md                         # 📖 本文件
-├── .gitignore                        # Git 忽略规则
-└── .env                              # 🔑 API Key 配置（不提交到Git）
-```
-
-## 团队分工与接口架构
-
-```
-┌────────────────────────────────────────────────────────────────────┐
-│                         app/main.py                                │
-│                       （主循环调度器）                               │
-│              每3秒检测→状态同步→决策动作→触发UI                      │
-└────┬──────────────┬──────────────┬──────────────┬─────────────────┘
-     │              │              │              │
-┌────▼──────┐ ┌────▼─────┐ ┌─────▼──────┐ ┌─────▼──────┐
-│  队员A    │ │  队员B   │ │  队员C     │ │  队员D     │
-│   (UI)   │ │ (Vision) │ │ (TTS/NLP) │ │  (State)  │
-│          │ │          │ │           │ │           │
-│DesktopPet│ │UserState │ │EchoTeamC  │ │EchoTeamD  │
-│EventHndlr│ │Detector  │ │Interface  │ │Interface  │
-│PetCtrl   │ │QwenVL    │ │AIChatVoice│ │PetState   │
-│widgets   │ │Computer  │ │Assistant  │ │BehaviorRls│
-│          │ │Activity  │ │TTSManager │ │           │
-│          │ │Detector  │ │ChatMemory │ │           │
-└──────────┘ └──────────┘ └───────────┘ └───────────┘
-     │              │              │              │
-     └──────────────┴──────────────┴──────────────┘
-                  接口调用关系:
-             A←D: 获取状态/决策动作
-             B→D: 用户状态同步（摄像头/电脑活动）
-             C↔D: 对话回调 + 状态事件通知（双向）
-```
-
-### 数据流示例
-
-```
-[队员B] 摄像头/电脑活动检测
-    │  api_apply_user_state(user_state)
-    ▼
-[队员D] 更新 mood/energy/intimacy
-    │  api_decide_action()
-    ├─▶ [队员A] 切换桌宠表情/动画
-    │  api_should_speak() → api_get_speech_hint()
-    └─▶ [队员C] 触发 AI 对话 + TTS 语音
-         │  api_on_chat_finished(word_count)
-         └─▶ [队员D] 更新亲密度/能量
-
-[队员B] 手势识别 (GestureDetector)
-    │  get_state() → gesture_code
-    │  捏合缩放 → set_pet_scale(scale)
-    │  其他手势 → api_on_status_event(event)
-    ▼
-[队员C] 播放语音回应
-    │
-[队员C] 聊天情绪分析 (emotion_analyzer)
-    │  api_update_from_chat_emotion(emotion_result)
-    ▼
-[队员D] 更新用户画像 + 桌宠状态
-```
-
-### 队员D接口一览（EchoTeamDInterface — 14+ API）
-
-| # | 接口 | 对接方 | 用途 |
-|---|------|--------|------|
-| 1 | `api_get_pet_status()` | 队员A | 获取桌宠当前状态 |
-| 2 | `api_decide_action()` | 队员A | 决策当前动作 |
-| 3 | `api_get_status_history(n)` | 队员A | 获取状态变化历史 |
-| 4 | `api_apply_user_state(user_state)` | 队员B | 接收用户检测状态 |
-| 5 | `api_bind_vision_detector(detector)` | 队员B | 一键绑定视觉检测器 |
-| 6 | `api_on_chat_finished(word_count)` | 队员C | 对话后更新状态 |
-| 7 | `api_update_from_chat_emotion(emotion_result)` | 队员C | 聊天情绪更新用户画像 |
-| 8 | `api_get_speech_hint()` | 队员C | 获取主动语音提示 |
-| 9 | `api_should_speak()` | 队员C | 判断是否该主动说话 |
-| 10 | `api_get_pet_id()` | 队员C | 获取桌宠ID |
-| 11 | `api_set_pet_id(pet_id)` | 队员A/C | 同步当前桌宠ID |
-| 12 | `api_register_status_listener(cb)` | 队员C | 注册状态监听回调 |
-| 13 | `api_reset_state_memory()` | 队员C | 重置状态记忆 |
-| 14 | `api_save_state(filepath)` | 队员C | 持久化状态 |
-| 15 | `api_load_state(filepath)` | 队员C | 恢复状态 |
-
-### 队员C接口一览（EchoTeamCInterface — 8+ API）
-
-| # | 接口 | 对接方 | 用途 |
-|---|------|--------|------|
-| 1 | `api_user_speak(text, state, cb)` | 队员A | 用户输入文本 → AI回复（流式） + TTS |
-| 2 | `api_play_system_voice(text)` | 队员A | 纯语音播放（绕过大模型） |
-| 3 | `api_play_speech_hint(hint_text)` | 队员A | 播放主动语音提示 |
-| 4 | `api_on_status_event(event_data)` | 队员B | 接收手势/用户状态事件并生成语音 |
-| 5 | `api_register_logic_callback(cb)` | 队员D | 注册对话结束回调 |
-| 6 | `api_reset_ai_memory()` | 队员D | 清空对话记忆 |
-| 7 | `api_get_last_chat()` | 队员A | 获取最近对话文本 |
-| 8 | `api_set_pet_id(pet_id)` | 队员A/D | 同步当前桌宠ID |
-| 9 | `api_set_tts_settings(settings)` | 队员A | 运行时更新 TTS 参数 |
-
-## 资产系统
-
-### Live2D 模型
-
-| 模型 | 路径 | 说明 |
-|------|------|------|
-| **mao** (日文版) | `assets/models/mao/` | 猫娘 Live2D 模型，含 8 种表情 + 7 套动作 + 物理动画 |
-| **mao_pro_zh** (中文版) | `assets/models/mao_pro_zh/` | 同上模型的中文版（含独立 runtime、中文表情/动作） |
-| **吗喽 (monkey)** | `assets/models/monkey/` | 猴子 Live2D 模型，带可切换配饰（眼镜/头发/外套等） |
-| **精灵伯爵 (elf_count)** | `assets/models/elf_count/` | 精灵伯爵 Live2D 模型，含 20+ 表情 + 物理动画 |
-| **Doro** | `assets/models/doro/` | Doro 简单模型 |
-| **红发** | `assets/models/red_hair/` | 红发少女 Live2D 模型，含多种表情+物理动画 |
-
-> 模型通过 `live2d_scanner.py` 自动扫描发现，通过右键菜单→切换角色实时切换（`model_switcher.py` 热切换+失败回滚）。
-
-### 柴犬动画 GIF
-
-| 动画 | 文件 | 说明 |
-|------|------|------|
-| 🐕 待机 | `这狗_anim_idle.gif` | 默认待机动作 |
-| 🐕 吃饭 | `这狗_anim_吃饭.gif` | 饥饿状态动作 |
-| 🐕 幸福 | `这狗_anim_幸福.gif` | 开心/亲密度高 |
-| 🐕 想吃 | `这狗_anim_想吃.gif` | 讨食动作 |
-| 🐕 敬礼 | `这狗_anim_敬礼.gif` | 可爱动作 |
-| 🐕 爱你 | `这狗_anim_爱你.gif` | 高亲密度动作 |
-| 🐕 生气 | `这狗_anim_生气.gif` | 生气状态动作 |
-| 🐕 星星眼 | `这狗_anim_星星眼.gif` | 期待状态 |
-
-### 语音包
-
-| 角色 | 路径 | 说明 |
-|------|------|------|
-默认不内置角色语音包。通过“语音包选择”页导入本地音频样本后，新语音包会自动出现在列表里。
-
-### 资产命名规则
-
-| 类型 | 命名格式 | 示例 |
-|------|---------|------|
-| 图片 | `{pet_id}_image_{state}_{seq}.png` | `cat_image_smile_001.png` |
-| 动画 | `{pet_id}_anim_{state}_{seq}.gif` | `这狗_anim_吃饭.gif` |
-| 声音 | `{pet_id}_sound_{state}_{action}_{seq}.wav` | `cat_sound_happy_speak_001.wav` |
 
 ## 快速开始
 
-### 环境要求
+### 1. 克隆仓库
 
-- **Python**: 3.10+（推荐 3.10~3.12，3.14 部分包需降级）
-- **操作系统**: Windows 10/11（pywin32 依赖）
-- **可选**: 摄像头（用于用户状态检测）
-
-### 1️⃣ 克隆仓库
-
-```
+```bash
 git clone https://github.com/SWT-0407/AI_homework_desktop_pet.git
 cd AI_homework_desktop_pet
 ```
 
-### 2️⃣ 安装依赖
+### 2. 创建虚拟环境
 
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 ```
+
+macOS / Linux:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+### 3. 安装依赖
+
+```bash
 pip install -r requirements.txt
+pip install PySide6 PyOpenGL live2d-py
 ```
 
-> ⚠️ **Python 3.14 用户注意**：
-> - `deepface` + `tensorflow` 不支持 Python 3.14（表情识别功能暂不可用，不影响核心功能）
-> - `PyAudio` 无预编译包（语音输入暂不可用，TTS 语音输出正常）
-> - 建议使用 Python 3.10~3.12 获得完整功能
+说明：
 
-### 3️⃣ 配置环境变量
+- `requirements.txt` 覆盖视觉、语音、云同步、测试等多数依赖。
+- 桌宠 UI 入口直接依赖 `PySide6`、`PyOpenGL` 和 `live2d-py`，如环境中未预装，需要额外安装。
+- Windows 上使用透明置顶窗口和部分系统能力时，建议安装 `pywin32`，该依赖已在 `requirements.txt` 中按 Windows 平台声明。
+- `PyAudio` 在部分 Windows 环境可能需要使用预编译 wheel 或 Conda 安装。
 
-创建 `.env` 文件：
+### 4. 配置环境变量
 
-```
-DEEPSEEK_API_KEY=your_deepseek_api_key_here
-```
+复制示例配置：
 
-> 至少需要配置 `DEEPSEEK_API_KEY` 才能使用 AI 对话功能。
-> 未配置时会自动使用本地降级回复。
-
-### 4️⃣ 运行程序
-
-```
-python app/main.py
+```bash
+cp .env.example .env
 ```
 
-桌宠窗口将出现在桌面左上角，你可以：
-- 🖱️ **左键拖拽** 移动桌宠
-- 🖱️ **左键点击** 触发动作
-- 🖱️ **右键点击** → 设置/切换角色/退出
-- 💬 **输入文字** 与桌宠 AI 对话
-- 👀 程序每 3 秒自动检测模拟用户状态并主动回应
+Windows PowerShell:
 
-### 5️⃣ 运行测试
-
-```
-pytest tests/
-```
-或单独运行：
-```
-python -m pytest tests/test_pet_state.py -v
-python -m pytest tests/test_team_c_module.py -v
+```powershell
+Copy-Item .env.example .env
 ```
 
-## 配置文件
-
-项目根目录的 `.env` 文件（请勿提交到 Git）：
-
-```
-# ==== API Keys（必需） ====
-DEEPSEEK_API_KEY=your_key_here
-QWEN_VL_API_KEY=your_key_here
-
-# ==== DeepSeek 配置 ====
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL=deepseek-chat
-DEEPSEEK_THINKING=disabled
-DEEPSEEK_FORCE_MOCK=false
-DEEPSEEK_FALLBACK_TO_MOCK=true
-
-# ==== Qwen-VL 视觉模型 ====
-QWEN_VL_API_URL=https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
-QWEN_VL_MODEL=qwen-vl-plus
-
-# ==== TTS 语音 ====
-TTS_PROVIDER=auto
-EDGE_TTS_VOICE=zh-CN-XiaoyiNeural
-EDGE_TTS_RATE=+8%
-EDGE_TTS_PITCH=+12Hz
-EDGE_TTS_VOLUME=+8%
-TTS_RATE=168
-TTS_VOLUME=0.95
-TTS_PITCH_SHIFT=1.06
-TTS_CUTE_STYLE=true
-
-# ==== 语音包 ====
-VOICE_PACK_ID=
-VOICE_PACK_ENABLED=true
-VOICE_PACK_MODE=prefer
-VOICE_PACK_AUTO_BY_PET=true
-
-# ==== 电脑活动检测 ====
-COMPUTER_ACTIVITY_ENABLED=true
-COMPUTER_ACTIVITY_POLL_MS=1000
-COMPUTER_ACTIVITY_MIN_DURATION=0
-COMPUTER_ACTIVITY_COMMENT_COOLDOWN=150
-
-# ==== 调试 ====
-DEBUG=True
-LOG_LEVEL=INFO
-
-# ==== 用户状态检测 ====
-DESKTOP_PET_MOCK_USER_STATE=false
-DESKTOP_PET_USER_STATE_ENABLED=true
-DESKTOP_PET_GESTURE_ENABLED=true
-DESKTOP_PET_CAMERA_INDEX=0
-DESKTOP_PET_GESTURE_DETECT_INTERVAL=0.12
-DESKTOP_PET_GESTURE_POLL_MS=100
-```
-
-## 开发计划
-
-### ✅ 已完成
-- [x] 项目结构搭建
-- [x] 桌宠显示 & 鼠标交互（拖拽/左键/右键菜单）
-- [x] 状态管理系统（mood/energy/intimacy）
-- [x] 行为决策引擎 + 主动语音提示系统
-- [x] 单元测试覆盖
-- [x] **队员D接口管理层**（EchoTeamDInterface，14+ API）
-- [x] **队员C接口管理层**（EchoTeamCInterface，9 API）
-- [x] **队员B→D 自动同步**（Vision → State）
-- [x] **队员C↔D 双向回调**（TTS ↔ State）
-- [x] **主循环集成**（3秒定时检测 + 自动回应 + 表情切换）
-- [x] DeepSeek 真实 API 对接 + 本地降级
-- [x] Edge TTS 神经语音 + pyttsx3 离线回退
-- [x] pet_state 情绪/动作与 TTS 语音反馈同步
-- [x] 自定义语音包导入与切换
-- [x] **Live2D 模型渲染**（mao/mao_pro_zh/吗喽/精灵伯爵/Doro/红发）
-- [x] **运行时模型切换**（热切换 + 失败自动回滚）
-- [x] **电脑活动识别**（游戏/看剧/编程/办公/聊天等，带智能建议）
-- [x] **手势识别**（MediaPipe Hands：挥手/比心/OK/举手/捏合缩放）
-- [x] **共享摄像头架构**（多视觉模块复用同一摄像头流）
-- [x] **Q 键切换**摄像头/用户状态检测/手势检测
-- [x] **视觉调试面板**（实时预览摄像头画面 + 人脸/手势关键点）
-- [x] **聊天记忆系统**（滚动窗口 + JSON 持久化）
-- [x] Prompt 构建器（动态状态感知提示词）
-- [x] **虚拟宠物系统**（VPet 移植：物品/商店/打工/存档）
-- [x] **聊天情绪分析**（规则引擎：7 种情绪分类）
-- [x] **屏幕使用追踪**（按活动类型统计 + 超时提醒）
-- [x] **云端联机框架**（EventBus + AppContext + CloudPanel + SyncScheduler）
-- [x] **事件总线架构**（subscribe/emit/unsubscribe 模式）
-- [x] **集中上下文管理**（AppContext 持有所有模块引用）
-- [x] 流式打字机效果（分块推送到 UI 气泡）
-- [x] 表情识别（MediaPipe 特征点）
-- [x] 日志系统（控制台 + 文件 + 追踪）
-- [x] Demo-mode Mock 状态提供器（用户状态/手势/云端事件模拟）
-- [x] 个性化设置持久化（UI 设置 + 个性化画像）
-
-### 🔲 待开发
-- [ ] 真实 Qwen-VL 视觉 API 全面对接
-- [ ] 动画系统增强（帧序列播放）
-- [ ] 语音交互（麦克风输入）
-- [ ] 多桌宠支持（同时显示多个角色）
-- [ ] 云端房间全面对接（SharedPetRoomManager + CloudService）
-- [ ] Mac/Linux 跨平台支持
-
-## 外部声音包 / 音色库
-
-项目现在支持两种语音素材方式：可以把本地声音包作为桌宠语音来源，也可以只在 `voice_pack.json` 里存 TTS 音色参数，不放任何音频文件。请只导入你有权使用的音频/视频文件；不要提交或分发未经授权的语音资源。
-
-1. 如果要放音频，把文件放到 `assets/voice_packs/<pack_id>/`，例如 `assets/voice_packs/daji/click_001.wav`。
-2. 如果只用 API/TTS，在同目录 `voice_pack.json` 写 `voice_profiles` 即可。
-3. `neutral.click`、`happy.speak`、`speak` 等键会按当前 `pet_state` 的情绪/动作匹配。
-4. 在 `.env` 开启声音包或音色库：
+常用配置：
 
 ```env
-VOICE_PACK_ID=
-VOICE_PACK_ENABLED=true
-VOICE_PACK_MODE=prefer
-VOICE_PACK_AUTO_BY_PET=true
+DEEPSEEK_API_KEY=
+QWEN_VL_API_KEY=
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+
+DESKTOP_PET_USER_STATE_ENABLED=true
+DESKTOP_PET_CAMERA_ENABLED=false
+DESKTOP_PET_GESTURE_ENABLED=false
+DESKTOP_PET_QWEN_VL_ENABLED=false
+DESKTOP_PET_DEEPFACE_ENABLED=false
+DESKTOP_PET_FACE_MIMIC_ENABLED=false
+DESKTOP_PET_CLOUD_ENABLED=true
+DESKTOP_PET_CLOUD_ROOM_CODE=
 ```
 
-`VOICE_PACK_ID` 为空且 `VOICE_PACK_AUTO_BY_PET=true` 时，会自动尝试读取 `assets/voice_packs/<pet_id>/voice_pack.json`。例如当前桌宠 ID 是 `cat`，就会读取 `assets/voice_packs/cat/voice_pack.json`。
+`.env` 包含本地密钥和运行配置，不要提交到 Git。
 
-`VOICE_PACK_MODE=prefer` 会优先播放声音包，找不到匹配音频时自动回退到现有 TTS。也可以改成 `fallback`，让 TTS 失败后才尝试声音包；`off` 会同时关闭本地音频包和音色配置。
+### 5. 启动应用
 
-打开桌宠右键菜单 → 设置面板 → AI对话，可在“语音包选择”页点击“导入语音包”，填写名称、选择语言并导入一个或多个本地音频样本后，新语音包会以“语言名称”的形式自动出现在列表里。支持 `.wav`、`.mp3`、`.m4a`、`.flac`、`.ogg`、`.aac`、`.wma` 和 `.mp4`；导入 `.mp4` 时会用 ffmpeg 抽取音轨转成 `.mp3` 参与解析，原视频会保留。导入 WAV 样本时会额外生成轻度降噪副本用于后续分析参考，原始音频始终保留且优先。
+完整入口：
 
-## 许可证
+```bash
+python -m app.main
+```
 
-MIT License
+Windows 轻量演示模式：
 
-Copyright (c) 2024 SWT-0407
+```powershell
+.\run_demo.bat
+```
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+轻量演示模式会关闭摄像头、手势、DeepFace、Qwen-VL 等重能力，适合课堂展示或没有摄像头权限的环境。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+## 常用运行配置
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DESKTOP_PET_CAMERA_ENABLED` | `false` | 启动时是否打开摄像头 |
+| `DESKTOP_PET_USER_STATE_ENABLED` | `true` | 是否启用用户状态检测 |
+| `DESKTOP_PET_MOCK_USER_STATE` | `false` | 是否使用模拟用户状态 |
+| `DESKTOP_PET_GESTURE_FEATURE_ENABLED` | `true` | 是否启用手势功能总开关 |
+| `DESKTOP_PET_GESTURE_ENABLED` | `false` | 启动时是否开始手势检测 |
+| `DESKTOP_PET_QWEN_VL_ENABLED` | `false` | 是否启用 Qwen-VL 视觉接口 |
+| `DESKTOP_PET_DEEPFACE_ENABLED` | `false` | 是否启用 DeepFace 表情识别 |
+| `DESKTOP_PET_FACE_MIMIC_ENABLED` | `false` | 是否启用面部模仿相关能力 |
+| `DESKTOP_PET_CAMERA_INDEX` | `0` | 摄像头编号 |
+| `DESKTOP_PET_CAMERA_WIDTH` | `320` | 摄像头采集宽度 |
+| `DESKTOP_PET_CAMERA_HEIGHT` | `240` | 摄像头采集高度 |
+| `DESKTOP_PET_USER_DETECT_INTERVAL` | `0.4` | 用户状态检测间隔，单位秒 |
+| `DESKTOP_PET_GESTURE_POLL_MS` | `200` | 手势轮询间隔，单位毫秒 |
+| `DESKTOP_PET_CLOUD_ENABLED` | `true` | 是否启用云同步逻辑 |
+| `DESKTOP_PET_CLOUD_ROOM_CODE` | 空 | 自动加入的云端房间号 |
+| `DESKTOP_PET_MEMBER_ID` | 本机节点 ID | 云端共养成员 ID |
+
+## 交互说明
+
+| 操作 | 效果 |
+| --- | --- |
+| 左键点击桌宠 | 触发互动动作或反馈 |
+| 左键拖拽桌宠 | 移动桌宠位置 |
+| 右键点击桌宠 | 打开菜单或退出入口 |
+| 聊天输入框 | 与桌宠进行文字对话 |
+| 设置面板 | 配置角色、语音、显示、行为和云端功能 |
+| Q 键 | 切换摄像头、用户状态检测和手势检测相关能力 |
+| 摄像头手势 | 触发挥手、比心、OK、举手、捏合缩放等互动 |
+
+## 云端同步
+
+云端共养使用 Supabase。首次使用需要：
+
+1. 创建 Supabase 项目。
+2. 在 Supabase SQL Editor 中执行 [docs/SUPABASE_SCHEMA.sql](docs/SUPABASE_SCHEMA.sql)。
+3. 在 `.env` 中配置：
+
+```env
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_ANON_KEY=your-anon-key
+DESKTOP_PET_CLOUD_ROOM_CODE=TEAMROOM001
+```
+
+4. 启动应用后通过云端面板加入或同步房间。
+
+更多接口约定见 [docs/API_CONTRACTS.md](docs/API_CONTRACTS.md)，同步策略见 [docs/CLOUD_SYNC_RULES.md](docs/CLOUD_SYNC_RULES.md)。
+
+## 测试
+
+运行全部单元测试：
+
+```bash
+pytest
+```
+
+运行云端 stub 测试：
+
+```bash
+pytest tests/test_cloud_service_stub.py -v
+```
+
+运行 Supabase 真实连接测试：
+
+```bash
+python scripts/test_supabase_real_connection.py
+```
+
+真实连接测试需要 `.env` 中配置 `SUPABASE_URL` 和 `SUPABASE_ANON_KEY`，并且已创建对应表结构。
+
+## 辅助脚本与工具
+
+- `scripts/check_supabase_config.py`：检查 Supabase 配置。
+- `scripts/test_supabase_real_connection.py`：测试真实 Supabase 连接。
+- `scripts/collect_user_state_dataset.py`：采集用户状态数据。
+- `scripts/train_user_state_classifier.py`：训练用户状态分类器。
+- `tools/generate_live2d_action_presets.py`：生成 Live2D 动作预设。
+- `tools/build_live2d_appearance_catalog.py`：构建 Live2D 外观目录。
+- `tools/downscale_live2d_textures.py`：压缩 Live2D 贴图资源。
+
+## 开发注意事项
+
+- 不要提交 `.env`、真实 API Key、个人聊天记录或本地隐私数据。
+- `assets/pet_memory.json`、`assets/ai_memory/`、`assets/chat_history/`、`logs/` 等目录可能包含运行时数据，提交前需要确认内容。
+- 摄像头和语音输入能力依赖本机权限，首次运行可能需要系统授权。
+- DeepFace、MediaPipe、PyAudio、Live2D 相关依赖在不同 Python 版本和平台上的安装体验差异较大，建议优先在 Windows + Python 3.10/3.11 环境运行完整桌宠 UI。
+- Mac/Linux 支持不是当前主要目标，部分透明窗口、置顶和系统活动识别能力依赖 Windows API。
+
+## 当前状态
+
+项目已经具备桌宠 UI、Live2D 模型、对话、TTS、视觉感知、状态系统、VPet 玩法和云同步接口的主体实现。后续可继续完善真实视觉 API 对接、语音输入、多桌宠同时显示、云端事件合并和跨平台兼容。
