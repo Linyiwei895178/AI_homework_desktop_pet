@@ -8,6 +8,7 @@ import asyncio
 import ctypes
 import os
 import platform
+import queue
 import re
 import shutil
 import subprocess
@@ -246,6 +247,10 @@ class TTSManager:
                 if clip:
                     self._play_media(clip)
                     return str(clip)
+        return None
+
+    def shutdown(self) -> None:
+        """Compatibility hook for callers that own a TTSManager directly."""
         return None
 
     def _prepare_spoken_text(
@@ -695,7 +700,69 @@ def _positive_float_setting(value: Any, env_key: str, default: float) -> float:
         return default
 
 
+class AsyncTTSQueue:
+    """Single-worker speech queue used by app-level fire-and-forget calls."""
+
+    def __init__(self, manager: TTSManager, maxsize: int = 8):
+        self.manager = manager
+        self._queue: queue.Queue[tuple[str, str, str, str] | None] = queue.Queue(maxsize=max(1, int(maxsize)))
+        self._stop = threading.Event()
+        self._worker: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._last_key = ""
+        self._last_key_at = 0.0
+
+    def speak(self, text: str, pet_id: str = "cat", state: str = "neutral", action: str = "speak") -> bool:
+        value = (text or "").strip()
+        if not value or self._stop.is_set():
+            return False
+        now = time.time()
+        key = f"{pet_id}|{state}|{action}|{value}"
+        with self._lock:
+            if key == self._last_key and now - self._last_key_at < 2.0:
+                return False
+            self._last_key = key
+            self._last_key_at = now
+            self._ensure_worker_locked()
+        try:
+            self._queue.put_nowait((value, pet_id, state, action))
+            return True
+        except queue.Full:
+            print("[TTS] speech queue is full; dropping newest proactive voice task")
+            return False
+
+    def shutdown(self, timeout: float = 2.0) -> None:
+        self._stop.set()
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
+        worker = self._worker
+        if worker and worker.is_alive():
+            worker.join(timeout=max(0.0, float(timeout)))
+
+    def _ensure_worker_locked(self) -> None:
+        if self._worker and self._worker.is_alive():
+            return
+        self._worker = threading.Thread(target=self._run, name="tts-speech-queue", daemon=True)
+        self._worker.start()
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            task = self._queue.get()
+            if task is None:
+                break
+            text, pet_id, state, action = task
+            try:
+                self.manager.speak(text, pet_id=pet_id, state=state, action=action)
+            except Exception as exc:
+                print(f"[TTS] queued speech failed: {exc}")
+            finally:
+                self._queue.task_done()
+
+
 _default_manager: TTSManager | None = None
+_default_queue: AsyncTTSQueue | None = None
 
 
 def _manager() -> TTSManager:
@@ -705,5 +772,23 @@ def _manager() -> TTSManager:
     return _default_manager
 
 
+def _speech_queue() -> AsyncTTSQueue:
+    global _default_queue
+    if _default_queue is None:
+        _default_queue = AsyncTTSQueue(_manager())
+    return _default_queue
+
+
 def speak(text: str, pet_id: str = "cat", state: str = "neutral", action: str = "speak"):
+    return _speech_queue().speak(text, pet_id=pet_id, state=state, action=action)
+
+
+def speak_sync(text: str, pet_id: str = "cat", state: str = "neutral", action: str = "speak"):
     return _manager().speak(text, pet_id=pet_id, state=state, action=action)
+
+
+def shutdown_tts(timeout: float = 2.0) -> None:
+    global _default_queue
+    if _default_queue is not None:
+        _default_queue.shutdown(timeout=timeout)
+        _default_queue = None

@@ -182,6 +182,12 @@ class EchoTeamCInterface:
     def api_stop_long_text(self) -> None:
         self._long_text_stop.set()
 
+    def api_shutdown(self) -> None:
+        self._long_text_stop.set()
+        shutdown = getattr(self.assistant, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+
     def api_play_speech_hint(self, hint_text: str) -> threading.Thread | None:
         if not hint_text or not hint_text.strip():
             return None

@@ -28,7 +28,8 @@ from models.tts import voice_pack as voice_pack_module
 from models.tts.ai_voice_assistant import AIChatVoiceAssistant
 from models.tts.echo_team_c_interface import EchoTeamCInterface
 from models.tts.long_text_reader import combine_documents, read_book_file, split_text_for_tts
-from models.tts.tts_manager import TTSManager, _edge_synthesis_text
+from models.tts.proactive_speech import ProactiveSpeechPolicy, build_local_event_reply
+from models.tts.tts_manager import AsyncTTSQueue, TTSManager, _edge_synthesis_text
 from models.tts.language_match import (
     detect_text_language,
     language_from_edge_voice,
@@ -1342,6 +1343,70 @@ def test_ai_voice_assistant_filters_internal_prompt_before_tts():
     assert "用户刚做了" not in reply
     assert "OK" in reply
     assert tts.calls[-1]["text"] == reply
+
+
+def test_team_c_proactive_events_use_short_local_reply_and_cooldown():
+    tts = RecordingTTS()
+    assistant = AIChatVoiceAssistant(
+        llm_client=FakeLLM(),
+        tts_manager=tts,
+        memory=ChatMemory(max_rounds=2),
+        auto_tts=True,
+        stream_delay=0,
+    )
+
+    first = assistant.respond_to_status_event({"event_type": "gesture_event", "gesture_type": "wave"})
+    second = assistant.respond_to_status_event({"event_type": "gesture_event", "gesture_type": "wave"})
+
+    assert first
+    assert second == ""
+    assert "wave" not in first.lower()
+    assert len(tts.calls) == 1
+    assert tts.calls[-1]["text"] == first
+
+
+def test_team_c_proactive_policy_waits_during_user_chat():
+    policy = ProactiveSpeechPolicy()
+
+    allowed_chat = policy.should_speak({"event_type": "user_chat"}, user_chat_active=True, now=100.0)
+    blocked_alert = policy.should_speak(
+        {"event_type": "screen_time_reminder", "minutes": 90},
+        user_chat_active=True,
+        now=100.0,
+    )
+
+    assert allowed_chat is True
+    assert blocked_alert is False
+
+
+def test_team_c_local_event_templates_cover_required_event_types():
+    assert build_local_event_reply({"event_type": "user_state_alert", "state_code": "tired"})
+    assert build_local_event_reply({"event_type": "screen_time_reminder", "minutes": 80})
+    assert build_local_event_reply({"event_type": "cloud_room_event", "action_type": "join"})
+    assert build_local_event_reply({"event_type": "pet_state_event", "state": "hungry"})
+
+
+def test_async_tts_queue_returns_immediately_and_shutdowns():
+    class SlowManager:
+        def __init__(self):
+            self.started = threading.Event()
+            self.release = threading.Event()
+            self.calls = []
+
+        def speak(self, text, pet_id="cat", state="neutral", action="speak"):
+            self.started.set()
+            self.release.wait(timeout=1)
+            self.calls.append((text, pet_id, state, action))
+
+    manager = SlowManager()
+    queue = AsyncTTSQueue(manager, maxsize=2)
+
+    assert queue.speak("hello", pet_id="cat", state="happy", action="speak") is True
+    assert manager.started.wait(timeout=1)
+    assert queue.speak("hello", pet_id="cat", state="happy", action="speak") is False
+    manager.release.set()
+    queue.shutdown(timeout=1)
+    assert manager.calls == [("hello", "cat", "happy", "speak")]
 
 
 def test_prompt_builder_uses_english_for_english_response_language():

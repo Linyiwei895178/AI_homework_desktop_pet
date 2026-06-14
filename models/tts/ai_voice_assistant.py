@@ -16,12 +16,12 @@ from app.ui.ui_settings_store import load_ui_settings, merge_personalization_int
 from models.nlp.chat_memory import ChatMemory
 from models.nlp.deepseek_api import DeepSeekClient
 from models.nlp.prompt_builder import (
-    build_proactive_prompt,
     normalize_response_language,
     response_language_from_edge_voice,
 )
 from models.state.user_profile import UserProfile
 from models.tts.language_match import detect_text_language, language_family, languages_match
+from models.tts.proactive_speech import ProactiveSpeechPolicy, build_local_event_reply
 from models.tts.tts_manager import TTSManager
 
 
@@ -49,6 +49,8 @@ class AIChatVoiceAssistant:
         self._last_reply = ""
         self._tts_settings: Dict[str, Any] = {}
         self._lock = threading.RLock()
+        self._chat_active = False
+        self.proactive_policy = ProactiveSpeechPolicy()
 
     def set_pet_id(self, pet_id: str) -> None:
         value = (pet_id or "").strip()
@@ -87,6 +89,7 @@ class AIChatVoiceAssistant:
         if not text:
             return ""
 
+        self._chat_active = True
         voice_state, voice_action = self._voice_context(current_state)
         llm_state = self._state_with_response_language(current_state, voice_state, voice_action)
         response_language = self._response_language_from_state(llm_state)
@@ -118,6 +121,7 @@ class AIChatVoiceAssistant:
         if self.auto_tts and not tts_started:
             self._safe_play_voice(spoken_reply, state=voice_state, action=voice_action)
 
+        self._chat_active = False
         return display_reply
 
     def respond_to_status_event(
@@ -138,8 +142,26 @@ class AIChatVoiceAssistant:
         if event_type == "chat_finished":
             return ""
 
-        prompt = build_proactive_prompt(event_data)
-        return self.chat_with_context(prompt, current_state=event_data, callback_ui=callback_ui)
+        if not self.proactive_policy.should_speak(event_data, user_chat_active=self._chat_active):
+            return ""
+
+        voice_state, voice_action = self._voice_context(event_data)
+        reply = build_local_event_reply(event_data)
+        if self.proactive_policy.should_repeat_text(reply):
+            return ""
+
+        self._stream_to_ui(reply, callback_ui)
+        with self._lock:
+            self._last_reply = reply
+        self.proactive_policy.mark_spoken(event_data, reply)
+        if self.auto_tts:
+            self._play_voice_async(reply, state=voice_state, action=voice_action)
+        return reply
+
+    def shutdown(self) -> None:
+        stop = getattr(self.tts, "shutdown", None)
+        if callable(stop):
+            stop()
 
     def clear_memory(self) -> None:
         with self._lock:
