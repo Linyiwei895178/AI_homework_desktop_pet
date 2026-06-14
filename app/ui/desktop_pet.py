@@ -1940,22 +1940,25 @@ def _patch_arc_menu_paint(menu: ArcMotionMenu) -> None:
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setFont(font)
     for i, item in enumerate(menu.items):
-      pop = menu._pop_scale(i)
-      if pop <= 0.01:
+      alpha = menu._item_draw_alpha(i)
+      if alpha <= 0.01:
         continue
       hovered = i == menu.hover_index
       r = menu.button_rect(i, hovered)
       path = QPainterPath()
       path.addEllipse(QRectF(r))
+      base_a = int(225 * alpha)
       if hovered:
-        p.fillPath(path, QColor(255, 141, 161, 215))
+        p.fillPath(path, QColor(255, 141, 161, base_a))
+        p.setPen(QColor(255, 255, 255, int(255 * alpha)))
       else:
-        p.fillPath(path, QColor(255, 255, 255, 225))
-      p.setPen(QColor(255, 255, 255) if hovered else QColor(51, 51, 51))
+        p.fillPath(path, QColor(255, 255, 255, base_a))
+        p.setPen(QColor(51, 51, 51, int(255 * alpha)))
       label = str(item.get("label", ""))
       if len(label) > 8:
         label = label[:8]
       p.drawText(r, Qt.AlignmentFlag.AlignCenter, label)
+    menu._paint_page_button(p)
     p.end()
 
   menu.paintEvent = paintEvent  # type: ignore[method-assign]
@@ -1992,7 +1995,6 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
   if pet.arc_menu:
     pet.arc_menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     _patch_arc_menu_paint(pet.arc_menu)
-    _soft_shadow(pet.arc_menu, blur=20, offset_y=4, alpha=40)
   if pet.input_box and hasattr(pet.input_box, "_btn"):
     pet.input_box._btn.setStyleSheet(_btn_primary_qss(18, "0px 18px"))
     pet.input_box._btn.setMinimumHeight(30)
@@ -2293,7 +2295,7 @@ class PetWindow(QWidget):
     self._plane_player = PlanePetPlayer(self)
     self._plane_player.hide()
 
-    pet.arc_menu.setParent(self)
+    pet.arc_menu.attach_anchor(self, pet._pin_top)
     pet.context_menu.setParent(self)
     pet.pin_submenu.setParent(self)
     pet.hover_submenu.setParent(self)
@@ -2496,6 +2498,10 @@ class DesktopPet:
     self._follow_mouse_combo: QComboBox | None = None
     self._companion_bubble_active = False
     self._companion_bubble_token = 0
+    self._arc_overlay_saved = False
+    self._arc_saved_status_visible = False
+    self._arc_saved_chat_bubble_visible = False
+    self._arc_saved_input_visible = False
 
     self._computer_activity_config_enabled = _config_bool("COMPUTER_ACTIVITY_ENABLED", True)
     self._computer_companion_enabled = False
@@ -3398,6 +3404,7 @@ class DesktopPet:
     self.status_submenu.item_selected.connect(self._on_status_submenu_item_and_dismiss)
     self.chat_submenu.item_selected.connect(self._on_chat_submenu_item_and_dismiss)
     self.arc_menu.picked.connect(self._on_arc_motion_picked)
+    self.arc_menu.menu_hidden.connect(self._on_arc_menu_hidden)
     self._arc_hide_filter = _ArcMenuHideFilter(self)
     self.arc_menu.installEventFilter(self._arc_hide_filter)
     self._chat_stream = ChatStreamBridge()
@@ -3411,6 +3418,9 @@ class DesktopPet:
       return
     next_text = self.chat_bubble.text + ch
     if not self.chat_bubble.visible or not self.chat_bubble.isVisible():
+      if self._is_arc_menu_open():
+        self.chat_bubble.set_text(next_text)
+        return
       self._layout_bubbles(chat_text=next_text)
       return
     old_height = self.chat_bubble.height()
@@ -3488,9 +3498,83 @@ class DesktopPet:
         head_y = min(head_y, max_top)
     return max(margin, min(head_y - stack_h // 3, self._win_h - stack_h - margin))
 
+  def _is_arc_menu_open(self) -> bool:
+    return bool(self.arc_menu and self.arc_menu.visible)
+
+  def _save_and_hide_overlays_for_arc_menu(self) -> None:
+    self._arc_saved_status_visible = bool(
+      self._status_bar_enabled and self.info_bubble and self.info_bubble.isVisible()
+    )
+    self._arc_saved_chat_bubble_visible = bool(
+      self.chat_bubble and self.chat_bubble.isVisible()
+    )
+    self._arc_saved_input_visible = bool(
+      self._chat_open and self.input_box and self.input_box.isVisible()
+    )
+    self._arc_overlay_saved = True
+    if self.info_bubble:
+      self.info_bubble.hide()
+    if self.chat_bubble:
+      self.chat_bubble.hide()
+    if self.input_box:
+      self.input_box.hide()
+
+  def _restore_arc_overlay_bubbles(self) -> None:
+    if not self._arc_overlay_saved:
+      return
+    show_status = self._arc_saved_status_visible
+    show_chat = self._arc_saved_chat_bubble_visible
+    show_input = self._arc_saved_input_visible
+    self._arc_overlay_saved = False
+    if self._window is None:
+      return
+    gap = FLOATING_OVERLAY_STACK_GAP
+    items: list[tuple[QWidget, int, int]] = []
+    if show_status and self.info_bubble:
+      self._sync_info_bubble_stats()
+      self.info_bubble.show(0, 0)
+      items.append((self.info_bubble, self.info_bubble.width(), self.info_bubble.height()))
+    if show_input and self.input_box:
+      self.input_box.show(0, 0)
+      items.append((self.input_box, self.input_box.width(), self.input_box.height()))
+    if show_chat and self.chat_bubble:
+      self.chat_bubble.show(0, 0, self.chat_bubble.text)
+      self.chat_bubble._sync_text_geometry()
+      items.append((self.chat_bubble, self.chat_bubble.width(), self.chat_bubble.height()))
+    if not items:
+      return
+    stack_w = max(width for _widget, width, _height in items)
+    stack_h = sum(height for _widget, _width, height in items) + gap * (len(items) - 1)
+    preferred_y = self._stable_bubble_preferred_y(stack_h)
+    x, y = self._floating_overlay_pos(stack_w, stack_h, preferred_y)
+    cursor_y = y
+    for widget, width, height in items:
+      widget.move(x, cursor_y)
+      widget.raise_()
+      cursor_y += height + gap
+    self._raise_ui_overlays()
+
+  def _open_arc_motion_menu(self) -> None:
+    center = self._head_center()
+    items = self._current_arc_motion_items()
+    if not items:
+      print("[DesktopPet] 当前角色没有可用动作")
+      return
+    self._save_and_hide_overlays_for_arc_menu()
+    if self._window is not None:
+      self.arc_menu.attach_anchor(self._window, self._pin_top)
+    self.arc_menu.show(center[0], center[1], items)
+    self.arc_menu.raise_()
+    if self._window:
+      self._lower_character_layer()
+      self._window.setFocus()
+    self._set_gl_mouse_passthrough(True)
+
   def _layout_bubbles(self, chat_text: str | None = None) -> None:
     """独立浮动窗口：贴在桌宠外侧垂直堆叠。"""
     if self._window is None:
+      return
+    if self._is_arc_menu_open():
       return
     gap = FLOATING_OVERLAY_STACK_GAP
 
@@ -3533,7 +3617,7 @@ class DesktopPet:
 
   def _reflow_visible_bubbles(self) -> None:
     """桌宠移动/缩放后重新定位独立浮动气泡。"""
-    if self._window is None:
+    if self._window is None or self._is_arc_menu_open():
       return
     gap = FLOATING_OVERLAY_STACK_GAP
     items: list[tuple[QWidget, int, int]] = []
@@ -5057,6 +5141,8 @@ class DesktopPet:
         self._window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
       self._window.show()
     self._sync_floating_overlay_flags()
+    if self.arc_menu and self.arc_menu.visible and self._window is not None:
+      self.arc_menu.attach_anchor(self._window, self._pin_top)
     if self._status_bar_enabled or self._chat_open:
       self._layout_bubbles()
     if self.pin_submenu:
@@ -5300,7 +5386,12 @@ class DesktopPet:
       self.chat_submenu.hide()
 
     if self.arc_menu and self.arc_menu.visible:
-      picked = self.arc_menu.handle_click(self._to_global(pos))
+      gpos = self._to_global(pos)
+      lp = self.arc_menu.mapFromGlobal(QPoint(*gpos))
+      if self.arc_menu._page_button_hit(lp):
+        self.arc_menu.next_page()
+        return True
+      picked = self.arc_menu.handle_click(gpos)
       if picked:
         self._on_arc_motion_picked(picked)
         return True
@@ -5459,6 +5550,7 @@ class DesktopPet:
     self._update_mouse_passthrough(pos)
 
   def _on_arc_menu_hidden(self) -> None:
+    self._restore_arc_overlay_bubbles()
     if not self._any_menu_open():
       self._restore_window_focus()
 
@@ -5504,17 +5596,7 @@ class DesktopPet:
     if item == "设置面板":
       self._open_settings_panel()
     elif item == "动作展示":
-      center = self._head_center()
-      items = self._current_arc_motion_items()
-      if not items:
-        print("[DesktopPet] 当前角色没有可用动作")
-        return
-      self.arc_menu.show(center[0], center[1], items)
-      self.arc_menu.raise_()
-      if self._window:
-        self._lower_character_layer()
-        self._window.setFocus()
-      self._set_gl_mouse_passthrough(True)
+      self._open_arc_motion_menu()
     elif item == "待机":
       if self._is_flat_mode():
         player = self._plane_player()

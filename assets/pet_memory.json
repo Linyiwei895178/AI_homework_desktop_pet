@@ -2,8 +2,8 @@
   "last_pet_id": "doro",
   "pin_top": true,
   "hover_fade": false,
-  "status_bar": true,
-  "chat_open": true,
+  "status_bar": false,
+  "chat_open": false,
   "voice_pack_id": "",
   "tts_settings": {
     "enabled": true,
@@ -33,8 +33,8 @@
     "tts_volume": ""
   },
   "position": [
-    203,
-    268
+    375,
+    251
   ],
   "window_size": [
     376,

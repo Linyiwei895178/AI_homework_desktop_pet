@@ -944,18 +944,27 @@ def _ease_out_back(t: float) -> float:
 
 class ArcMotionMenu(QWidget, ScalableOverlay):
     _BASE_RADIUS = 170
-    _BASE_BUTTON_SIZE = 52
+    _BASE_BUTTON_SIZE = 56
+    _BASE_ACTION_FONT = 14
+    _BASE_ACTION_FONT_MID = 12
+    _BASE_ACTION_FONT_SMALL = 10
     _BASE_RING_GAP = 85
+    _BASE_PAGE_BTN_WIDTH = 72
+    _BASE_PAGE_BTN_HEIGHT = 28
+    _BASE_PAGE_BTN_GAP = 20
+    _BASE_PAGE_BTN_Y_OFFSET = 14
+    _BASE_PAGE_BTN_FONT = 12
     RADIUS = 170
-    BUTTON_SIZE = 52
+    BUTTON_SIZE = 56
     RING_GAP = 85
-    MAX_ITEMS_PER_RING = 9
-    MIN_BUTTON_GAP = 12
+    ITEMS_PER_PAGE = 6
     HOVER_SCALE = 1.1
     ANIM_DURATION = 0.42
     STAGGER = 0.045
+    PAGE_FADE_DURATION = 0.22
 
     picked = Signal(dict)
+    menu_hidden = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -963,10 +972,22 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.visible = False
         self.center_x = self.center_y = 0
+        self._anchor_x = 0
+        self._anchor_y = 0
+        self._anchor_widget: Optional[QWidget] = None
+        self._pin_top = False
+        self._all_items: list[dict[str, Any]] = []
         self.items: list[dict[str, Any]] = []
+        self._page_index = 0
+        self._content_alpha = 1.0
         self.hover_index = -1
+        self._page_btn_hover = False
         self._selected: Optional[dict[str, Any]] = None
         self._elapsed = 0.0
+        self._page_btn_width = self._BASE_PAGE_BTN_WIDTH
+        self._page_btn_height = self._BASE_PAGE_BTN_HEIGHT
+        self._page_btn_gap = self._BASE_PAGE_BTN_GAP
+        self._page_btn_y_offset = self._BASE_PAGE_BTN_Y_OFFSET
         self._font = _app_font(12)
         self.hide()
 
@@ -977,50 +998,198 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
         self.RING_GAP = _scaled_int(self._BASE_RING_GAP, self._ui_scale, 52)
         self._font = _app_font(_scaled_int(12, self._ui_scale, 9))
 
-    def show_menu(self, center_x: int, center_y: int, items: list[dict[str, Any]]) -> None:
-        self.center_x, self.center_y = center_x, center_y
-        self.items = list(items)
-        self.visible = True
+    @staticmethod
+    def _format_action_label(raw: str) -> tuple[str, int]:
+        """按字数返回展示文案与字号（直径固定 56px）。"""
+        text = str(raw or "").strip()
+        n = len(text)
+        if n > 8:
+            return text[:6] + "...", ArcMotionMenu._BASE_ACTION_FONT_SMALL
+        if n > 6:
+            return text, ArcMotionMenu._BASE_ACTION_FONT_SMALL
+        if n > 4:
+            return text, ArcMotionMenu._BASE_ACTION_FONT_MID
+        return text, ArcMotionMenu._BASE_ACTION_FONT
+
+    def _action_label_font(self, font_size: int) -> QFont:
+        return _app_font(_scaled_int(font_size, self._ui_scale, 8))
+
+    def _paint_action_buttons(self, p: QPainter, *, theme: str = "pet") -> None:
+        for i, item in enumerate(self.items):
+            alpha = self._item_draw_alpha(i)
+            if alpha <= 0.01:
+                continue
+            hovered = i == self.hover_index
+            r = self.button_rect(i, hovered)
+            path = QPainterPath()
+            path.addEllipse(QRectF(r))
+            base_a = int(225 * alpha)
+            if theme == "pet":
+                if hovered:
+                    p.fillPath(path, QColor(255, 141, 161, base_a))
+                    text_color = QColor(255, 255, 255, int(255 * alpha))
+                else:
+                    p.fillPath(path, QColor(255, 255, 255, base_a))
+                    text_color = QColor(51, 51, 51, int(255 * alpha))
+            else:
+                if hovered:
+                    p.fillPath(path, QColor(230, 240, 255, base_a))
+                else:
+                    p.fillPath(path, QColor(255, 255, 255, int(180 * alpha)))
+                text_color = QColor(30, 30, 40, int(255 * alpha))
+            raw_label = str(item.get("label", ""))
+            display_label, font_size = self._format_action_label(raw_label)
+            p.setPen(text_color)
+            p.setFont(self._action_label_font(font_size))
+            p.drawText(
+                r,
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                display_label,
+            )
+
+    def _install_paint_event(self) -> None:
+        """覆盖外部 paint 补丁，确保动作按钮字体自适应生效。"""
+        if getattr(self, "_arc_paint_bound", None) is not self._on_arc_paint_event:
+            self._arc_paint_bound = self._on_arc_paint_event
+            self.paintEvent = self._on_arc_paint_event  # type: ignore[method-assign]
+
+    def _on_arc_paint_event(self, _event) -> None:
+        if not self.visible:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._paint_action_buttons(p, theme="pet")
+        self._paint_page_button(p)
+        p.end()
+
+    def attach_anchor(self, widget: QWidget, pin_top: bool = False) -> None:
+        """锚定到桌宠窗口；菜单以独立浮动窗显示，避免右侧按钮被父窗口裁切。"""
+        self._anchor_widget = widget
+        self._pin_top = bool(pin_top)
+        if self.visible:
+            self._ensure_floating_window()
+            self._update_geometry()
+
+    def _ensure_floating_window(self) -> None:
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        if self._pin_top:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        was_visible = self.isVisible()
+        self.setParent(None)
+        self.setWindowFlags(flags)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setAutoFillBackground(False)
+        try:
+            self.setGraphicsEffect(None)
+        except Exception:
+            pass
+        if was_visible:
+            QWidget.show(self)
+
+    def _needs_pagination(self) -> bool:
+        return len(self._all_items) > self.ITEMS_PER_PAGE
+
+    def _total_pages(self) -> int:
+        if not self._all_items:
+            return 0
+        return (len(self._all_items) + self.ITEMS_PER_PAGE - 1) // self.ITEMS_PER_PAGE
+
+    def _apply_page_items(self) -> None:
+        start = self._page_index * self.ITEMS_PER_PAGE
+        self.items = list(self._all_items[start:start + self.ITEMS_PER_PAGE])
+
+    def next_page(self) -> None:
+        """切换到下一页；最后一页后回到第一页。"""
+        if not self._needs_pagination():
+            return
+        self._page_index = (self._page_index + 1) % self._total_pages()
+        self._apply_page_items()
         self.hover_index = -1
         self._elapsed = 0.0
-        ring_count = len(self._rings())
-        max_radius = self.RADIUS + max(0, ring_count - 1) * self.RING_GAP
-        pad = max_radius + self.BUTTON_SIZE + 36
-        self.setGeometry(center_x - pad, center_y - pad, pad * 2, pad * 2)
+        self._content_alpha = 0.0
+        self._update_geometry()
+        self.update()
+
+    def show_menu(self, center_x: int, center_y: int, items: list[dict[str, Any]]) -> None:
+        """打开环形菜单；桌宠侧应在调用前隐藏状态栏与对话气泡。"""
+        self._anchor_x = int(center_x)
+        self._anchor_y = int(center_y)
+        self._all_items = list(items)
+        self._page_index = 0
+        self._content_alpha = 1.0
+        self._apply_page_items()
+        self.visible = True
+        self.hover_index = -1
+        self._page_btn_hover = False
+        self._elapsed = 0.0
+        if self._anchor_widget is not None:
+            self._ensure_floating_window()
+        self._update_geometry()
+        self._install_paint_event()
         super().show()
         self.raise_()
+        self.update()
+
+    def _arc_right_local_x(self) -> int:
+        """弧形最右侧（含动作按钮外沿，控件局部坐标）。"""
+        return self.center_x + self.RADIUS + self.BUTTON_SIZE // 2
+
+    def _update_geometry(self) -> None:
+        base_pad = self.RADIUS + self.BUTTON_SIZE + 36
+        left_pad = base_pad
+        top_pad = base_pad
+        right_pad = base_pad
+        bottom_pad = base_pad
+        if self._needs_pagination():
+            btn_extent = self._page_btn_gap + self._page_btn_width + 40
+            right_pad = max(right_pad, base_pad + btn_extent)
+        width = left_pad + right_pad
+        height = top_pad + bottom_pad
+        if self._anchor_widget is not None:
+            gp = self._anchor_widget.mapToGlobal(QPoint(self._anchor_x, self._anchor_y))
+            self.setGeometry(gp.x() - left_pad, gp.y() - top_pad, width, height)
+        else:
+            self.setGeometry(
+                self._anchor_x - left_pad,
+                self._anchor_y - top_pad,
+                width,
+                height,
+            )
+        self.center_x = left_pad
+        self.center_y = top_pad
 
     def show(self, center_x: int, center_y: int, items: list[dict[str, Any]]) -> None:
         self.show_menu(center_x, center_y, items)
 
     def hide(self) -> None:
+        was_open = self.visible
         self.visible = False
         super().hide()
+        if was_open:
+            self.menu_hidden.emit()
 
     def tick(self, dt: float) -> None:
-        if self.visible:
-            self._elapsed += dt
-            self.update()
+        if not self.visible:
+            return
+        self._elapsed += dt
+        if self._content_alpha < 1.0:
+            step = dt / max(0.05, self.PAGE_FADE_DURATION)
+            self._content_alpha = min(1.0, self._content_alpha + step)
+        self.update()
 
     def _rings(self) -> list[list[int]]:
-        """Group item indices into rings. Each ring has at most MAX_ITEMS_PER_RING items."""
         n = len(self.items)
         if n == 0:
             return []
-        cap = self.MAX_ITEMS_PER_RING
-        if n <= cap:
-            return [list(range(n))]
-        # Determine number of rings
-        nrings = max(2, (n + cap - 1) // cap)
-        # Distribute items as evenly as possible
-        rings: list[list[int]] = [[] for _ in range(nrings)]
-        for i in range(n):
-            # Fill from outer rings inward, but keep order
-            rings[i % nrings].append(i)
-        return rings
+        return [list(range(n))]
 
     def _ring_for_index(self, index: int) -> tuple[int, int, int]:
-        """Return (ring_index, index_in_ring, count_in_ring) for a given global index."""
         rings = self._rings()
         for ri, ring in enumerate(rings):
             if index in ring:
@@ -1043,7 +1212,7 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
         deg = math.radians(self._angle_deg_in_ring(idx_in_r, cnt_in_r))
         x = self.center_x + int(radius * math.sin(deg))
         y = self.center_y - int(radius * math.cos(deg))
-        return x - self.x(), y - self.y()
+        return x, y
 
     def _pop_scale(self, index: int) -> float:
         start = index * self.STAGGER
@@ -1051,8 +1220,11 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
             return 0.0
         return _ease_out_back(min(1.0, (self._elapsed - start) / self.ANIM_DURATION))
 
+    def _item_draw_alpha(self, index: int) -> float:
+        return self._pop_scale(index) * self._content_alpha
+
     def button_rect(self, index: int, hover: bool = False) -> QRect:
-        pop = self._pop_scale(index)
+        pop = self._item_draw_alpha(index)
         if pop <= 0.01:
             return QRect(0, 0, 0, 0)
         scale = pop * (self.HOVER_SCALE if hover else 1.0)
@@ -1060,39 +1232,65 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
         cx, cy = self._btn_center(index)
         return QRect(cx - size // 2, cy - size // 2, size, size)
 
-    def hit_region(self) -> QRect:
-        if not self.items:
+    def _page_button_rect(self) -> QRect:
+        """换一批：贴在弧形右侧，垂直居中。"""
+        if not self._needs_pagination():
             return QRect()
-        pts = [self._btn_center(i) for i in range(len(self.items))]
-        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-        ring_count = len(self._rings())
-        max_radius = self.RADIUS + max(0, ring_count - 1) * self.RING_GAP
-        pad = max_radius + self.BUTTON_SIZE
-        return QRect(min(xs) - pad, min(ys) - pad, max(xs) - min(xs) + pad * 2, max(ys) - min(ys) + pad * 2)
+        left = self._arc_right_local_x() + self._page_btn_gap
+        top = self.center_y - self._page_btn_y_offset
+        return QRect(left, top, self._page_btn_width, self._page_btn_height)
+
+    def _page_button_hit(self, local_pos: QPoint) -> bool:
+        if not self._needs_pagination():
+            return False
+        return self._page_button_rect().contains(local_pos)
+
+    def hit_region(self) -> QRect:
+        if not self.items and not self._needs_pagination():
+            return QRect()
+        rects: list[QRect] = []
+        for i in range(len(self.items)):
+            r = self.button_rect(i)
+            if r.width() > 0 and r.height() > 0:
+                rects.append(r)
+        if self._needs_pagination():
+            rects.append(self._page_button_rect())
+        if not rects:
+            return QRect()
+        min_x = min(r.left() for r in rects)
+        min_y = min(r.top() for r in rects)
+        max_x = max(r.right() for r in rects)
+        max_y = max(r.bottom() for r in rects)
+        pad = self.BUTTON_SIZE // 2 + 8
+        return QRect(min_x - pad, min_y - pad, max_x - min_x + pad * 2, max_y - min_y + pad * 2)
 
     def hover_at(self, mouse_pos: tuple[int, int] | None = None) -> None:
         if not self.visible:
             self.hover_index = -1
+            self._page_btn_hover = False
             return
         lp = self.mapFromGlobal(QPoint(*mouse_pos)) if mouse_pos else None
         self.hover_index = -1
-        if lp:
-            pick = self._pick_item_at(lp)
-            if pick is not None:
-                for i, item in enumerate(self.items):
-                    if item is pick:
-                        self.hover_index = i
-                        break
+        self._page_btn_hover = False
+        if lp is not None:
+            if self._page_button_hit(lp):
+                self._page_btn_hover = True
+            else:
+                pick = self._pick_item_at(lp)
+                if pick is not None:
+                    for i, item in enumerate(self.items):
+                        if item is pick:
+                            self.hover_index = i
+                            break
         QWidget.update(self)
 
     def update(self, mouse_pos: tuple[int, int] | None = None) -> None:
         self.hover_at(mouse_pos)
 
     def _pick_item_at(self, local_pos: QPoint) -> Optional[dict[str, Any]]:
-        """Find the closest item near local_pos using distance-based picking."""
         candidates: list[tuple[int, int]] = []
         for i in range(len(self.items)):
-            if self._pop_scale(i) <= 0.2:
+            if self._item_draw_alpha(i) <= 0.2:
                 continue
             r = self.button_rect(i)
             if r.adjusted(-4, -4, 4, 4).contains(local_pos):
@@ -1109,36 +1307,50 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
     def handle_click(self, mouse_pos: tuple[int, int]) -> Optional[dict[str, Any]]:
         lp = self.mapFromGlobal(QPoint(*mouse_pos))
         self.hover_index = -1
+        self._page_btn_hover = False
+        if self._page_button_hit(lp):
+            return None
         pick = self._pick_item_at(lp)
         if pick is not None:
             self._selected = pick
             return pick
         return None
 
-    def paintEvent(self, _event) -> None:
-        if not self.visible:
+    def _paint_page_button(self, p: QPainter) -> None:
+        if not self._needs_pagination():
             return
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setFont(self._font)
-        for i, item in enumerate(self.items):
-            pop = self._pop_scale(i)
-            if pop <= 0.01:
-                continue
-            hovered = i == self.hover_index
-            r = self.button_rect(i, hovered)
-            path = QPainterPath()
-            path.addEllipse(QRectF(r))
-            p.fillPath(path, QColor(230, 240, 255, 220) if hovered else QColor(255, 255, 255, 180))
-            label = str(item.get("label", ""))
-            if len(label) > 5:
-                label = label[:4] + "…"
-            p.setPen(QColor(30, 30, 40))
-            p.drawText(r, Qt.AlignmentFlag.AlignCenter, label)
-        p.end()
+        r = self._page_button_rect()
+        if r.isEmpty():
+            return
+        alpha = max(0.85, self._content_alpha)
+        if self._page_btn_hover:
+            border = QColor(71, 85, 105, int(255 * alpha))
+            text_color = QColor(51, 65, 85, int(255 * alpha))
+            fill = QColor(255, 255, 255, int(245 * alpha))
+        else:
+            border = QColor(148, 163, 184, int(255 * alpha))
+            text_color = QColor(71, 85, 105, int(255 * alpha))
+            fill = QColor(255, 255, 255, int(235 * alpha))
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(r), 6.0, 6.0)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.fillPath(path, fill)
+        p.setPen(QPen(border, 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+        p.setPen(text_color)
+        p.setFont(_app_font(self._BASE_PAGE_BTN_FONT))
+        p.drawText(r, Qt.AlignmentFlag.AlignCenter, "⟳ 换一批")
+
+    def paintEvent(self, _event) -> None:
+        self._on_arc_paint_event(_event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        pick = self._pick_item_at(event.pos())
+        lp = event.pos()
+        if self._page_button_hit(lp):
+            self.next_page()
+            return
+        pick = self._pick_item_at(lp)
         if pick is not None:
             self._selected = pick
             self.picked.emit(pick)
