@@ -29,6 +29,10 @@ from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
+from models.vision.user_state_classifier import UserStateClassifier
+from models.vision.user_state_features import UserStateFeatureExtractor
+from models.vision.user_state_smoother import UserStateSmoother
+
 # ========== 状态大类常量：已经发给队友，不要随意修改 ========== 
 
 STATE_NORMAL = "normal"
@@ -249,6 +253,9 @@ class UserStateDetector:
         self._last_emotion_failure_at: float = 0.0
         self._last_emotion_result: Any = None
         self._emotion_busy: bool = False
+        self._feature_extractor = UserStateFeatureExtractor(window_seconds=3.0)
+        self._state_classifier = UserStateClassifier()
+        self._state_smoother = UserStateSmoother()
 
     # ==================== 对外接口 ====================
 
@@ -766,6 +773,12 @@ class UserStateDetector:
             "present_duration": round(float(present_duration), 2),
             "study_duration": round(float(study_duration), 2),
         }
+
+        features = self._feature_extractor.update(
+            frame=frame,
+            face_landmarker_result=face_info.get("landmarks"),
+            timestamp=now,
+        )
         with self._lock:
             self._last_debug_face_info = dict(face_info)
             self._last_debug_analysis_info = dict(analysis_info)
@@ -830,29 +843,7 @@ class UserStateDetector:
                 self._merge_source(source, "rule"),
             )
 
-        # 5. 优先级判断：疲劳 > 分心低头 > 学习过久 > 暗光 > 专注 > 正常
-        if eyes_closed_duration >= self._tired_eye_seconds:
-            return self._build_state(
-                STATE_TIRED,
-                "用户闭眼时间较长，疑似疲劳或困倦。",
-                ["闭眼", "疲劳", "需要休息"],
-                0.86,
-                True,
-                "建议桌宠提醒用户休息、喝水或活动一下。",
-                self._merge_source(source, "rule"),
-            )
-
-        if looking_down_duration >= self._looking_down_seconds:
-            return self._build_state(
-                STATE_DISTRACTED,
-                "用户低头时间较长，但仍检测到头部/人脸，疑似低头看手机或注意力分散。",
-                ["低头", "疑似分心", "人在座位"],
-                0.80,
-                True,
-                "建议桌宠用轻松语气提醒用户抬头并回到学习任务。",
-                self._merge_source(source, "rule"),
-            )
-
+        # 5. 高优先级规则层：这些状态不交给轻量模型判断。
         if study_duration >= self._study_long_seconds:
             return self._build_state(
                 STATE_STUDY_LONG,
@@ -875,25 +866,97 @@ class UserStateDetector:
                 self._merge_source(source, "rule"),
             )
 
-        if present_duration >= self._focused_seconds and not looking_down and not eyes_closed:
+        # 6. 轻量分类器只负责 normal / focused / distracted / tired。
+        classifier_result = self._state_classifier.predict(features)
+        classifier_code = str(classifier_result.get("state_code", STATE_NORMAL) or STATE_NORMAL)
+
+        # 明显闭眼持续时给模型一个保守兜底，避免 tired 被 distracted/normal 吃掉。
+        if eyes_closed_duration >= self._tired_eye_seconds and classifier_code != STATE_TIRED:
+            classifier_result = {
+                "state_code": STATE_TIRED,
+                "confidence": max(0.66, float(classifier_result.get("confidence", 0.0) or 0.0)),
+                "reason": "rule_assist:eyes_closed_duration",
+                "source": "rule_fallback",
+            }
+            classifier_code = STATE_TIRED
+
+        smoothed = self._state_smoother.update(classifier_code, now=now)
+        smoothed_code = str(smoothed.get("state_code", STATE_NORMAL) or STATE_NORMAL)
+        model_state = self._build_classifier_state(
+            smoothed_code,
+            classifier_result,
+            source,
+            smoothed,
+        )
+        with self._lock:
+            analysis = dict(self._last_debug_analysis_info)
+            analysis["classifier_state"] = classifier_code
+            analysis["classifier_confidence"] = classifier_result.get("confidence", 0.0)
+            analysis["classifier_reason"] = classifier_result.get("reason", "")
+            analysis["smoother_state"] = smoothed_code
+            analysis["smoother_reason"] = smoothed.get("reason", "")
+            self._last_debug_analysis_info = analysis
+        return model_state
+
+    def _build_classifier_state(
+        self,
+        state_code: str,
+        classifier_result: dict,
+        base_source: List[str],
+        smoother_result: dict,
+    ) -> dict:
+        """Convert lightweight classifier output into the public get_state schema."""
+        state_code = state_code if state_code in {STATE_NORMAL, STATE_FOCUSED, STATE_DISTRACTED, STATE_TIRED} else STATE_NORMAL
+        raw_code = str(classifier_result.get("state_code", STATE_NORMAL) or STATE_NORMAL)
+        confidence = float(classifier_result.get("confidence", 0.0) or 0.0)
+        if raw_code != state_code:
+            confidence = min(confidence, 0.64)
+
+        source = self._merge_source(base_source, classifier_result.get("source", "rule_fallback"))
+        source = self._merge_source(source, "state_smoother")
+
+        if state_code == STATE_TIRED:
+            return self._build_state(
+                STATE_TIRED,
+                "轻量分类器判断用户可能处于疲劳状态。",
+                ["疲劳", "轻量模型", "需要休息"],
+                max(0.65, confidence),
+                True,
+                "建议桌宠提醒用户休息眼睛、喝水或活动一下。",
+                source,
+            )
+        if state_code == STATE_DISTRACTED:
+            return self._build_state(
+                STATE_DISTRACTED,
+                "轻量分类器判断用户注意力可能分散。",
+                ["疑似分心", "轻量模型", "人在座位"],
+                max(0.70, confidence),
+                True,
+                "建议桌宠用轻松语气提醒用户回到当前任务。",
+                source,
+            )
+        if state_code == STATE_FOCUSED:
             return self._build_state(
                 STATE_FOCUSED,
-                "用户在座位上，状态稳定，疑似正在专注学习。",
-                ["在座位", "学习中", "状态稳定"],
-                0.84,
+                "轻量分类器判断用户状态稳定，疑似正在专注。",
+                ["专注", "轻量模型", "状态稳定"],
+                max(0.65, confidence),
                 False,
                 "保持安静陪伴，暂时不主动打扰。",
-                self._merge_source(source, "rule"),
+                source,
             )
 
+        tags = ["正常", "轻量模型"]
+        if smoother_result.get("candidate_state"):
+            tags.append("状态平滑中")
         return self._build_state(
             STATE_NORMAL,
-            "用户在座位上，姿态基本正常。",
-            ["在座位", "正常"],
-            0.78,
+            "轻量分类器判断用户处于正常状态。",
+            tags,
+            max(0.60, confidence),
             False,
             "保持普通陪伴即可。",
-            self._merge_source(source, "rule"),
+            source,
         )
 
     def _detect_face_or_head(self, frame: Any) -> dict:
@@ -1624,6 +1687,9 @@ class UserStateDetector:
 
             old_code = self._current_state.get("state_code")
             self._current_state = copy.deepcopy(new_state)
+
+        if new_code != old_code:
+            print(f"[UserStateDetector] 状态变化: {old_code} -> {new_code}")
 
         if self._callback and new_code != old_code:
             try:
