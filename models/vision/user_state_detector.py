@@ -890,11 +890,18 @@ class UserStateDetector:
         )
         with self._lock:
             analysis = dict(self._last_debug_analysis_info)
+            classifier_debug = dict(classifier_result.get("debug_info", {}) or {})
             analysis["classifier_state"] = classifier_code
             analysis["classifier_confidence"] = classifier_result.get("confidence", 0.0)
             analysis["classifier_reason"] = classifier_result.get("reason", "")
+            analysis["classifier_debug"] = classifier_debug
+            analysis["classifier_raw_probs"] = classifier_debug.get("raw_probs", {})
+            analysis["classifier_raw_top_label"] = classifier_debug.get("raw_top_label", "")
+            analysis["classifier_raw_top_confidence"] = classifier_debug.get("raw_top_confidence", 0.0)
             analysis["smoother_state"] = smoothed_code
             analysis["smoother_reason"] = smoothed.get("reason", "")
+            analysis["smoother_candidate_state"] = smoothed.get("candidate_state")
+            analysis["smoother_candidate_elapsed"] = smoothed.get("candidate_elapsed", 0.0)
             self._last_debug_analysis_info = analysis
         return model_state
 

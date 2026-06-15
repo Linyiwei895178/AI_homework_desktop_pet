@@ -8,6 +8,7 @@ numeric per-frame features and rolling-window statistics.
 from __future__ import annotations
 
 import math
+import os
 import time
 from collections import deque
 from statistics import mean, pstdev
@@ -43,6 +44,9 @@ FRAME_FEATURE_FIELDS = [
 WINDOW_FEATURE_FIELDS = [
     "head_yaw_mean",
     "head_yaw_std",
+    "head_yaw_min",
+    "head_yaw_max",
+    "head_yaw_range",
     "head_pitch_mean",
     "head_pitch_std",
     "eye_closed_ratio",
@@ -52,6 +56,7 @@ WINDOW_FEATURE_FIELDS = [
     "brightness_mean",
     "face_bbox_area_mean",
     "face_center_x_mean",
+    "face_center_x_std",
     "face_center_y_mean",
     "motion_stability",
     "recent_duration",
@@ -66,6 +71,31 @@ class UserStateFeatureExtractor:
     def __init__(self, window_seconds: float = 3.0) -> None:
         self.window_seconds = max(0.5, float(window_seconds))
         self._frames: Deque[dict[str, float]] = deque()
+        self._neutral_pitch: float | None = None
+        self._neutral_pitch_started_at: float | None = None
+        self._neutral_pitch_samples: Deque[float] = deque(maxlen=30)
+        self._neutral_yaw: float | None = None
+        self._neutral_yaw_started_at: float | None = None
+        self._neutral_yaw_samples: Deque[float] = deque(maxlen=30)
+        self._neutral_calibration_seconds = max(
+            0.5,
+            self._env_float("DESKTOP_PET_NEUTRAL_PITCH_SECONDS", 2.0),
+        )
+        self._pitch_delta_threshold = max(
+            5.0,
+            self._env_float("DESKTOP_PET_LOOKING_DOWN_PITCH_DELTA", 12.0),
+        )
+        pitch_mode = os.getenv("DESKTOP_PET_LOOKING_DOWN_MODE", "abs").strip().lower()
+        legacy_sign = os.getenv("DESKTOP_PET_LOOKING_DOWN_SIGN", "").strip().lower()
+        if legacy_sign in {"negative", "-1", "down_negative"}:
+            pitch_mode = "negative"
+        elif legacy_sign in {"positive", "1", "+1", "down_positive"}:
+            pitch_mode = "positive"
+        self._looking_down_mode = pitch_mode if pitch_mode in {"abs", "positive", "negative"} else "abs"
+        self._yaw_delta_threshold = max(
+            10.0,
+            self._env_float("DESKTOP_PET_LOOKING_SIDE_YAW_DELTA", 20.0),
+        )
 
     def update(
         self,
@@ -106,6 +136,8 @@ class UserStateFeatureExtractor:
         mouth_open = self._mouth_open(landmarks, bbox, blendshapes)
         smile = self._smile(landmarks, bbox, blendshapes)
         brow_raise = self._brow_raise(landmarks, bbox, blendshapes)
+        looking_down = self._estimate_looking_down_from_pitch(pitch, ts)
+        looking_side = self._estimate_looking_side_from_yaw(yaw, ts, center_x)
 
         values.update(
             {
@@ -122,8 +154,8 @@ class UserStateFeatureExtractor:
                 "face_center_x": center_x,
                 "face_center_y": center_y,
                 "face_missing": 0.0,
-                "looking_down": 1.0 if pitch > 12.0 or center_y > 0.62 else 0.0,
-                "looking_side": 1.0 if abs(yaw) > 18.0 or center_x < 0.35 or center_x > 0.65 else 0.0,
+                "looking_down": 1.0 if looking_down else 0.0,
+                "looking_side": 1.0 if looking_side else 0.0,
                 "low_light": 1.0 if brightness < 55.0 else 0.0,
             }
         )
@@ -137,14 +169,21 @@ class UserStateFeatureExtractor:
         frames = list(self._frames)
         first_ts = frames[0]["timestamp"]
         last_ts = frames[-1]["timestamp"]
-        center_x = [item["face_center_x"] for item in frames if item["face_missing"] < 0.5]
-        center_y = [item["face_center_y"] for item in frames if item["face_missing"] < 0.5]
+        face_frames = [item for item in frames if item["face_missing"] < 0.5]
+        center_x = [item["face_center_x"] for item in face_frames]
+        center_y = [item["face_center_y"] for item in face_frames]
+        yaw_values = [item["head_yaw"] for item in face_frames]
         motion_values = self._motion_deltas(center_x, center_y)
         motion_stability = 1.0 / (1.0 + self._mean(motion_values) * 20.0)
+        yaw_min = min(yaw_values) if yaw_values else 0.0
+        yaw_max = max(yaw_values) if yaw_values else 0.0
 
         values = {
-            "head_yaw_mean": self._mean(item["head_yaw"] for item in frames),
-            "head_yaw_std": self._std(item["head_yaw"] for item in frames),
+            "head_yaw_mean": self._mean(yaw_values),
+            "head_yaw_std": self._std(yaw_values),
+            "head_yaw_min": yaw_min,
+            "head_yaw_max": yaw_max,
+            "head_yaw_range": yaw_max - yaw_min,
             "head_pitch_mean": self._mean(item["head_pitch"] for item in frames),
             "head_pitch_std": self._std(item["head_pitch"] for item in frames),
             "eye_closed_ratio": self._mean(item["eye_closed"] for item in frames),
@@ -154,6 +193,7 @@ class UserStateFeatureExtractor:
             "brightness_mean": self._mean(item["brightness"] for item in frames),
             "face_bbox_area_mean": self._mean(item["face_bbox_area"] for item in frames),
             "face_center_x_mean": self._mean(center_x),
+            "face_center_x_std": self._std(center_x),
             "face_center_y_mean": self._mean(center_y),
             "motion_stability": motion_stability,
             "recent_duration": max(0.0, last_ts - first_ts),
@@ -162,11 +202,60 @@ class UserStateFeatureExtractor:
 
     def reset(self) -> None:
         self._frames.clear()
+        self._neutral_pitch = None
+        self._neutral_pitch_started_at = None
+        self._neutral_pitch_samples.clear()
+        self._neutral_yaw = None
+        self._neutral_yaw_started_at = None
+        self._neutral_yaw_samples.clear()
 
     def _prune(self, now: float) -> None:
         cutoff = float(now) - self.window_seconds
         while self._frames and self._frames[0]["timestamp"] < cutoff:
             self._frames.popleft()
+
+    def _estimate_looking_down_from_pitch(self, pitch: float, timestamp: float) -> bool:
+        if not self._is_finite(pitch):
+            return False
+
+        if self._neutral_pitch is None:
+            if self._neutral_pitch_started_at is None:
+                self._neutral_pitch_started_at = float(timestamp)
+            self._neutral_pitch_samples.append(float(pitch))
+            if (
+                timestamp - self._neutral_pitch_started_at >= self._neutral_calibration_seconds
+                and len(self._neutral_pitch_samples) >= 3
+            ):
+                self._neutral_pitch = self._mean(self._neutral_pitch_samples)
+            return False
+
+        raw_delta = float(pitch) - self._neutral_pitch
+        if self._looking_down_mode == "negative":
+            pitch_delta = -raw_delta
+        elif self._looking_down_mode == "positive":
+            pitch_delta = raw_delta
+        else:
+            pitch_delta = abs(raw_delta)
+        return pitch_delta >= self._pitch_delta_threshold
+
+    def _estimate_looking_side_from_yaw(self, yaw: float, timestamp: float, center_x: float) -> bool:
+        if not self._is_finite(yaw):
+            return False
+
+        center_offscreen = self._is_finite(center_x) and (center_x < 0.32 or center_x > 0.68)
+        if self._neutral_yaw is None:
+            if self._neutral_yaw_started_at is None:
+                self._neutral_yaw_started_at = float(timestamp)
+            self._neutral_yaw_samples.append(float(yaw))
+            if (
+                timestamp - self._neutral_yaw_started_at >= self._neutral_calibration_seconds
+                and len(self._neutral_yaw_samples) >= 3
+            ):
+                self._neutral_yaw = self._mean(self._neutral_yaw_samples)
+            return bool(center_offscreen)
+
+        yaw_delta = abs(float(yaw) - self._neutral_yaw)
+        return yaw_delta >= self._yaw_delta_threshold or bool(center_offscreen)
 
     @staticmethod
     def _default_frame_features(timestamp: float, brightness: float) -> dict[str, float]:
@@ -395,6 +484,16 @@ class UserStateFeatureExtractor:
             return math.isfinite(float(value))
         except Exception:
             return False
+
+    @staticmethod
+    def _env_float(name: str, default: float) -> float:
+        raw = os.getenv(name)
+        if raw is None:
+            return float(default)
+        try:
+            return float(raw)
+        except Exception:
+            return float(default)
 
 
 __all__ = [
