@@ -13,7 +13,6 @@ from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtWidgets import QApplication
 
 from app.services.demo_mode import MockUserStateProvider
-from app.services.sync_scheduler import CloudSyncScheduler
 from app.ui.desktop_pet import DesktopPet
 from app.ui.vision_debug_panel import VisionDebugPanel
 from app.controller.event_handler import EventHandler
@@ -34,8 +33,7 @@ from models.vision.user_state_detector import (
 )
 from models.vision.gesture_detector import GESTURE_NONE, GestureDetector
 from models.vision.shared_camera import SharedCameraCapture
-from models.cloud.shared_pet_room import SharedPetRoomManager
-from models.cloud.cloud_service import SupabaseCloudService
+from models.vision.vision_runtime_api import VisionRuntimeAPI
 from utils.logger import setup_logger
 
 
@@ -96,54 +94,12 @@ def main():
     pet.on_right_click_callback = pet.close
     logger.info("[队员A] 鼠标事件回调绑定完成")
 
-    # ====== 5.5. 初始化云端共养同步 ======
+    # ====== 6. 队员B视觉模块配置 ======
     def env_bool(name: str, default: bool = False) -> bool:
         raw = os.getenv(name)
         if raw is None:
             return bool(default)
         return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
-
-    cloud_enabled = env_bool("DESKTOP_PET_CLOUD_ENABLED", True)
-    cloud_room_code = os.getenv("DESKTOP_PET_CLOUD_ROOM_CODE", "").strip()
-    cloud_service = SupabaseCloudService()
-    cloud_manager = SharedPetRoomManager(cloud_service, room_code=cloud_room_code)
-    sync_scheduler = CloudSyncScheduler(
-        cloud_manager=cloud_manager,
-        state_interval_sec=4.0,
-        presence_interval_sec=8.0,
-    )
-    sync_scheduler.set_local_state_provider(lambda: pet_state)
-
-    # Generate a stable member_id for this device
-    import uuid as _uuid
-    member_id = os.getenv("DESKTOP_PET_MEMBER_ID", str(_uuid.getnode()))
-    sync_scheduler.set_member_id(str(member_id))
-    sync_scheduler.set_pet_name(pet_state.pet_id)
-
-    # Wire event handler to cloud for instant event sync
-    event_handler.set_cloud_manager(cloud_manager)
-
-    # Auto-join room if configured
-    if cloud_enabled and cloud_room_code:
-        try:
-            join_result = cloud_manager.join_room(cloud_room_code, pet_state.pet_id)
-            if join_result.get("ok"):
-                logger.info(f"[Cloud] 已加入房间 {cloud_room_code}")
-                sync_scheduler.start()
-                logger.info("[Cloud] 双频同步已启动 (状态4s / 成员8s)")
-            else:
-                logger.info(f"[Cloud] 房间加入跳过: {join_result.get('error', 'unknown')}")
-        except Exception as exc:
-            logger.warning(f"[Cloud] 云端初始化失败(已降级): {exc}")
-    else:
-        logger.info(f"[Cloud] 跳过: enabled={cloud_enabled}, room_code='{cloud_room_code}'")
-        if cloud_enabled and not cloud_room_code:
-            logger.info("[Cloud] 提示: 设置环境变量 DESKTOP_PET_CLOUD_ROOM_CODE 后可通过 UI 加入房间")
-
-    pet._cloud_manager = cloud_manager
-    pet._sync_scheduler = sync_scheduler
-
-    # ====== 6. 队员B视觉模块配置 ======
 
     MOCK_ENABLED = os.getenv("DESKTOP_PET_MOCK_USER_STATE", "false").strip().lower() in {
         "1", "true", "yes", "y", "on"
@@ -249,6 +205,10 @@ def main():
     gesture_last_response_at = {}
     gesture_zoom_last_scale = None
     gesture_zoom_last_apply_at = 0.0
+    last_runtime_action = {
+        "action_code": "",
+        "last_trigger_time": None,
+    }
 
     if GESTURE_FEATURE_ENABLED and GESTURE_START_ENABLED and shared_camera is not None:
         try:
@@ -642,6 +602,51 @@ def main():
             "camera_available": bool(shared_camera is not None and shared_camera.is_running()),
         }
 
+    def get_runtime_user_state() -> dict | None:
+        """Read latest user state without starting detectors."""
+        if user_detector is not None:
+            try:
+                return user_detector.get_state()
+            except Exception:
+                return None
+        try:
+            latest = pet_state.get_last_user_state()
+            return latest if isinstance(latest, dict) else None
+        except Exception:
+            return None
+
+    def get_runtime_gesture_state() -> dict | None:
+        """Read latest gesture state without starting gesture detection."""
+        if gesture_detector is None:
+            return None
+        try:
+            return gesture_detector.get_state()
+        except Exception:
+            return None
+
+    def get_runtime_action_state() -> dict:
+        return dict(last_runtime_action)
+
+    vision_runtime_api = VisionRuntimeAPI(
+        shared_camera_getter=lambda: shared_camera,
+        camera_enabled_getter=lambda: bool(camera_detection_enabled),
+        user_detector_running_getter=lambda: bool(
+            user_detector is not None and getattr(user_detector, "_is_running", True)
+        ),
+        gesture_detector_running_getter=lambda: bool(
+            gesture_detector is not None
+            and (
+                gesture_detector.is_running()
+                if hasattr(gesture_detector, "is_running")
+                else gesture_detection_enabled
+            )
+        ),
+        user_state_getter=get_runtime_user_state,
+        gesture_state_getter=get_runtime_gesture_state,
+        pet_state_getter=lambda: pet_state,
+        action_state_getter=get_runtime_action_state,
+    )
+
     class CameraToggleKeyFilter(QObject):
         """Qt 全局按键过滤器：q 切换摄像头；输入框聚焦时放行，不影响聊天输入。"""
 
@@ -768,6 +773,9 @@ def main():
     pet.toggle_user_detector = toggle_user_detector
     pet.toggle_gesture_detector = toggle_gesture_detector
     pet.get_vision_runtime_status = get_vision_runtime_status
+    pet._vision_runtime_api = vision_runtime_api
+    pet.get_latest_camera_frame_rgb = vision_runtime_api.get_latest_camera_frame_rgb
+    pet.get_latest_runtime_snapshot = vision_runtime_api.get_latest_runtime_snapshot
 
     # ====== 10. 启动定时状态检测 + 自动回应 ======
     SPEECH_HINT_COOLDOWN_SECONDS = 300.0
@@ -885,6 +893,8 @@ def main():
         # 6c. 根据桌宠状态决定动作（队员D），触发桌宠表情/动画切换（队员A）
         action = team_d.api_decide_action()
         logger.info(f"[队员D→队员A] 决策动作: {action}")
+        last_runtime_action["action_code"] = str(action or "")
+        last_runtime_action["last_trigger_time"] = time.time()
         pet_controller.trigger_action(pet, action)
 
         # 6d. 检查是否需要主动语音提示（队员D → 队员C）
