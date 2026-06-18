@@ -5,7 +5,7 @@ from typing import Any, Callable, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QHBoxLayout, QSizePolicy, QScrollArea, QVBoxLayout, QWidget
 
 
 HAND_CONNECTIONS = [
@@ -27,6 +27,7 @@ class VisionDebugPanel(QWidget):
         self,
         detector_getter: Optional[Callable[[], Any]] = None,
         gesture_getter: Optional[Callable[[], dict | None]] = None,
+        camera_frame_getter: Optional[Callable[[], Any]] = None,
         camera_enabled_getter: Optional[Callable[[], bool]] = None,
         refresh_ms: int = 400,
         parent: QWidget | None = None,
@@ -34,15 +35,17 @@ class VisionDebugPanel(QWidget):
         super().__init__(parent)
         self._detector_getter = detector_getter
         self._gesture_getter = gesture_getter
+        self._camera_frame_getter = camera_frame_getter
         self._camera_enabled_getter = camera_enabled_getter
         self._refresh_ms = max(100, int(refresh_ms))
 
         self.setWindowTitle("Vision Debug Preview")
-        self.resize(820, 680)
+        self.resize(1280, 820)
 
         self.image_label = QLabel("Waiting for camera frame...")
-        self.image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.image_label.setMinimumSize(640, 480)
+        self.image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.image_label.setStyleSheet(
             "QLabel { background: #050505; color: #d1d5db; border: 1px solid #374151; }"
         )
@@ -50,15 +53,50 @@ class VisionDebugPanel(QWidget):
         self.info_label = QLabel("")
         self.info_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.info_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.info_label.setWordWrap(False)
         self.info_label.setStyleSheet(
             "QLabel { color: #e5e7eb; background: #111827; padding: 8px; font-family: Consolas, monospace; }"
         )
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        self.result_label = QLabel("识别结果：等待手势")
+        self.result_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.result_label.setWordWrap(True)
+        self.result_label.setMinimumHeight(110)
+        self.result_label.setStyleSheet(
+            """
+            QLabel {
+                color: #f8fafc;
+                background: #172033;
+                border: 1px solid #334155;
+                padding: 16px;
+                font-size: 24px;
+                font-family: Microsoft YaHei, SimHei, sans-serif;
+                font-weight: 600;
+            }
+            """
+        )
+
+        self.info_scroll = QScrollArea()
+        self.info_scroll.setWidgetResizable(True)
+        self.info_scroll.setWidget(self.info_label)
+        self.info_scroll.setMinimumWidth(460)
+        self.info_scroll.setMaximumWidth(640)
+        self.info_scroll.setStyleSheet("QScrollArea { background: #111827; border: 1px solid #1f2937; }")
+
+        side_panel = QWidget()
+        side_panel.setMinimumWidth(460)
+        side_panel.setMaximumWidth(640)
+        side_layout = QVBoxLayout(side_panel)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.setSpacing(0)
+        side_layout.addWidget(self.result_label, 0)
+        side_layout.addWidget(self.info_scroll, 1)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addWidget(self.image_label, 1)
-        layout.addWidget(self.info_label, 0)
+        layout.addWidget(side_panel, 0)
 
         self._timer = QTimer(self)
         self._timer.setInterval(self._refresh_ms)
@@ -87,7 +125,7 @@ class VisionDebugPanel(QWidget):
         if self.isVisible():
             self.hide()
             return
-        self.show()
+        self.showMaximized()
         self.raise_()
         self.activateWindow()
         self.update_from_detector()
@@ -105,6 +143,7 @@ class VisionDebugPanel(QWidget):
 
         if not camera_enabled:
             self._show_placeholder("Camera Off")
+            self.result_label.setText("识别结果：摄像头已关闭")
             self.info_label.setText("camera: off\nstate: unknown\nsource: camera_off")
             return
 
@@ -115,13 +154,7 @@ class VisionDebugPanel(QWidget):
             except Exception:
                 detector = None
 
-        if detector is None:
-            self._log_waiting_frame_once()
-            self._show_placeholder("Waiting for camera frame...")
-            self.info_label.setText("detector: unavailable")
-            return
-
-        snapshot = self._read_snapshot(detector)
+        snapshot = self._read_snapshot(detector) if detector is not None else {"frame": None, "info": {}, "state": {}}
         frame = snapshot.get("frame")
         info = snapshot.get("info") or {}
         state = snapshot.get("state") or {}
@@ -131,15 +164,28 @@ class VisionDebugPanel(QWidget):
         gesture_state = self._read_gesture_state()
 
         if frame is None:
+            frame = self._read_camera_frame()
+
+        if frame is None:
             self._log_waiting_frame_once()
             self._show_placeholder("Waiting for camera frame...")
+            self.result_label.setText(self._format_result_summary(info, state, gesture_state))
             self.info_label.setText(self._format_info(info, state, gesture_state))
             return
 
         display_frame = self._draw_face_overlay(frame, info, state)
         display_frame = self._draw_hand_overlay(display_frame, gesture_state)
         self.set_frame(display_frame)
+        self.result_label.setText(self._format_result_summary(info, state, gesture_state))
         self.info_label.setText(self._format_info(info, state, gesture_state))
+
+    def _read_camera_frame(self) -> Any:
+        if self._camera_frame_getter is None:
+            return None
+        try:
+            return self._camera_frame_getter()
+        except Exception:
+            return None
 
     def set_frame(self, frame: Any) -> None:
         pixmap = self._frame_to_pixmap(frame)
@@ -234,50 +280,6 @@ class VisionDebugPanel(QWidget):
                     py = int(max(0.0, min(1.0, y)) * height)
                     cv2.circle(canvas, (px, py), 1, (0, 255, 0), -1)
 
-            state_code = str(info.get("state_code") or state.get("state_code") or "unknown")
-            confidence = float(info.get("confidence", state.get("confidence", 0.0)) or 0.0)
-            source = info.get("source") or state.get("source") or []
-            if isinstance(source, list):
-                source_text = ",".join(str(item) for item in source)
-            else:
-                source_text = str(source)
-            face_text = "face: yes" if info.get("face_present") else "face: no"
-            lines = [
-                f"state: {state_code}  conf: {confidence:.2f}",
-                f"source: {source_text[:80]}",
-                (
-                    f"{face_text}  looking_down: {bool(info.get('looking_down'))}  "
-                    f"eyes_closed: {bool(info.get('eyes_closed'))}  "
-                    f"low_light: {bool(info.get('low_light'))}"
-                ),
-                f"brightness: {info.get('brightness', 0.0)}",
-            ]
-            mimic = info.get("face_mimic") if isinstance(info.get("face_mimic"), dict) else {}
-            if mimic:
-                lines.extend([
-                    f"mimic: {mimic.get('expression', 'unknown')}  available: {bool(mimic.get('available'))}",
-                    (
-                        f"mouth: {mimic.get('mouth_open', 0.0)}  "
-                        f"smile: {mimic.get('smile', 0.0)}  "
-                        f"blink: {mimic.get('eye_blink_left', 0.0)}/{mimic.get('eye_blink_right', 0.0)}"
-                    ),
-                ])
-            if not info.get("face_present"):
-                lines.append("no face")
-
-            panel_height = min(height, 26 + len(lines) * 24)
-            cv2.rectangle(canvas, (0, 0), (width, panel_height), (0, 0, 0), -1)
-            for i, text in enumerate(lines):
-                cv2.putText(
-                    canvas,
-                    text,
-                    (12, 24 + i * 22),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.58,
-                    (0, 255, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
             return canvas
         except Exception:
             return frame
@@ -484,3 +486,35 @@ class VisionDebugPanel(QWidget):
             lines.append(f"debug_age_seconds: {age:.2f}")
 
         return "\n".join(lines)
+
+    def _format_result_summary(self, info: dict, state: dict, gesture_state: dict | None) -> str:
+        state_code = str(info.get("state_code") or state.get("state_code") or "unknown")
+        confidence = self._safe_float(info.get("confidence", state.get("confidence", 0.0)))
+        face_present = bool(info.get("face_present", False))
+
+        gesture_text = "等待手势"
+        if gesture_state is None:
+            gesture_text = "手势识别未开启"
+        elif isinstance(gesture_state, dict):
+            gesture_code = str(gesture_state.get("gesture_code") or "none")
+            gesture_name = str(gesture_state.get("gesture_name") or "").strip()
+            zoom = gesture_state.get("zoom") if isinstance(gesture_state.get("zoom"), dict) else {}
+            if zoom.get("active"):
+                gesture_text = "识别到捏合缩放手势"
+            elif gesture_code not in {"", "none"}:
+                display_name = gesture_name or gesture_code
+                gesture_text = f"识别到 {display_name} 手势"
+
+        face_text = "已识别人脸" if face_present else "未识别人脸"
+        return (
+            f"识别结果：{gesture_text}\n"
+            f"用户状态：{state_code}  置信度：{confidence:.2f}\n"
+            f"人脸状态：{face_text}"
+        )
+
+    @staticmethod
+    def _safe_float(value: Any) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return 0.0

@@ -731,6 +731,11 @@ def main():
                     if gesture_detector is not None and hasattr(gesture_detector, "get_debug_snapshot")
                     else (gesture_detector.get_state() if gesture_detector is not None else None)
                 ),
+                camera_frame_getter=(
+                    lambda: shared_camera.get_frame()
+                    if shared_camera is not None and hasattr(shared_camera, "get_frame")
+                    else None
+                ),
                 camera_enabled_getter=lambda: camera_detection_enabled,
                 refresh_ms=400,
             )
@@ -744,7 +749,7 @@ def main():
         panel = ensure_vision_debug_panel()
         if enabled:
             panel.start()
-            panel.show()
+            panel.showMaximized()
             panel.raise_()
             panel.activateWindow()
             panel.update_from_detector()
