@@ -33,6 +33,7 @@ from PySide6.QtGui import (
     QFont,
     QFontDatabase,
     QIcon,
+    QImage,
     QMouseEvent,
     QMovie,
     QPainter,
@@ -109,16 +110,47 @@ from app.ui.ui_settings_store import (
 )
 
 # ---------------------------------------------------------------------------
-# 样式常量
+# Pet Buddy 设计令牌（与 desktop_pet.py 保持一致）
 # ---------------------------------------------------------------------------
 
-GLASS_FRAME = """
+_THEME_PINK = "#ff5f7e"
+_THEME_PINK_HOVER = "#ff476b"
+_THEME_PINK_LIGHT = "#ffe4e9"
+_THEME_PINK_ACTIVE = "#ffdce3"
+_THEME_TEXT = "#543f44"
+_THEME_TEXT_MUTED = "#968085"
+_THEME_TAB_SELECTED = "#d64f6b"
+_THEME_BORDER = "rgba(255, 95, 126, 46)"
+_THEME_GLASS = "rgba(255, 255, 255, 166)"
+_THEME_BG_START = "#ffd7e0"
+_THEME_BG_END = "#f6eaed"
+_RADIUS_MAIN = 32
+_RADIUS_CARD = 24
+_RADIUS_CTRL = 16
+_OVERLAY_RADIUS = 16
+
+# 气泡 / 输入框 / 弹出层统一白底面板
+_OVERLAY_BG = QColor(255, 255, 255, 242)
+_OVERLAY_BORDER = QColor(200, 200, 200, 77)
+
+# 菜单项 hover：淡粉底 + 品牌粉文字
+_MENU_HOVER_FILL = QColor(255, 228, 236, 230)
+
+# 自绘控件用色（菜单 hover 等）
+_PAINT_TEXT_MAIN = QColor(84, 63, 68)
+_PAINT_TEXT_MUTED = QColor(150, 128, 133)
+_PAINT_HOVER_FILL = _MENU_HOVER_FILL
+_PAINT_BRAND = QColor(255, 95, 126)
+
+OVERLAY_PANEL_FRAME = """
 QFrame#glass {{
-    background-color: rgba(255, 255, 255, 248);
-    border: 1px solid rgba(226, 232, 240, 220);
+    background-color: rgba(255, 255, 255, 242);
+    border: 1px solid rgba(200, 200, 200, 77);
     border-radius: {radius}px;
 }}
 """
+
+GLASS_FRAME = OVERLAY_PANEL_FRAME
 
 D_ACTION_CODES = ("happy", "sad", "hungry", "angry", "idle")
 D_ACTION_LABELS = {
@@ -139,8 +171,54 @@ MOOD_DISPLAY_LABELS: dict[str, str] = {
 }
 
 
+def mood_display_label(mood: Any) -> str:
+    """将队员 D 心情码翻译为中文展示文案。"""
+    if isinstance(mood, (int, float)):
+        return str(int(mood))
+    raw = str(mood or "happy").strip()
+    if not raw:
+        return MOOD_DISPLAY_LABELS["happy"]
+    return MOOD_DISPLAY_LABELS.get(raw.lower(), raw)
+
+
 def _glass_style(radius: int) -> str:
-    return GLASS_FRAME.format(radius=radius)
+    return OVERLAY_PANEL_FRAME.format(radius=radius)
+
+
+GLASS_FLAT_FRAME = OVERLAY_PANEL_FRAME
+
+
+def _glass_flat_style(radius: int) -> str:
+    """白底圆角面板（聊天气泡、状态栏、输入框等）。"""
+    return OVERLAY_PANEL_FRAME.format(radius=radius)
+
+
+def _overlay_panel_style(radius: int = _OVERLAY_RADIUS) -> str:
+    return OVERLAY_PANEL_FRAME.format(radius=radius)
+
+
+def _paint_overlay_panel(
+    painter: QPainter,
+    width: float,
+    height: float,
+    radius: float,
+) -> None:
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0, 0, width, height), radius, radius)
+    painter.fillPath(path, _OVERLAY_BG)
+    painter.setPen(QPen(_OVERLAY_BORDER, 1))
+    painter.drawPath(path)
+
+
+def _apply_overlay_shadow(widget: QWidget) -> None:
+    """菜单等不透明弹出层：极淡阴影（非黑色块）。"""
+    from PySide6.QtWidgets import QGraphicsDropShadowEffect
+
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(10)
+    effect.setOffset(0, 2)
+    effect.setColor(QColor(200, 200, 200, 35))
+    widget.setGraphicsEffect(effect)
 
 
 FOLLOW_MOUSE_MODE_OPTIONS: tuple[tuple[int, str], ...] = (
@@ -157,7 +235,7 @@ def build_follow_mouse_mode_setting(
 ) -> tuple[QFrame, QComboBox]:
     """桌宠设置页：追鼠标三档下拉框。"""
     frame = QFrame(parent)
-    frame.setStyleSheet(_glass_style(16))
+    frame.setStyleSheet(_glass_style(_RADIUS_CTRL))
     row = QHBoxLayout(frame)
     row.setContentsMargins(12, 10, 12, 10)
     row.addWidget(QLabel("追鼠标"))
@@ -187,60 +265,72 @@ def build_follow_mouse_mode_setting(
     return frame, combo
 
 
-BTN_GLASS = """
-QPushButton {
-    background-color: rgba(255, 255, 255, 230);
-    border: 1px solid rgba(226, 232, 240, 200);
-    border-radius: 12px;
+BTN_GLASS = f"""
+QPushButton {{
+    background-color: rgba(255, 255, 255, 235);
+    border: 1px solid {_THEME_BORDER};
+    border-radius: {_RADIUS_CTRL}px;
     padding: 8px 14px;
-    color: #23232d;
-}
-QPushButton:hover {
-    background-color: rgba(220, 235, 255, 230);
-}
+    color: {_THEME_TEXT};
+}}
+QPushButton:hover {{
+    background-color: {_THEME_PINK_LIGHT};
+    border-color: rgba(255, 95, 126, 89);
+}}
+QPushButton:pressed {{
+    background-color: {_THEME_PINK_ACTIVE};
+}}
+QPushButton:checked {{
+    background-color: {_THEME_PINK_LIGHT};
+    color: {_THEME_TAB_SELECTED};
+    border-color: rgba(255, 95, 126, 115);
+    font-weight: 600;
+}}
 """
 
-BTN_PRIMARY = """
-QPushButton {
-    background-color: #1e293b;
+BTN_PRIMARY = f"""
+QPushButton {{
+    background-color: {_THEME_PINK};
     color: white;
     border: none;
-    border-radius: 12px;
+    border-radius: 100px;
     padding: 8px 14px;
-}
-QPushButton:hover { background-color: #334155; }
+    font-weight: 600;
+}}
+QPushButton:hover {{ background-color: {_THEME_PINK_HOVER}; }}
+QPushButton:pressed {{ background-color: #e63d5f; }}
 """
 
-BTN_ICON = """
-QPushButton {
+BTN_ICON = f"""
+QPushButton {{
     background-color: transparent;
     border: none;
-    border-radius: 12px;
+    border-radius: 16px;
     padding: 2px;
-}
-QPushButton:hover {
+}}
+QPushButton:hover {{
     background-color: rgba(255, 228, 236, 210);
-}
-QPushButton:pressed {
-    background-color: rgba(255, 208, 220, 230);
-}
+}}
+QPushButton:pressed {{
+    background-color: rgba(255, 220, 227, 230);
+}}
 """
 
-BTN_SWITCH = """
-QPushButton#switchPetBtn {
-    background-color: #7c3aed;
+BTN_SWITCH = f"""
+QPushButton#switchPetBtn {{
+    background-color: {_THEME_PINK};
     color: white;
     border: none;
-    border-radius: 12px;
+    border-radius: 100px;
     padding: 10px 22px;
     font-weight: bold;
-}
-QPushButton#switchPetBtn:hover {
-    background-color: #6d28d9;
-}
-QPushButton#switchPetBtn:pressed {
-    background-color: #5b21b6;
-}
+}}
+QPushButton#switchPetBtn:hover {{
+    background-color: {_THEME_PINK_HOVER};
+}}
+QPushButton#switchPetBtn:pressed {{
+    background-color: #e63d5f;
+}}
 """
 
 DEFAULT_TTS_UI_SETTINGS: dict[str, Any] = {
@@ -654,7 +744,7 @@ def _load_pixmap(path: str, size: QSize | None = None) -> QPixmap:
     pm = QPixmap(path) if path and os.path.isfile(path) else QPixmap()
     if pm.isNull():
         pm = QPixmap(size or QSize(64, 64))
-        pm.fill(QColor(220, 230, 255))
+        pm.fill(QColor(255, 228, 233))
     elif size:
         pm = pm.scaled(size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
     return pm
@@ -688,7 +778,7 @@ class RightClickMenu(QFrame, ScalableOverlay):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("glass")
-        self.setStyleSheet(_glass_style(16))
+        self.setStyleSheet(_glass_style(_RADIUS_CTRL))
         self.visible = False
         self.x = self.y = 0
         self.hover_index = -1
@@ -783,18 +873,16 @@ class RightClickMenu(QFrame, ScalableOverlay):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setFont(self._font)
-        bg = QPainterPath()
-        bg.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 16, 16)
-        p.fillPath(bg, QColor(255, 255, 255, 248))
-        p.setPen(QPen(QColor(226, 232, 240, 220), 1))
-        p.drawPath(bg)
+        _paint_overlay_panel(p, self.width(), self.height(), 16)
         for i, label in enumerate(self.ITEMS):
             item_r = QRect(0, self.PADDING + i * self.ITEM_HEIGHT, self.WIDTH, self.ITEM_HEIGHT)
             if i == self.hover_index:
                 path = QPainterPath()
                 path.addRoundedRect(QRectF(item_r.adjusted(4, 2, -4, -2)), 8, 8)
-                p.fillPath(path, QColor(220, 235, 255, 230))
-            p.setPen(QColor(35, 35, 45))
+                p.fillPath(path, _PAINT_HOVER_FILL)
+                p.setPen(_PAINT_BRAND)
+            else:
+                p.setPen(_PAINT_TEXT_MAIN)
             p.drawText(item_r.adjusted(16, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, label)
         p.end()
 
@@ -911,18 +999,15 @@ class SubMenu(QFrame, ScalableOverlay):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setFont(self._font)
-        bg = QPainterPath()
-        bg.addRoundedRect(QRectF(0, 0, self.width(), self.height()), 12, 12)
-        p.fillPath(bg, QColor(255, 255, 255, 248))
-        p.setPen(QPen(QColor(226, 232, 240, 220), 1))
-        p.drawPath(bg)
+        _paint_overlay_panel(p, self.width(), self.height(), 12)
         for i, label in enumerate(self.ITEMS):
             item_r = QRect(0, self.PADDING + i * self.ITEM_HEIGHT, self.WIDTH, self.ITEM_HEIGHT)
-            color = QColor(150, 150, 160) if i == self.active_index else QColor(35, 35, 45)
+            color = _PAINT_TEXT_MUTED if i == self.active_index else _PAINT_TEXT_MAIN
             if i == self.hover_index and i != self.active_index:
                 path = QPainterPath()
                 path.addRoundedRect(QRectF(item_r.adjusted(4, 2, -4, -2)), 8, 8)
-                p.fillPath(path, QColor(220, 235, 255, 230))
+                p.fillPath(path, _PAINT_HOVER_FILL)
+                color = _PAINT_BRAND
             p.setPen(color)
             p.drawText(item_r.adjusted(12, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, label)
         p.end()
@@ -1026,11 +1111,12 @@ class ArcMotionMenu(QWidget, ScalableOverlay):
             base_a = int(225 * alpha)
             if theme == "pet":
                 if hovered:
-                    p.fillPath(path, QColor(255, 141, 161, base_a))
+                    p.fillPath(path, QColor(255, 95, 126, base_a))
                     text_color = QColor(255, 255, 255, int(255 * alpha))
                 else:
                     p.fillPath(path, QColor(255, 255, 255, base_a))
-                    text_color = QColor(51, 51, 51, int(255 * alpha))
+                    text_color = _PAINT_TEXT_MAIN
+                    text_color.setAlpha(int(255 * alpha))
             else:
                 if hovered:
                     p.fillPath(path, QColor(230, 240, 255, base_a))
@@ -1390,11 +1476,7 @@ class InfoBubble(QFrame, ScalableOverlay):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), self._radius, self._radius)
-        painter.fillPath(path, QColor(255, 255, 255, 248))
-        painter.setPen(QPen(QColor(226, 232, 240, 220), 1))
-        painter.drawPath(path)
+        _paint_overlay_panel(painter, self.width(), self.height(), self._radius)
         painter.end()
         super().paintEvent(event)
 
@@ -1404,6 +1486,7 @@ class InfoBubble(QFrame, ScalableOverlay):
         m = _scaled_int(12, self._ui_scale, 6)
         self._lay.setContentsMargins(m, m, m, m)
         self._lbl.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
+        self._lbl.setStyleSheet(f"background: transparent; border: none; color: {_THEME_TEXT};")
 
     def set_stats(self, mood: str, energy: int, affection: int) -> None:
         self.mood = str(mood)
@@ -1475,11 +1558,7 @@ class ChatBubble(QFrame, ScalableOverlay):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(0, 0, self.width(), self.height()), self._radius, self._radius)
-        painter.fillPath(path, QColor(255, 255, 255, 248))
-        painter.setPen(QPen(QColor(226, 232, 240, 220), 1))
-        painter.drawPath(path)
+        _paint_overlay_panel(painter, self.width(), self.height(), self._radius)
         painter.end()
         super().paintEvent(event)
 
@@ -1547,9 +1626,20 @@ class ChatBubble(QFrame, ScalableOverlay):
         return self.geometry()
 
     def set_text(self, text: str) -> None:
-        self.text = text
-        self._text_edit.setPlainText(text)
+        value = str(text or "")
+        self._text_edit.blockSignals(True)
+        self._text_edit.clear()
+        self._text_edit.document().clear()
+        self.text = value
+        if value:
+            self._text_edit.setPlainText(value)
+        self._text_edit.verticalScrollBar().setValue(0)
+        self._text_edit.blockSignals(False)
         self._sync_text_geometry()
+        self._text_edit.viewport().update()
+        self._text_edit.repaint()
+        self.update()
+        self.repaint()
 
     def show(self, x: int, y: int, text: str) -> None:
         self.set_text(text)
@@ -1563,7 +1653,7 @@ class ChatBubble(QFrame, ScalableOverlay):
         super().hide()
 
 
-def _make_mic_icon(color: str = "#64748b") -> QIcon:
+def _make_mic_icon(color: str = _THEME_TEXT_MUTED) -> QIcon:
     pixmap = QPixmap(24, 24)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
@@ -1865,10 +1955,10 @@ def _recognize_speech_once(timeout_sec: float = 7.0, phrase_time_limit: float = 
 class InputBox(QFrame, ScalableOverlay):
     _BASE_WIDTH = 260
     _BASE_HEIGHT = 46
-    _BASE_RADIUS = 24
+    _BASE_RADIUS = 16
     WIDTH = 260
     HEIGHT = 46
-    RADIUS = 24
+    RADIUS = 16
 
     submitted = Signal(str)
     _voice_text_ready = Signal(str)
@@ -1878,7 +1968,8 @@ class InputBox(QFrame, ScalableOverlay):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("glass")
-        self.setStyleSheet(_glass_style(self.RADIUS))
+        self._radius = self._BASE_RADIUS
+        self.setStyleSheet(_overlay_panel_style(self.RADIUS))
         self.setFixedSize(self.WIDTH, self.HEIGHT)
         self.visible = False
         self.focused = False
@@ -1919,7 +2010,8 @@ class InputBox(QFrame, ScalableOverlay):
         super().apply_ui_scale(scale)
         self.WIDTH = _scaled_int(self._BASE_WIDTH, self._ui_scale, 150)
         self.HEIGHT = _scaled_int(self._BASE_HEIGHT, self._ui_scale, 34)
-        self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 14)
+        self.RADIUS = _scaled_int(self._BASE_RADIUS, self._ui_scale, 10)
+        self._radius = self.RADIUS
         self.setFixedSize(self.WIDTH, self.HEIGHT)
         self._lay.setContentsMargins(
             _scaled_int(6, self._ui_scale, 4),
@@ -1934,7 +2026,7 @@ class InputBox(QFrame, ScalableOverlay):
         self._voice_btn.setIconSize(QSize(icon_size, icon_size))
         self._field.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
         self._apply_field_style()
-        self.setStyleSheet(_glass_style(self.RADIUS))
+        self.setStyleSheet(_overlay_panel_style(self.RADIUS))
 
     def _apply_field_style(self) -> None:
         min_height = _scaled_int(28, self._ui_scale, 22)
@@ -2369,12 +2461,12 @@ class VoicePackImportDialog(QDialog):
 
         self._file_summary = QLabel("尚未选择音频或 MP4 样本，可一次选择一个或多个文件")
         self._file_summary.setWordWrap(True)
-        self._file_summary.setStyleSheet("color:#64748b;font-size:12px;")
+        self._file_summary.setStyleSheet("color:#968085;font-size:12px;")
         lay.addWidget(self._file_summary, 1)
 
         hint = QLabel("导入后会保存到 assets/voice_packs；样本语言只用于分析，AI 回复语言可以在语言页单独选择。MP4 会先抽取音轨转成 MP3，原始文件不覆盖、不改写。")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color:#94a3b8;font-size:12px;")
+        hint.setStyleSheet("color:#b8a5aa;font-size:12px;")
         lay.addWidget(hint)
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -3237,7 +3329,7 @@ class Live2dModelingDialog(QDialog):
         header.addWidget(title)
         header.addStretch()
         self._status = QLabel("")
-        self._status.setStyleSheet("color:#64748b;")
+        self._status.setStyleSheet("color:#968085;")
         header.addWidget(self._status)
         root.addLayout(header)
 
@@ -3278,7 +3370,7 @@ class Live2dModelingDialog(QDialog):
     def _build_preview_panel(self) -> QFrame:
         panel = QFrame()
         panel.setObjectName("glass")
-        panel.setStyleSheet(_glass_style(16))
+        panel.setStyleSheet(_glass_style(_RADIUS_CTRL))
         panel.setFixedWidth(340)
         lay = QVBoxLayout(panel)
         lay.setContentsMargins(16, 14, 16, 16)
@@ -3288,7 +3380,8 @@ class Live2dModelingDialog(QDialog):
         self._preview.setFixedSize(300, 450)
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview.setStyleSheet(
-            "background: #eef2f7; border: 1px solid #ffd1dc; border-radius: 14px;"
+            f"background: rgba(255, 255, 255, 166); border: 1.5px solid {_THEME_BORDER}; "
+            f"border-radius: {_RADIUS_CTRL}px;"
         )
         lay.addWidget(self._preview, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -3341,7 +3434,7 @@ class Live2dModelingDialog(QDialog):
     def _build_param_group(self, group: dict) -> QFrame:
         frame = QFrame()
         frame.setObjectName("glass")
-        frame.setStyleSheet(_glass_style(14))
+        frame.setStyleSheet(_glass_style(_RADIUS_CARD))
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(14, 10, 14, 12)
@@ -3575,6 +3668,286 @@ class FlatUploadDialog(QDialog):
         return self._result_pet
 
 
+def _rgb_frame_to_pixmap(frame: Any) -> QPixmap | None:
+    """将 RGB 帧（numpy 或兼容数组）转为 QPixmap。"""
+    try:
+        if frame is None:
+            return None
+        shape = getattr(frame, "shape", None)
+        if shape is None or len(shape) < 3 or int(shape[2]) < 3:
+            return None
+        h, w = int(shape[0]), int(shape[1])
+        rgb = frame[:, :, :3]
+        if hasattr(rgb, "copy"):
+            rgb = rgb.copy()
+        else:
+            return None
+        if hasattr(rgb, "astype"):
+            rgb = rgb.astype("uint8", copy=False)
+        flags = getattr(rgb, "flags", None)
+        if flags is not None and hasattr(flags, "c_contiguous") and not bool(flags.c_contiguous):
+            rgb = rgb.copy()
+        qimg = QImage(rgb.data, w, h, 3 * w, QImage.Format.Format_RGB888).copy()
+        return QPixmap.fromImage(qimg)
+    except Exception:
+        return None
+
+
+def format_vision_runtime_snapshot(snapshot: dict[str, Any] | None) -> str:
+    """格式化 get_latest_runtime_snapshot() 返回值为可读文本。"""
+    if not isinstance(snapshot, dict) or not snapshot:
+        return "暂无识别数据"
+
+    user = snapshot.get("user_state") if isinstance(snapshot.get("user_state"), dict) else {}
+    gesture = snapshot.get("gesture") if isinstance(snapshot.get("gesture"), dict) else {}
+    pet = snapshot.get("pet_emotion") if isinstance(snapshot.get("pet_emotion"), dict) else {}
+    action = snapshot.get("action") if isinstance(snapshot.get("action"), dict) else {}
+
+    mood_raw = pet.get("mood", "neutral")
+    mood_label = str(pet.get("mood_name") or mood_display_label(mood_raw))
+    camera_on = bool(snapshot.get("camera_enabled"))
+    user_det = bool(snapshot.get("user_detector_running"))
+    gesture_det = bool(snapshot.get("gesture_detector_running"))
+
+    energy = pet.get("energy")
+    intimacy = pet.get("intimacy")
+    energy_text = str(energy) if energy is not None else "--"
+    intimacy_text = str(intimacy) if intimacy is not None else "--"
+
+    try:
+        user_conf = float(user.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        user_conf = 0.0
+    try:
+        gesture_conf = float(gesture.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        gesture_conf = 0.0
+
+    action_time = action.get("last_trigger_time")
+    if isinstance(action_time, (int, float)) and action_time > 0:
+        action_time_text = datetime.datetime.fromtimestamp(action_time).strftime("%H:%M:%S")
+    else:
+        action_time_text = "--"
+
+    lines = [
+        "【用户状态】",
+        f"状态：{user.get('state_name', '未知')} ({user.get('state_code', 'unknown')})",
+        f"置信度：{user_conf:.0%}",
+        f"来源：{user.get('source') or '--'}",
+        "",
+        "【手势识别】",
+        f"结果：{gesture.get('gesture_name', '无手势')}",
+        f"代码：{gesture.get('gesture_code', 'none')}",
+        f"置信度：{gesture_conf:.0%}",
+        f"状态：{'识别中' if gesture.get('active') else '无手势'}",
+        "",
+        "【宠物情绪】",
+        f"情绪：{mood_label}",
+        f"能量：{energy_text}",
+        f"好感度：{intimacy_text}",
+        "",
+        "【最近动作】",
+        f"动作：{action.get('action_name', '无动作')}",
+        f"代码：{action.get('action_code') or '--'}",
+        f"触发时间：{action_time_text}",
+        "",
+        "【摄像头状态】",
+        f"摄像头：{'开启' if camera_on else '关闭'}",
+        f"用户状态检测：{'运行中' if user_det else '未运行'}",
+        f"手势识别：{'运行中' if gesture_det else '未运行'}",
+    ]
+    return "\n".join(lines)
+
+
+class VisionRecognitionPage(QWidget):
+    """视觉识别页：左侧摄像头画面，右侧识别结果与视觉调试控制。"""
+
+    REFRESH_MS = 100
+
+    def __init__(
+        self,
+        frame_getter: Callable[[], Any] | None = None,
+        snapshot_getter: Callable[[], dict[str, Any] | None] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._frame_getter = frame_getter
+        self._snapshot_getter = snapshot_getter
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(24, 16, 24, 24)
+        root.setSpacing(16)
+
+        camera_frame = QFrame()
+        camera_frame.setObjectName("glass")
+        camera_frame.setStyleSheet(_glass_style(_RADIUS_CARD))
+        camera_lay = QVBoxLayout(camera_frame)
+        camera_lay.setContentsMargins(12, 12, 12, 12)
+        camera_lay.addWidget(QLabel("<h3>摄像头画面</h3>"))
+        self._camera_view = QLabel("摄像头未开启")
+        self._camera_view.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._camera_view.setMinimumSize(480, 360)
+        self._camera_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._camera_view.setStyleSheet(
+            f"background: rgba(255,255,255,0.55); border: 1px solid {_THEME_BORDER}; "
+            f"border-radius: {_RADIUS_CTRL}px; color: {_THEME_TEXT_MUTED};"
+        )
+        self._camera_view.setScaledContents(True)
+        camera_lay.addWidget(self._camera_view, 1)
+        root.addWidget(camera_frame, 7)
+
+        right_col = QWidget()
+        right_lay = QVBoxLayout(right_col)
+        right_lay.setContentsMargins(0, 0, 0, 0)
+        right_lay.setSpacing(12)
+
+        result_frame = QFrame()
+        result_frame.setObjectName("glass")
+        result_frame.setStyleSheet(_glass_style(_RADIUS_CARD))
+        result_lay = QVBoxLayout(result_frame)
+        result_lay.setContentsMargins(12, 12, 12, 12)
+        result_lay.addWidget(QLabel("<h3>识别结果</h3>"))
+        self._result_view = QTextEdit()
+        self._result_view.setReadOnly(True)
+        self._result_view.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self._result_view.setStyleSheet(
+            f"QTextEdit {{ background: rgba(255,255,255,0.55); border: 1px solid {_THEME_BORDER}; "
+            f"border-radius: {_RADIUS_CTRL}px; color: {_THEME_TEXT}; padding: 10px; }}"
+        )
+        self._result_view.setPlainText("暂无识别数据")
+        result_lay.addWidget(self._result_view, 1)
+        right_lay.addWidget(result_frame, 1)
+
+        self._debug_panel = QFrame()
+        self._debug_panel.setObjectName("glass")
+        self._debug_panel.setStyleSheet(_glass_style(_RADIUS_CARD))
+        self._debug_panel_lay = QVBoxLayout(self._debug_panel)
+        self._debug_panel_lay.setContentsMargins(12, 12, 12, 12)
+        self._debug_panel_lay.setSpacing(8)
+        self._debug_panel.hide()
+        right_lay.addWidget(self._debug_panel, 0)
+
+        root.addWidget(right_col, 3)
+
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setInterval(self.REFRESH_MS)
+        self._refresh_timer.setTimerType(Qt.TimerType.CoarseTimer)
+        self._refresh_timer.timeout.connect(self._refresh)
+        self._refresh_busy = False
+        self._last_snapshot_text = ""
+
+    def set_debug_controls(
+        self,
+        camera_btn: QPushButton,
+        gesture_btn: QPushButton,
+        debug_btn: QPushButton,
+    ) -> None:
+        """挂载视觉调试开关（由 PetControlConsole 注入）。"""
+        while self._debug_panel_lay.count():
+            item = self._debug_panel_lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self._debug_panel_lay.addWidget(QLabel("<h3>视觉调试</h3>"))
+        desc = QLabel("开启摄像头与手势识别；「视觉预览」可弹出带关键点标注的调试窗口。")
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color: {_THEME_TEXT_MUTED}; font-size: 12px;")
+        self._debug_panel_lay.addWidget(desc)
+        for btn in (camera_btn, gesture_btn, debug_btn):
+            self._debug_panel_lay.addWidget(btn)
+        self._debug_panel.show()
+
+    def _camera_placeholder_text(self) -> str:
+        getter = self._snapshot_getter
+        if not callable(getter):
+            return "摄像头未开启"
+        try:
+            snapshot = getter()
+        except Exception:
+            return "摄像头未开启"
+        if not isinstance(snapshot, dict):
+            return "摄像头未开启"
+        if bool(snapshot.get("camera_enabled")):
+            return "等待摄像头画面…"
+        return "摄像头未开启（请在本页下方开启摄像头检测）"
+
+    def set_getters(
+        self,
+        frame_getter: Callable[[], Any] | None,
+        snapshot_getter: Callable[[], dict[str, Any] | None] | None,
+    ) -> None:
+        self._frame_getter = frame_getter
+        self._snapshot_getter = snapshot_getter
+        self._refresh()
+
+    def start_refresh(self) -> None:
+        if not self._refresh_timer.isActive():
+            self._refresh_timer.start()
+        self._refresh()
+
+    def stop_refresh(self) -> None:
+        if self._refresh_timer.isActive():
+            self._refresh_timer.stop()
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self.start_refresh()
+
+    def hideEvent(self, event) -> None:
+        self.stop_refresh()
+        super().hideEvent(event)
+
+    def _refresh(self) -> None:
+        if self._refresh_busy:
+            return
+        self._refresh_busy = True
+        try:
+            self._refresh_camera_view()
+            self._refresh_snapshot_view()
+        finally:
+            self._refresh_busy = False
+
+    def _refresh_camera_view(self) -> None:
+        frame = None
+        getter = self._frame_getter
+        if callable(getter):
+            try:
+                frame = getter()
+            except Exception:
+                frame = None
+        if frame is None:
+            self._camera_view.setPixmap(QPixmap())
+            self._camera_view.setText(self._camera_placeholder_text())
+            return
+        pixmap = _rgb_frame_to_pixmap(frame)
+        if pixmap is None or pixmap.isNull():
+            self._camera_view.setPixmap(QPixmap())
+            self._camera_view.setText("摄像头画面无法显示")
+            return
+        self._camera_view.setText("")
+        scaled = pixmap.scaled(
+            self._camera_view.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+        self._camera_view.setPixmap(scaled)
+
+    def _refresh_snapshot_view(self) -> None:
+        snapshot: dict[str, Any] | None = None
+        getter = self._snapshot_getter
+        if callable(getter):
+            try:
+                raw = getter()
+                snapshot = raw if isinstance(raw, dict) else None
+            except Exception:
+                snapshot = None
+        text = format_vision_runtime_snapshot(snapshot)
+        if text == self._last_snapshot_text:
+            return
+        self._last_snapshot_text = text
+        self._result_view.setPlainText(text)
+
+
 class ControlConsole(QMainWindow):
     def __init__(
         self,
@@ -3733,9 +4106,9 @@ class ControlConsole(QMainWindow):
         for name in self._chat_store.list_characters():
             msgs = self._chat_store.load(name)
             if msgs:
-                self._chats.append({"name": name, "color": "#ec4899", "msgs": msgs})
+                self._chats.append({"name": name, "color": _THEME_PINK, "msgs": msgs})
         if not self._chats:
-            self._chats.append({"name": "默认", "color": "#3b82f6", "msgs": []})
+            self._chats.append({"name": "默认", "color": _THEME_PINK, "msgs": []})
 
     def _save_current_chat(self) -> None:
         if self._ai_i < 0 or self._ai_i >= len(self._chats):
@@ -3755,7 +4128,13 @@ class ControlConsole(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setFixedWidth(260)
-        sidebar.setStyleSheet("background: rgba(255,255,255,220);")
+        sidebar.setStyleSheet(f"""
+            QFrame {{
+                background-color: {_THEME_GLASS};
+                border: none;
+                border-right: 1.5px solid {_THEME_BORDER};
+            }}
+        """)
         sb_lay = QVBoxLayout(sidebar)
         sb_lay.setContentsMargins(16, 24, 16, 16)
         title = QLabel("Pet Console")
@@ -3767,6 +4146,7 @@ class ControlConsole(QMainWindow):
             ("pet_settings", "⚙️", "桌宠设置"),
             ("cloud_share", "☁️", "云端共享"),
             ("dashboard", "📊", "仪表盘"),
+            ("vision_recognition", "👁️", "视觉识别"),
             ("characters", "👤", "角色选择"),
             ("ai_settings", "💬", "AI对话"),
             ("permissions", "🔒", "权限设置"),
@@ -3795,6 +4175,8 @@ class ControlConsole(QMainWindow):
         self._stack.addWidget(self._page_pet_settings())
         self._stack.addWidget(self._page_cloud_share())
         self._stack.addWidget(self._page_dashboard())
+        self._vision_page = self._page_vision_recognition()
+        self._stack.addWidget(self._vision_page)
         self._stack.addWidget(self._page_characters())
         self._stack.addWidget(self._page_ai())
         self._stack.addWidget(self._page_placeholder("权限设置"))
@@ -3803,6 +4185,24 @@ class ControlConsole(QMainWindow):
         right.addWidget(self._stack, 1)
         root.addLayout(right, 1)
         self._nav("dashboard")
+
+    def _vision_frame_getter(self) -> Any:
+        return None
+
+    def _vision_snapshot_getter(self) -> dict[str, Any]:
+        return {}
+
+    def _page_vision_recognition(self) -> QWidget:
+        return VisionRecognitionPage(
+            frame_getter=self._vision_frame_getter,
+            snapshot_getter=self._vision_snapshot_getter,
+        )
+
+    def closeEvent(self, event) -> None:
+        page = getattr(self, "_vision_page", None)
+        if page is not None:
+            page.stop_refresh()
+        super().closeEvent(event)
 
     def _toggle_max(self) -> None:
         self.showNormal() if self.isMaximized() else self.showMaximized()
@@ -3816,23 +4216,34 @@ class ControlConsole(QMainWindow):
             "pet_settings": 0,
             "cloud_share": 1,
             "dashboard": 2,
-            "characters": 3,
-            "ai_settings": 4,
-            "permissions": 5,
-            "theme": 6,
-            "pet_main": 7,
+            "vision_recognition": 3,
+            "characters": 4,
+            "ai_settings": 5,
+            "permissions": 6,
+            "theme": 7,
+            "pet_main": 8,
         }.get(page, 0)
         self._stack.setCurrentIndex(idx)
         for pid, btn in self._menu_btns.items():
             btn.setChecked(pid == page or (page == "pet_main" and pid == "characters"))
         if page == "pet_main":
             self._refresh_pet_main()
-        if page == "dashboard":
-            self._refresh_dashboard()
-        if page in ("dashboard", "pet_main", "pet_settings"):
-            getter = getattr(self, "sync_dashboard_stats", None)
-            if callable(getter):
-                getter()
+        elif page == "dashboard":
+            sync = getattr(self, "sync_dashboard_stats", None)
+            if not callable(sync):
+                self._refresh_dashboard()
+        if page == "vision_recognition":
+            vision_page = getattr(self, "_vision_page", None)
+            if vision_page is not None:
+                vision_page.start_refresh()
+        else:
+            vision_page = getattr(self, "_vision_page", None)
+            if vision_page is not None:
+                vision_page.stop_refresh()
+        if page in ("dashboard", "pet_main"):
+            sync = getattr(self, "sync_dashboard_stats", None)
+            if callable(sync):
+                sync()
         self._log(f"切换: {page}")
 
     def _get_pet(self, pet_id: str | None) -> dict | None:
@@ -3922,6 +4333,9 @@ class ControlConsole(QMainWindow):
         return self._get_pet(self._current_pet_id)
 
     def _refresh_dashboard(self) -> None:
+        sync = getattr(self, "_sync_dashboard_pet_from_desk", None)
+        if callable(sync):
+            sync()
         pet = self._current_pet()
         if not pet or not hasattr(self, "_dash_pet_pic"):
             return
@@ -3945,6 +4359,7 @@ class ControlConsole(QMainWindow):
         self._sel_pet = pet["id"]
         self._pet_main_id = pet["id"]
         self._stop_animation()
+        self._refresh_dashboard()
         self._show_toast(f"已切换到 {pet['name']}")
         self._nav("dashboard")
         self._log(f"切换角色: {pet['name']} ({pet['id']})")
@@ -3955,8 +4370,9 @@ class ControlConsole(QMainWindow):
         if self._toast is None:
             self._toast = QLabel(self)
             self._toast.setStyleSheet(
-                "background-color: rgba(30, 41, 59, 220); color: white;"
-                "border-radius: 10px; padding: 10px 18px; font-size: 14px;"
+                f"background-color: rgba(255, 255, 255, 230); color: {_THEME_TEXT};"
+                f"border: 1.5px solid {_THEME_BORDER};"
+                f"border-radius: {_RADIUS_CTRL}px; padding: 10px 18px; font-size: 14px;"
             )
             self._toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._toast.setText(message)
@@ -4171,7 +4587,7 @@ class ControlConsole(QMainWindow):
         section_key = str(section["key"])
         frame = QFrame()
         frame.setObjectName("glass")
-        frame.setStyleSheet(_glass_style(14))
+        frame.setStyleSheet(_glass_style(_RADIUS_CARD))
         frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         lay = QVBoxLayout(frame)
         lay.setContentsMargins(16, 12, 16, 14)
@@ -4182,7 +4598,7 @@ class ControlConsole(QMainWindow):
         lay.addWidget(title)
         summary = QLabel(str(section.get("summary") or ""))
         summary.setWordWrap(True)
-        summary.setStyleSheet("color:#64748b;")
+        summary.setStyleSheet("color:#968085;")
         lay.addWidget(summary)
 
         grid = QGridLayout()
@@ -4249,7 +4665,7 @@ class ControlConsole(QMainWindow):
         header.addWidget(QLabel("<h2>桌宠设置</h2>"))
         header.addStretch()
         self._pet_settings_status = QLabel("")
-        self._pet_settings_status.setStyleSheet("color:#64748b;")
+        self._pet_settings_status.setStyleSheet("color:#968085;")
         header.addWidget(self._pet_settings_status)
         reset_btn = QPushButton("恢复默认")
         reset_btn.setStyleSheet(BTN_GLASS)
@@ -4291,7 +4707,7 @@ class ControlConsole(QMainWindow):
         self, icon: str, title: str, val: int, color: str
     ) -> tuple[QFrame, QLabel, QProgressBar]:
         f = QFrame()
-        f.setStyleSheet(_glass_style(14))
+        f.setStyleSheet(_glass_style(_RADIUS_CARD))
         lay = QVBoxLayout(f)
         row = QHBoxLayout()
         row.addWidget(QLabel(icon))
@@ -4305,14 +4721,19 @@ class ControlConsole(QMainWindow):
         bar.setValue(val)
         bar.setTextVisible(False)
         bar.setStyleSheet(
-            f"QProgressBar {{ background:#e2e8f0; border-radius:4px; height:8px; }}"
-            f" QProgressBar::chunk {{ background:{color}; border-radius:4px; }}"
+            f"QProgressBar {{ background:#F3E8EB; border:none; border-radius:6px; height:8px; }}"
+            f" QProgressBar::chunk {{ background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            f" stop:0 {_THEME_PINK}, stop:1 #ffb3c8); border-radius:6px; }}"
         )
         lay.addWidget(bar)
         return f, val_label, bar
 
     def _apply_stats_to_cards(self, cards: dict[str, tuple[QLabel, QProgressBar]]) -> None:
         for key, (val_label, bar) in cards.items():
+            if key == "mood":
+                val_label.setText(str(self.stats.get("mood_label") or mood_display_label(self.stats.get("mood_code", "happy"))))
+                bar.setValue(max(0, min(100, int(self.stats.get("mood", 0)))))
+                continue
             val = max(0, min(100, int(self.stats.get(key, 0))))
             val_label.setText(str(val))
             bar.setValue(val)
@@ -4325,12 +4746,12 @@ class ControlConsole(QMainWindow):
         wd = "一二三四五六日"[now.weekday()]
         lay.addWidget(QLabel(f"<h2>欢迎回来，用户</h2><p>{now.year}年{now.month}月{now.day}日 星期{wd}</p>"))
         cards = QHBoxLayout()
-        for icon, title, key, col in (("🐾", "宠物心情", "mood", "#3b82f6"), ("🔥", "能量值", "energy", "#fb923c"), ("❤️", "好感度", "affection", "#ec4899")):
+        for icon, title, key, col in (("🐾", "宠物心情", "mood", _THEME_PINK), ("🔥", "能量值", "energy", "#fb923c"), ("❤️", "好感度", "affection", _THEME_PINK)):
             cards.addWidget(self._stat_card(icon, title, self.stats[key], col))
         lay.addLayout(cards)
         lay.addWidget(QLabel("<h3>当前宠物简介</h3>"))
         intro = QFrame()
-        intro.setStyleSheet(_glass_style(14))
+        intro.setStyleSheet(_glass_style(_RADIUS_CARD))
         il = QHBoxLayout(intro)
         self._dash_pet_pic = QLabel()
         self._dash_pet_pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -4352,7 +4773,7 @@ class ControlConsole(QMainWindow):
         lay.addWidget(QLabel("<h2>同义词管理</h2>"))
         ph = QLabel("请从桌宠设置面板打开以管理同义词。")
         ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ph.setStyleSheet("color:#94a3b8;font-size:16px;")
+        ph.setStyleSheet("color:#b8a5aa;font-size:16px;")
         lay.addWidget(ph, 1)
         return w
 
@@ -4364,7 +4785,7 @@ class ControlConsole(QMainWindow):
 
         entry = QFrame()
         entry.setObjectName("glass")
-        entry.setStyleSheet(_glass_style(16))
+        entry.setStyleSheet(_glass_style(_RADIUS_CTRL))
         entry_lay = QHBoxLayout(entry)
         entry_lay.setContentsMargins(16, 12, 16, 12)
         title = QLabel("<b>Live2D 白膜建模</b>")
@@ -4403,7 +4824,7 @@ class ControlConsole(QMainWindow):
         outer.addWidget(self._tabs, 1)
         self._detail = QFrame()
         self._detail.setFixedWidth(300)
-        self._detail.setStyleSheet(_glass_style(16))
+        self._detail.setStyleSheet(_glass_style(_RADIUS_CTRL))
         self._detail_lay = QVBoxLayout(self._detail)
         self._detail.hide()
         outer.addWidget(self._detail)
@@ -4423,7 +4844,7 @@ class ControlConsole(QMainWindow):
         if not pets and not add_plus:
             hint = QLabel("暂无平面素材\n请将 {pet_id}_image.png 放入 assets/images/\n动图放入 assets/animations/")
             hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            hint.setStyleSheet("color:#94a3b8;padding:32px;")
+            hint.setStyleSheet("color:#b8a5aa;padding:32px;")
             grid.addWidget(hint, 0, 0, 1, 4)
         for i, pet in enumerate(pets):
             cell = self._pet_cell(pet)
@@ -4578,7 +4999,7 @@ class ControlConsole(QMainWindow):
         lay.addLayout(top)
         body = QHBoxLayout()
         left = QFrame()
-        left.setStyleSheet(_glass_style(16))
+        left.setStyleSheet(_glass_style(_RADIUS_CTRL))
         ll = QVBoxLayout(left)
         self._pet_main_name = QLabel()
         ll.addWidget(self._pet_main_name)
@@ -4612,7 +5033,7 @@ class ControlConsole(QMainWindow):
         lay.addWidget(QLabel("<h3>宠物状态</h3>"))
         stats = QHBoxLayout()
         self._pet_main_stat_cards: dict[str, tuple[QLabel, QProgressBar]] = {}
-        for icon, title, key, col in (("😊", "心情", "mood", "#3b82f6"), ("⚡", "能量", "energy", "#fb923c"), ("❤️", "好感度", "affection", "#ec4899")):
+        for icon, title, key, col in (("😊", "心情", "mood", _THEME_PINK), ("⚡", "能量", "energy", "#fb923c"), ("❤️", "好感度", "affection", _THEME_PINK)):
             card, val_label, bar = self._stat_card_tracked(icon, title, self.stats[key], col)
             self._pet_main_stat_cards[key] = (val_label, bar)
             stats.addWidget(card)
@@ -4660,7 +5081,7 @@ class ControlConsole(QMainWindow):
 
         menu_panel = QFrame()
         menu_panel.setFixedWidth(190)
-        menu_panel.setStyleSheet(_glass_style(14))
+        menu_panel.setStyleSheet(_glass_style(_RADIUS_CARD))
         menu_lay = QVBoxLayout(menu_panel)
         menu_lay.addWidget(QLabel("<b>AI 对话</b>"))
         self._ai_tool_btns: dict[str, QPushButton] = {}
@@ -4697,7 +5118,7 @@ class ControlConsole(QMainWindow):
 
     def _ai_voice_pack_page(self) -> QWidget:
         page = QFrame()
-        page.setStyleSheet(_glass_style(14))
+        page.setStyleSheet(_glass_style(_RADIUS_CARD))
         lay = QVBoxLayout(page)
         header = QHBoxLayout()
         header.addWidget(QLabel("<b>语音包</b>"))
@@ -4712,13 +5133,13 @@ class ControlConsole(QMainWindow):
         lay.addWidget(self._voice_pack_list, 1)
         self._voice_pack_detail = QLabel()
         self._voice_pack_detail.setWordWrap(True)
-        self._voice_pack_detail.setStyleSheet("color:#64748b;font-size:12px;")
+        self._voice_pack_detail.setStyleSheet("color:#968085;font-size:12px;")
         lay.addWidget(self._voice_pack_detail)
         return page
 
     def _ai_language_page(self) -> QWidget:
         page = QFrame()
-        page.setStyleSheet(_glass_style(14))
+        page.setStyleSheet(_glass_style(_RADIUS_CARD))
         lay = QVBoxLayout(page)
         lay.addWidget(QLabel("<b>语言</b>"))
 
@@ -4733,7 +5154,7 @@ class ControlConsole(QMainWindow):
 
         self._reply_language_detail = QLabel()
         self._reply_language_detail.setWordWrap(True)
-        self._reply_language_detail.setStyleSheet("color:#64748b;font-size:12px;")
+        self._reply_language_detail.setStyleSheet("color:#968085;font-size:12px;")
         lay.addWidget(self._reply_language_detail)
         lay.addStretch()
 
@@ -4757,7 +5178,7 @@ class ControlConsole(QMainWindow):
 
     def _ai_text_reader_page(self) -> QWidget:
         page = QFrame()
-        page.setStyleSheet(_glass_style(14))
+        page.setStyleSheet(_glass_style(_RADIUS_CARD))
         lay = QVBoxLayout(page)
 
         header = QHBoxLayout()
@@ -4777,7 +5198,7 @@ class ControlConsole(QMainWindow):
 
         self._read_text_hint = QLabel("导入或输入文本后会按当前音色朗读；语言不会限制朗读。")
         self._read_text_hint.setWordWrap(True)
-        self._read_text_hint.setStyleSheet("color:#64748b;font-size:12px;")
+        self._read_text_hint.setStyleSheet("color:#968085;font-size:12px;")
         lay.addWidget(self._read_text_hint)
 
         bottom = QHBoxLayout()
@@ -4875,7 +5296,7 @@ class ControlConsole(QMainWindow):
         )
 
     def _set_text_reader_hint(self, message: str, enabled: bool, ok: bool | None = None) -> None:
-        color = "#64748b"
+        color = "#968085"
         if ok is True:
             color = "#0f766e"
         elif ok is False:
@@ -4912,7 +5333,7 @@ class ControlConsole(QMainWindow):
 
     def _ai_history_page(self) -> QWidget:
         page = QFrame()
-        page.setStyleSheet(_glass_style(14))
+        page.setStyleSheet(_glass_style(_RADIUS_CARD))
         lay = QVBoxLayout(page)
         top = QHBoxLayout()
         top.addWidget(QLabel("<b>聊天记录</b>"))
@@ -4924,7 +5345,7 @@ class ControlConsole(QMainWindow):
         self._chat_view = QTextEdit()
         self._chat_view.setReadOnly(True)
         self._chat_empty = QLabel("暂无聊天记录")
-        self._chat_empty.setStyleSheet("color:#94a3b8;")
+        self._chat_empty.setStyleSheet("color:#b8a5aa;")
         self._chat_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._chat_empty, 1)
         lay.addWidget(self._chat_view, 1)
@@ -4942,7 +5363,7 @@ class ControlConsole(QMainWindow):
 
     def _ai_voice_settings_page(self) -> QWidget:
         page = QFrame()
-        page.setStyleSheet(_glass_style(14))
+        page.setStyleSheet(_glass_style(_RADIUS_CARD))
         lay = QVBoxLayout(page)
         lay.addWidget(QLabel("<b>语音设置</b>"))
         self._tts_enabled_check = QCheckBox("启用语音")
@@ -4983,7 +5404,7 @@ class ControlConsole(QMainWindow):
         lay.addLayout(controls)
         self._tts_detail = QLabel()
         self._tts_detail.setWordWrap(True)
-        self._tts_detail.setStyleSheet("color:#64748b;font-size:12px;")
+        self._tts_detail.setStyleSheet("color:#968085;font-size:12px;")
         lay.addWidget(self._tts_detail)
         lay.addStretch()
         return page
@@ -5441,7 +5862,7 @@ class ControlConsole(QMainWindow):
             if query and query not in txt.lower():
                 continue
             align = "right" if role == "user" else "left"
-            color = "#3b82f6" if role == "user" else "#64748b"
+            color = _THEME_PINK if role == "user" else _THEME_TEXT_MUTED
             self._chat_view.append(f'<p style="text-align:{align};color:{color};">{txt}</p>')
 
     def _filter_chat_view(self) -> None:
@@ -5451,7 +5872,7 @@ class ControlConsole(QMainWindow):
     def append_chat_message(self, character_name: str, role: str, text: str) -> None:
         idx = next((i for i, c in enumerate(self._chats) if c["name"] == character_name), -1)
         if idx < 0:
-            self._chats.append({"name": character_name, "color": "#ec4899", "msgs": []})
+            self._chats.append({"name": character_name, "color": _THEME_PINK, "msgs": []})
             idx = len(self._chats) - 1
         self._chats[idx]["msgs"].append((role, text))
         self._chat_store.save(character_name, self._chats[idx]["msgs"])
@@ -5473,7 +5894,7 @@ class ControlConsole(QMainWindow):
         lay.addWidget(QLabel(f"<h2>{title}</h2>"))
         ph = QLabel("功能开发中...")
         ph.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ph.setStyleSheet("color:#94a3b8;font-size:18px;")
+        ph.setStyleSheet("color:#b8a5aa;font-size:18px;")
         lay.addWidget(ph, 1)
         return w
 

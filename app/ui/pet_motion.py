@@ -8,6 +8,8 @@ import random
 
 AUTO_WALK_MARGIN = 48.0
 AUTO_WALK_ARRIVE_EPS = 10.0
+AUTO_WALK_MIN_TRAVEL = 80.0
+AUTO_WALK_PIXELS_PER_TICK = 1.5
 
 
 def screen_walk_bounds(
@@ -51,6 +53,36 @@ def random_auto_walk_target(
         random.uniform(inner_min_x, inner_max_x),
         random.uniform(inner_min_y, inner_max_y),
     )
+
+
+def random_auto_walk_target_horizontal(
+    current_x: float,
+    current_y: float,
+    origin_x: float,
+    origin_y: float,
+    area_w: float,
+    area_h: float,
+    pet_w: float,
+    pet_h: float,
+    margin: float = AUTO_WALK_MARGIN,
+    min_travel: float = AUTO_WALK_MIN_TRAVEL,
+) -> tuple[float, float]:
+    """在同一高度上随机选一个横向目标点。"""
+    min_x, min_y, max_x, max_y = screen_walk_bounds(
+        origin_x, origin_y, area_w, area_h, pet_w, pet_h
+    )
+    inner_min_x = min_x + margin
+    inner_max_x = max_x - margin
+    if inner_max_x <= inner_min_x:
+        inner_min_x, inner_max_x = min_x, max_x
+    y = max(min_y, min(max_y, float(current_y)))
+    cx = float(current_x)
+    tx = cx
+    for _ in range(12):
+        tx = random.uniform(inner_min_x, inner_max_x)
+        if abs(tx - cx) >= min_travel:
+            break
+    return tx, y
 
 
 def clamp_window_position(

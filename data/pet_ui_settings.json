@@ -1,12 +1,12 @@
 {
   "pin_top": true,
   "hover_fade": false,
-  "status_bar": false,
+  "status_bar": true,
   "chat_open": false,
   "voice_pack_id": "",
   "desktop_behavior": {
-    "auto_walk": false,
-    "follow_mouse_mode": 0
+    "auto_walk": true,
+    "follow_mouse_mode": 1
   },
   "tts_settings": {
     "enabled": true,
@@ -35,6 +35,13 @@
     "tts_rate": "",
     "tts_volume": ""
   },
+  "bubble_role_spacing": 10,
+  "status_bubble_x": 1.969626168224299,
+  "status_bubble_y": 0.9272727272727272,
+  "chat_bubble_x": 2.3317757009345796,
+  "chat_bubble_y": 0.9333333333333333,
+  "input_box_x": 2.2289719626168223,
+  "input_box_y": 1.2818181818181817,
   "personalization_settings": {
     "speech_style": {
       "tone": "电子管家",
@@ -59,14 +66,14 @@
       "transparency": 92
     },
     "companion_mode": {
-      "mode": "学习陪伴",
+      "mode": "摸鱼搭子",
       "auto_switch": true,
       "focus_silence": true
     },
     "emotion_system": {
       "enable_emotion": true,
       "mood_sensitivity": 39,
-      "intimacy_growth": 50
+      "intimacy_growth": 44
     },
     "reminders": {
       "water": true,
@@ -74,7 +81,7 @@
       "pomodoro": false,
       "meal": false,
       "sleep": true,
-      "style": "温柔提醒"
+      "style": "安静弹窗"
     },
     "memory_relationship": {
       "relationship": "朋友",
@@ -100,12 +107,5 @@
       "comfort_level": "明显关心",
       "allow_close_expression": false
     }
-  },
-  "bubble_role_spacing": 10,
-  "status_bubble_x": 1.969626168224299,
-  "status_bubble_y": 0.9272727272727272,
-  "chat_bubble_x": 2.3317757009345796,
-  "chat_bubble_y": 0.9333333333333333,
-  "input_box_x": 2.2289719626168223,
-  "input_box_y": 1.2818181818181817
+  }
 }

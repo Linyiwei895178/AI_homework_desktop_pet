@@ -61,7 +61,10 @@ from app.ui.widgets import (
     RightClickMenu,
     SubMenu,
     _app_font,
+    _apply_overlay_shadow,
+    _glass_flat_style,
     _glass_style,
+    _OVERLAY_RADIUS,
     _load_pixmap,
     apply_zhegou_idle_thumb,
     build_follow_mouse_mode_setting,
@@ -69,6 +72,7 @@ from app.ui.widgets import (
     load_custom_pet_ids,
     motion_label_from_filename,
     MOOD_DISPLAY_LABELS,
+    mood_display_label,
     normalize_tts_settings,
     scan_flat_pets,
 )
@@ -80,8 +84,9 @@ from models.vision.computer_activity_detector import (
 )
 from app.ui.pet_motion import (
     AUTO_WALK_ARRIVE_EPS,
+    AUTO_WALK_PIXELS_PER_TICK,
     clamp_window_position,
-    random_auto_walk_target,
+    random_auto_walk_target_horizontal,
 )
 from app.ui.ui_settings_store import (
     desktop_behavior_from_settings,
@@ -267,6 +272,7 @@ MOOD_STAT_VALUES: dict[str, int] = {
   "angry": 25,
   "hungry": 40,
   "idle": 70,
+  "neutral": 75,
   "normal": 75,
 }
 
@@ -985,6 +991,7 @@ class PetControlConsole(ControlConsole):
     motion_name_map: dict[str, str],
   ) -> None:
     self._desk = desktop_pet
+    self._dash_pet_thumb_cache = ""
     cloud_mgr = getattr(desktop_pet, "_cloud_manager", None)
     super().__init__(
       project_root=project_root,
@@ -1007,8 +1014,84 @@ class PetControlConsole(ControlConsole):
     self._history_viewer: StatusHistoryViewer | None = None
     self._reload_flat_tab()
     self._setup_console_nav()
+    self._sync_dashboard_pet_from_desk()
     self.sync_dashboard_stats()
     self._desk._inject_desktop_behavior_settings(self)
+    vision_page = getattr(self, "_vision_page", None)
+    if vision_page is not None and hasattr(vision_page, "set_getters"):
+      vision_page.set_getters(self._vision_frame_getter, self._vision_snapshot_getter)
+
+  def _sync_dashboard_pet_from_desk(self) -> None:
+    pet = self._desk.active_pet_record_for_dashboard(self)
+    if not pet:
+      return
+    pet_id = str(pet.get("id", "") or "")
+    if not pet_id:
+      return
+    self._current_pet_id = pet_id
+    self._sel_pet = pet_id
+    if not self._pet_main_id:
+      self._pet_main_id = pet_id
+
+  def _vision_frame_getter(self) -> Any:
+    fn = getattr(self._desk, "get_latest_camera_frame_rgb", None)
+    if not callable(fn):
+      return None
+    try:
+      return fn()
+    except Exception:
+      return None
+
+  def _vision_snapshot_getter(self) -> dict[str, Any]:
+    fn = getattr(self._desk, "get_latest_runtime_snapshot", None)
+    if not callable(fn):
+      return {}
+    try:
+      snap = fn()
+      return snap if isinstance(snap, dict) else {}
+    except Exception:
+      return {}
+
+  def _ensure_vision_debug_buttons(self) -> None:
+    if getattr(self, "_camera_detection_btn", None) is not None:
+      return
+    self._camera_detection_btn = QPushButton("摄像头检测：关闭")
+    self._camera_detection_btn.setCheckable(True)
+    self._camera_detection_btn.setStyleSheet(BTN_GLASS)
+    self._camera_detection_btn.clicked.connect(self._toggle_camera_detection)
+    self._gesture_detection_btn = QPushButton("手势识别：关闭")
+    self._gesture_detection_btn.setCheckable(True)
+    self._gesture_detection_btn.setStyleSheet(BTN_GLASS)
+    self._gesture_detection_btn.clicked.connect(self._toggle_gesture_detection)
+    self._vision_debug_btn = QPushButton("视觉预览：关闭")
+    self._vision_debug_btn.setCheckable(True)
+    self._vision_debug_btn.setStyleSheet(BTN_GLASS)
+    self._vision_debug_btn.clicked.connect(self._toggle_vision_debug_preview)
+
+  def _page_vision_recognition(self) -> QWidget:
+    from app.ui.widgets import VisionRecognitionPage
+
+    page = VisionRecognitionPage(
+      frame_getter=self._vision_frame_getter,
+      snapshot_getter=self._vision_snapshot_getter,
+    )
+    self._ensure_vision_debug_buttons()
+    page.set_debug_controls(
+      self._camera_detection_btn,
+      self._gesture_detection_btn,
+      self._vision_debug_btn,
+    )
+    self.sync_camera_detection_state()
+    self.sync_gesture_detection_state()
+    self.sync_vision_debug_state()
+    return page
+
+  def _nav(self, page: str) -> None:
+    super()._nav(page)
+    if page == "vision_recognition":
+      self.sync_camera_detection_state()
+      self.sync_gesture_detection_state()
+      self.sync_vision_debug_state()
 
   def _setup_console_nav(self) -> None:
     self.resize(800, 600)
@@ -1035,16 +1118,27 @@ class PetControlConsole(ControlConsole):
     super()._open_pet_main(pet)
 
   def sync_dashboard_stats(self) -> None:
+    self._sync_dashboard_pet_from_desk()
     self.stats = self._desk.stats_for_dashboard()
-    self._apply_stats_to_cards(getattr(self, "_dash_stat_cards", {}))
-    self._apply_stats_to_cards(getattr(self, "_pet_main_stat_cards", {}))
-    self._refresh_dashboard()
+    page = getattr(self, "_page", "")
+    if page in ("dashboard", "pet_main"):
+      self._apply_stats_to_cards(getattr(self, "_dash_stat_cards", {}))
+    if page == "pet_main":
+      self._apply_stats_to_cards(getattr(self, "_pet_main_stat_cards", {}))
+    if page == "dashboard":
+      self._refresh_dashboard()
+
+  def _current_pet(self) -> dict | None:
+    pet = self._desk.active_pet_record_for_dashboard(self)
+    if pet:
+      return pet
+    return super()._current_pet()
 
   def _dash_stat_card(
     self, icon: str, title: str, val: int, color: str
   ) -> tuple[QFrame, QLabel, QProgressBar]:
     f = QFrame()
-    f.setStyleSheet(_glass_style(14))
+    f.setStyleSheet(_glass_style(_RADIUS_CARD))
     lay = QVBoxLayout(f)
     row = QHBoxLayout()
     row.addWidget(QLabel(icon))
@@ -1058,8 +1152,9 @@ class PetControlConsole(ControlConsole):
     bar.setValue(val)
     bar.setTextVisible(False)
     bar.setStyleSheet(
-      f"QProgressBar {{ background:#e2e8f0; border-radius:4px; height:8px; }}"
-      f" QProgressBar::chunk {{ background:{color}; border-radius:4px; }}"
+      f"QProgressBar {{ background:#F3E8EB; border:none; border-radius:6px; height:8px; }}"
+      f" QProgressBar::chunk {{ background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+      f" stop:0 {_THEME_PINK}, stop:1 #ffb3c8); border-radius:6px; }}"
     )
     lay.addWidget(bar)
     return f, val_label, bar
@@ -1151,19 +1246,24 @@ class PetControlConsole(ControlConsole):
     btn.setText("手势识别：开启" if enabled else "手势识别：关闭")
     btn.blockSignals(False)
 
-  def _current_pet(self) -> dict | None:
-    return self._get_pet(self._current_pet_id)
-
   def _refresh_dashboard(self) -> None:
+    self._sync_dashboard_pet_from_desk()
     self._apply_stats_to_cards(getattr(self, "_dash_stat_cards", {}))
-    self._apply_stats_to_cards(getattr(self, "_pet_main_stat_cards", {}))
     pet = self._current_pet()
     if not pet or not hasattr(self, "_dash_pet_pic"):
       return
     thumb = pet.get("thumb") or self._pet_idle_path(pet)
-    self._dash_pet_pic.setPixmap(_load_pixmap(thumb, QSize(100, 100)))
-    self._dash_pet_name.setText(f"<b>{pet['name']}</b>")
-    self._dash_pet_personality.setText(pet.get("personality", ""))
+    cache = getattr(self, "_dash_pet_thumb_cache", "")
+    if thumb != cache:
+      self._dash_pet_thumb_cache = thumb
+      self._dash_pet_pic.setPixmap(_load_pixmap(thumb, QSize(100, 100)))
+    name = str(pet.get("name", "") or "")
+    name_html = f"<b>{name}</b>"
+    if self._dash_pet_name.text() != name_html:
+      self._dash_pet_name.setText(name_html)
+    personality = str(pet.get("personality", "") or "")
+    if self._dash_pet_personality.text() != personality:
+      self._dash_pet_personality.setText(personality)
 
   def _page_dashboard(self) -> QWidget:
     import datetime
@@ -1192,40 +1292,9 @@ class PetControlConsole(ControlConsole):
     tool_row.addWidget(hist_btn)
     tool_row.addStretch()
     lay.addLayout(tool_row)
-    vision = QFrame()
-    vision.setStyleSheet(_glass_style(14))
-    vl = QVBoxLayout(vision)
-    vl.setContentsMargins(14, 12, 14, 12)
-    vl.setSpacing(8)
-    vl.addWidget(QLabel("<h3>视觉调试</h3>"))
-    desc = QLabel("显示B模块摄像头画面、FaceLandmarker关键点和用户状态调试信息。")
-    desc.setWordWrap(True)
-    desc.setStyleSheet("color:#64748b;")
-    vl.addWidget(desc)
-    # 摄像头检测
-    self._camera_detection_btn = QPushButton("摄像头检测：关闭")
-    self._camera_detection_btn.setCheckable(True)
-    self._camera_detection_btn.setStyleSheet(BTN_GLASS)
-    self._camera_detection_btn.clicked.connect(self._toggle_camera_detection)
-    vl.addWidget(self._camera_detection_btn)
-    # 手势识别
-    self._gesture_detection_btn = QPushButton("手势识别：关闭")
-    self._gesture_detection_btn.setCheckable(True)
-    self._gesture_detection_btn.setStyleSheet(BTN_GLASS)
-    self._gesture_detection_btn.clicked.connect(self._toggle_gesture_detection)
-    vl.addWidget(self._gesture_detection_btn)
-    self._vision_debug_btn = QPushButton("视觉预览：关闭")
-    self._vision_debug_btn.setCheckable(True)
-    self._vision_debug_btn.setStyleSheet(BTN_GLASS)
-    self._vision_debug_btn.clicked.connect(self._toggle_vision_debug_preview)
-    vl.addWidget(self._vision_debug_btn)
-    lay.addWidget(vision)
-    self.sync_vision_debug_state()
-    self.sync_camera_detection_state()
-    self.sync_gesture_detection_state()
     lay.addWidget(QLabel("<h3>当前宠物简介</h3>"))
     intro = QFrame()
-    intro.setStyleSheet(_glass_style(14))
+    intro.setStyleSheet(_glass_style(_RADIUS_CARD))
     il = QHBoxLayout(intro)
     self._dash_pet_pic = QLabel()
     self._dash_pet_pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1700,19 +1769,24 @@ class PlanePetPlayer(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# Pet Buddy 主题（参考图：粉色毛玻璃、大圆角、柔和阴影）
+# Pet Buddy 主题（与 widgets.py 设计令牌保持一致）
 # ---------------------------------------------------------------------------
 
-_THEME_PINK = "#FF8DA1"
-_THEME_PINK_HOVER = "#FF7A92"
-_THEME_PINK_LIGHT = "#FFE4EC"
-_THEME_PINK_BG_START = "#FCE4EC"
-_THEME_PINK_BG_END = "#FFF5F8"
-_THEME_TEXT = "#333333"
-_THEME_TEXT_MUTED = "#757575"
-_THEME_BORDER = "rgba(255, 141, 161, 46)"
-_THEME_CARD = "rgba(255, 255, 255, 224)"
-_THEME_GLASS = "rgba(255, 255, 255, 199)"
+_THEME_PINK = "#ff5f7e"
+_THEME_PINK_HOVER = "#ff476b"
+_THEME_PINK_LIGHT = "#ffe4e9"
+_THEME_PINK_ACTIVE = "#ffdce3"
+_THEME_TEXT = "#543f44"
+_THEME_TEXT_MUTED = "#968085"
+_THEME_TAB_SELECTED = "#d64f6b"
+_THEME_BORDER = "rgba(255, 95, 126, 46)"
+_THEME_CARD = "rgba(255, 255, 255, 166)"
+_THEME_GLASS = "rgba(255, 255, 255, 166)"
+_THEME_BG_START = "#ffd7e0"
+_THEME_BG_END = "#f6eaed"
+_RADIUS_MAIN = 32
+_RADIUS_CARD = 24
+_RADIUS_CTRL = 16
 _FONT_STACK = '"Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif'
 
 _PRIMARY_BTN_TEXTS = frozenset({
@@ -1735,9 +1809,9 @@ def _pet_font(size: int, bold: bool = False) -> QFont:
 
 def _soft_shadow(
   widget: QWidget,
-  blur: float = 18.0,
-  offset_y: float = 4.0,
-  alpha: int = 55,
+  blur: float = 24.0,
+  offset_y: float = 6.0,
+  alpha: int = 40,
 ) -> None:
   from PySide6.QtWidgets import QGraphicsDropShadowEffect
   effect = QGraphicsDropShadowEffect(widget)
@@ -1747,27 +1821,25 @@ def _soft_shadow(
   widget.setGraphicsEffect(effect)
 
 
-def _glass_qss(radius: int = 20) -> str:
+def _glass_qss(radius: int = _OVERLAY_RADIUS) -> str:
   return f"""
     QFrame#glass {{
-      background-color: {_THEME_GLASS};
-      border: 1px solid {_THEME_BORDER};
+      background-color: rgba(255, 255, 255, 242);
+      border: 1px solid rgba(200, 200, 200, 77);
       border-radius: {radius}px;
     }}
   """
 
 
-def _bubble_qss(radius: int = 20) -> str:
-  return f"""
-    QFrame#glass {{
-      background-color: {_THEME_GLASS};
-      border: none;
-      border-radius: {radius}px;
-    }}
-  """
+def _bubble_qss(radius: int = _OVERLAY_RADIUS) -> str:
+  return _glass_flat_style(radius)
 
 
-def _btn_glass_qss(radius: int = 24) -> str:
+def _overlay_shadow(widget: QWidget) -> None:
+  _apply_overlay_shadow(widget)
+
+
+def _btn_glass_qss(radius: int = _RADIUS_CARD) -> str:
   return f"""
     QPushButton {{
       background-color: rgba(255, 255, 255, 235);
@@ -1780,21 +1852,21 @@ def _btn_glass_qss(radius: int = 24) -> str:
     }}
     QPushButton:hover {{
       background-color: {_THEME_PINK_LIGHT};
-      border-color: rgba(255, 141, 161, 89);
+      border-color: rgba(255, 95, 126, 89);
     }}
     QPushButton:pressed {{
-      background-color: #FFD0DC;
+      background-color: {_THEME_PINK_ACTIVE};
     }}
     QPushButton:checked {{
       background-color: {_THEME_PINK_LIGHT};
-      color: {_THEME_PINK};
-      border-color: rgba(255, 141, 161, 115);
+      color: {_THEME_TAB_SELECTED};
+      border-color: rgba(255, 95, 126, 115);
       font-weight: 600;
     }}
   """
 
 
-def _btn_primary_qss(radius: int = 24, padding: str = "10px 22px") -> str:
+def _btn_primary_qss(radius: int = 100, padding: str = "10px 22px") -> str:
   return f"""
     QPushButton {{
       background-color: {_THEME_PINK};
@@ -1807,7 +1879,7 @@ def _btn_primary_qss(radius: int = 24, padding: str = "10px 22px") -> str:
       font-weight: 600;
     }}
     QPushButton:hover {{ background-color: {_THEME_PINK_HOVER}; }}
-    QPushButton:pressed {{ background-color: #F06B85; }}
+    QPushButton:pressed {{ background-color: #e63d5f; }}
   """
 
 
@@ -1830,7 +1902,7 @@ QLineEdit, QTextEdit {{
   selection-background-color: {_THEME_PINK_LIGHT};
 }}
 QLineEdit:focus, QTextEdit:focus {{
-  border: 1px solid rgba(255, 141, 161, 140);
+  border: 1px solid rgba(255, 95, 126, 140);
 }}
 QTabWidget::pane {{
   border: none;
@@ -1846,7 +1918,7 @@ QTabBar::tab {{
 }}
 QTabBar::tab:selected {{
   background: {_THEME_PINK_LIGHT};
-  color: {_THEME_PINK};
+  color: {_THEME_TAB_SELECTED};
   font-weight: 600;
 }}
 QProgressBar {{
@@ -1857,7 +1929,7 @@ QProgressBar {{
 }}
 QProgressBar::chunk {{
   background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-    stop:0 {_THEME_PINK}, stop:1 #FFB3C1);
+    stop:0 {_THEME_PINK}, stop:1 #ffb3c8);
   border-radius: 6px;
 }}
 QScrollBar:vertical {{
@@ -1866,12 +1938,12 @@ QScrollBar:vertical {{
   margin: 4px 2px;
 }}
 QScrollBar::handle:vertical {{
-  background: rgba(255, 141, 161, 89);
+  background: rgba(255, 95, 126, 89);
   border-radius: 4px;
   min-height: 24px;
 }}
 QScrollBar::handle:vertical:hover {{
-  background: rgba(255, 141, 161, 140);
+  background: rgba(255, 95, 126, 140);
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
   height: 0;
@@ -1881,7 +1953,7 @@ QScrollBar:horizontal {{
   height: 8px;
 }}
 QScrollBar::handle:horizontal {{
-  background: rgba(255, 141, 161, 89);
+  background: rgba(255, 95, 126, 89);
   border-radius: 4px;
 }}
 QScrollArea {{
@@ -1905,8 +1977,8 @@ def _patch_menu_paint(menu: RightClickMenu | SubMenu, *, dim_active: bool = Fals
     p.setFont(font)
     bg = QPainterPath()
     bg.addRoundedRect(QRectF(0, 0, menu.width(), menu.height()), radius, radius)
-    p.fillPath(bg, QColor(255, 255, 255, 248))
-    p.setPen(QPen(QColor(226, 232, 240, 220), 1))
+    p.fillPath(bg, QColor(255, 255, 255, 242))
+    p.setPen(QPen(QColor(200, 200, 200, 77), 1))
     p.drawPath(bg)
     pad = menu.PADDING
     ih = menu.ITEM_HEIGHT
@@ -1918,9 +1990,9 @@ def _patch_menu_paint(menu: RightClickMenu | SubMenu, *, dim_active: bool = Fals
         path = QPainterPath()
         path.addRoundedRect(QRectF(item_r.adjusted(4, 2, -4, -2)), 10, 10)
         p.fillPath(path, QColor(255, 228, 236, 230))
-      color = QColor(180, 180, 190) if is_dim else QColor(51, 51, 51)
+      color = QColor(150, 128, 133) if is_dim else QColor(84, 63, 68)
       if is_hover:
-        color = QColor(255, 122, 146)
+        color = QColor(255, 95, 126)
       p.setPen(color)
       indent = 12 if isinstance(menu, SubMenu) else 16
       p.drawText(item_r.adjusted(indent, 0, 0, 0), Qt.AlignmentFlag.AlignVCenter, label)
@@ -1949,11 +2021,11 @@ def _patch_arc_menu_paint(menu: ArcMotionMenu) -> None:
       path.addEllipse(QRectF(r))
       base_a = int(225 * alpha)
       if hovered:
-        p.fillPath(path, QColor(255, 141, 161, base_a))
+        p.fillPath(path, QColor(255, 95, 126, base_a))
         p.setPen(QColor(255, 255, 255, int(255 * alpha)))
       else:
         p.fillPath(path, QColor(255, 255, 255, base_a))
-        p.setPen(QColor(51, 51, 51, int(255 * alpha)))
+        p.setPen(QColor(84, 63, 68, int(255 * alpha)))
       label = str(item.get("label", ""))
       if len(label) > 8:
         label = label[:8]
@@ -1966,27 +2038,29 @@ def _patch_arc_menu_paint(menu: ArcMotionMenu) -> None:
 
 def _apply_desktop_overlays(pet: "DesktopPet") -> None:
   """桌宠窗口上的菜单、气泡、输入框。"""
+  overlay_radius = _OVERLAY_RADIUS
   glass_widgets = (
     pet.context_menu, pet.pin_submenu, pet.hover_submenu,
     pet.status_submenu, pet.chat_submenu, pet.info_bubble, pet.chat_bubble, pet.input_box,
   )
-  radii = {pet.context_menu: 20, pet.pin_submenu: 16, pet.hover_submenu: 16,
-           pet.status_submenu: 16, pet.chat_submenu: 16, pet.info_bubble: 20, pet.chat_bubble: 20,
-           pet.input_box: 24}
+  paint_overlay_widgets = (pet.info_bubble, pet.chat_bubble)
   for w in glass_widgets:
     if w is None:
       continue
-    is_floating_bubble = w is pet.info_bubble or w is pet.chat_bubble
+    is_paint_overlay = w in paint_overlay_widgets
     w.setObjectName("glass")
-    w.setAutoFillBackground(not is_floating_bubble)
-    w.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, is_floating_bubble)
-    w.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, is_floating_bubble)
-    style = _bubble_qss(radii.get(w, 20)) if is_floating_bubble else _glass_qss(radii.get(w, 20))
-    w.setStyleSheet(style)
-    if is_floating_bubble:
+    w.setAutoFillBackground(not is_paint_overlay)
+    w.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, is_paint_overlay)
+    w.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, is_paint_overlay)
+    if not is_paint_overlay:
+      w.setStyleSheet(_glass_qss(overlay_radius))
+    else:
+      w.setStyleSheet("")
+    # 半透明自绘气泡 / 输入框不使用 QGraphicsDropShadowEffect，避免出现黑色晕影
+    if is_paint_overlay or w is pet.input_box:
       w.setGraphicsEffect(None)
     else:
-      _soft_shadow(w, blur=16, offset_y=3, alpha=45)
+      _overlay_shadow(w)
   if pet.context_menu:
     _patch_menu_paint(pet.context_menu)
   for sm in (pet.pin_submenu, pet.hover_submenu, pet.status_submenu, pet.chat_submenu):
@@ -1996,7 +2070,7 @@ def _apply_desktop_overlays(pet: "DesktopPet") -> None:
     pet.arc_menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     _patch_arc_menu_paint(pet.arc_menu)
   if pet.input_box and hasattr(pet.input_box, "_btn"):
-    pet.input_box._btn.setStyleSheet(_btn_primary_qss(18, "0px 18px"))
+    pet.input_box._btn.setStyleSheet(_btn_primary_qss(100, "0px 18px"))
     pet.input_box._btn.setMinimumHeight(30)
   for bubble in (pet.info_bubble, pet.chat_bubble):
     if bubble and hasattr(bubble, "_lbl"):
@@ -2016,14 +2090,14 @@ def _apply_control_console_theme(console: ControlConsole) -> None:
   console.setStyleSheet(f"""
     QMainWindow {{
       background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 {_THEME_PINK_BG_START}, stop:1 {_THEME_PINK_BG_END});
+        stop:0 {_THEME_BG_START}, stop:1 {_THEME_BG_END});
     }}
   """)
   central = console.centralWidget()
   if central:
     central.setStyleSheet(f"""
       background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 {_THEME_PINK_BG_START}, stop:1 {_THEME_PINK_BG_END});
+        stop:0 {_THEME_BG_START}, stop:1 {_THEME_BG_END});
     """)
 
   sidebar: QFrame | None = None
@@ -2038,32 +2112,32 @@ def _apply_control_console_theme(console: ControlConsole) -> None:
       QFrame#sidebar {{
         background-color: {_THEME_GLASS};
         border: none;
-        border-right: 1px solid {_THEME_BORDER};
-        border-top-right-radius: 24px;
-        border-bottom-right-radius: 24px;
+        border-right: 1.5px solid {_THEME_BORDER};
+        border-top-right-radius: {_RADIUS_MAIN}px;
+        border-bottom-right-radius: {_RADIUS_MAIN}px;
       }}
     """)
-    _soft_shadow(sidebar, blur=22, offset_y=0, alpha=35)
+    _soft_shadow(sidebar, blur=24, offset_y=0, alpha=40)
 
   for frame in console.findChildren(QFrame):
     if frame is sidebar:
       continue
     if frame.objectName() != "sidebar":
       frame.setObjectName("glass")
-    frame.setStyleSheet(_glass_qss(20))
-    _soft_shadow(frame, blur=14, offset_y=3, alpha=40)
+    frame.setStyleSheet(_glass_qss(_RADIUS_CARD))
+    _soft_shadow(frame, blur=24, offset_y=6, alpha=40)
 
   for btn in console.findChildren(QPushButton):
     if btn.objectName() == "switchPetBtn":
-      btn.setStyleSheet("""
-        QPushButton#switchPetBtn {
-          background-color: #7c3aed; color: white; border: none;
-          border-radius: 12px; padding: 10px 22px; font-weight: bold;
-        }
-        QPushButton#switchPetBtn:hover { background-color: #6d28d9; }
-        QPushButton#switchPetBtn:pressed { background-color: #5b21b6; }
+      btn.setStyleSheet(f"""
+        QPushButton#switchPetBtn {{
+          background-color: {_THEME_PINK}; color: white; border: none;
+          border-radius: 100px; padding: 10px 22px; font-weight: bold;
+        }}
+        QPushButton#switchPetBtn:hover {{ background-color: {_THEME_PINK_HOVER}; }}
+        QPushButton#switchPetBtn:pressed {{ background-color: #e63d5f; }}
       """)
-      _soft_shadow(btn, blur=12, offset_y=2, alpha=35)
+      _soft_shadow(btn, blur=24, offset_y=6, alpha=40)
       continue
     text = btn.text().strip().replace("\n", " ")
     is_primary = (
@@ -2084,13 +2158,13 @@ def _apply_control_console_theme(console: ControlConsole) -> None:
       btn.setFixedSize(32, 32)
     elif is_primary:
       btn.setStyleSheet(_btn_primary_qss())
-      _soft_shadow(btn, blur=12, offset_y=2, alpha=35)
+      _soft_shadow(btn, blur=24, offset_y=6, alpha=40)
     else:
       btn.setStyleSheet(_btn_glass_qss())
       if btn.isCheckable():
         pass
       elif btn.iconSize().width() > 50:
-        btn.setStyleSheet(_btn_glass_qss(20))
+        btn.setStyleSheet(_btn_glass_qss(_RADIUS_CTRL))
 
   for lbl in console.findChildren(QLabel):
     if "<h2>" in lbl.text() or "欢迎" in lbl.text():
@@ -2114,7 +2188,7 @@ def _apply_control_console_theme(console: ControlConsole) -> None:
       }}
       QProgressBar::chunk {{
         background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-          stop:0 {_THEME_PINK}, stop:1 #FFB3C1);
+          stop:0 {_THEME_PINK}, stop:1 #ffb3c8);
         border-radius: 6px;
       }}
     """)
@@ -2156,7 +2230,7 @@ class _ResizeOverlay(QWidget):
   def paintEvent(self, _event) -> None:
     p = QPainter(self)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(QPen(QColor(255, 141, 161, 200), 2, Qt.PenStyle.DashLine))
+    p.setPen(QPen(QColor(255, 95, 126, 200), 2, Qt.PenStyle.DashLine))
     p.setBrush(QColor(255, 255, 255, 20))
     p.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2), 8, 8)
     hs = self.HANDLE
@@ -2166,7 +2240,7 @@ class _ResizeOverlay(QWidget):
       QRect(0, self.height() - hs, hs, hs),
       QRect(self.width() - hs, self.height() - hs, hs, hs),
     ):
-      p.fillRect(rect, QColor(255, 141, 161, 180))
+      p.fillRect(rect, QColor(255, 95, 126, 180))
     p.end()
 
   def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -2533,6 +2607,7 @@ class DesktopPet:
     self._uses_external_team_c = False
     self._ui_bridge: PetUiBridge | None = None
     self._pet_stats_poll_timer: Optional[QTimer] = None
+    self._console_stats_sync_at = 0.0
     self._last_pet_stats_key: tuple[int, int, int] | None = None
 
     self._bind_team_interfaces()
@@ -2617,13 +2692,7 @@ class DesktopPet:
     self.play_action_from_decision()
 
   def _mood_display_label(self, mood: Any) -> str:
-    if isinstance(mood, (int, float)):
-      return str(int(mood))
-    raw = str(mood or "happy").strip()
-    if not raw:
-      return "happy"
-    key = raw.lower()
-    return MOOD_DISPLAY_LABELS.get(key, raw)
+    return mood_display_label(mood)
 
   def _sync_info_bubble_stats(self) -> None:
     if self.info_bubble is None:
@@ -2642,7 +2711,7 @@ class DesktopPet:
       return
     self._last_pet_stats_key = key
 
-    if self._console is not None:
+    if self._console is not None and self._should_sync_console_stats(force):
       try:
         self._console.sync_dashboard_stats()
       except RuntimeError:
@@ -2652,6 +2721,43 @@ class DesktopPet:
       self._sync_info_bubble_stats()
       if self.info_bubble.isVisible():
         self.info_bubble.refresh_label()
+
+  def _should_sync_console_stats(self, force: bool = False) -> bool:
+    try:
+      if not self._console.isVisible():
+        return False
+    except RuntimeError:
+      self._console = None
+      return False
+    if force:
+      self._console_stats_sync_at = time.monotonic()
+      return True
+    now = time.monotonic()
+    if (now - self._console_stats_sync_at) * 1000.0 < 900.0:
+      return False
+    self._console_stats_sync_at = now
+    return True
+
+  def _pet_stats_poll_interval_ms(self) -> int:
+    if self._console is None:
+      return 200
+    try:
+      if self._console.isVisible():
+        return 1500
+    except RuntimeError:
+      self._console = None
+    return 200
+
+  def _update_pet_stats_poll_interval(self) -> None:
+    timer = self._pet_stats_poll_timer
+    if timer is None:
+      return
+    try:
+      interval = self._pet_stats_poll_interval_ms()
+      if timer.interval() != interval:
+        timer.setInterval(interval)
+    except RuntimeError:
+      self._pet_stats_poll_timer = None
 
   def _refresh_status_bar_ui(self, force: bool = False) -> None:
     self.refresh_pet_stats_ui(force=force)
@@ -2667,13 +2773,16 @@ class DesktopPet:
     parent = self._app if self._app is not None else self._window
     if self._pet_stats_poll_timer is None:
       self._pet_stats_poll_timer = QTimer(parent)
-      self._pet_stats_poll_timer.setTimerType(Qt.TimerType.PreciseTimer)
+      self._pet_stats_poll_timer.setTimerType(Qt.TimerType.CoarseTimer)
       self._pet_stats_poll_timer.timeout.connect(
         lambda: self.refresh_pet_stats_ui(force=False)
       )
     try:
+      interval = self._pet_stats_poll_interval_ms()
+      if self._pet_stats_poll_timer.interval() != interval:
+        self._pet_stats_poll_timer.setInterval(interval)
       if not self._pet_stats_poll_timer.isActive():
-        self._pet_stats_poll_timer.start(200)
+        self._pet_stats_poll_timer.start(interval)
     except RuntimeError:
       self._pet_stats_poll_timer = None
       self._ensure_pet_stats_poll_timer()
@@ -2733,16 +2842,51 @@ class DesktopPet:
         return pet
     return None
 
-  def stats_for_dashboard(self) -> dict[str, int]:
+  def active_pet_record_for_dashboard(self, console: ControlConsole | None = None) -> dict | None:
+    """返回当前屏幕角色在控制台/仪表盘使用的展示记录。"""
+    console = console or self._console
+    if self._active_pet:
+      pet_id = str(self._active_pet.get("id", "") or "")
+      if self._active_pet.get("is_flat"):
+        built = self.build_pet_record(pet_id)
+        if built:
+          return built
+      if console is not None:
+        found = console._get_pet(pet_id)
+        if found:
+          return found
+      return dict(self._active_pet)
+    pet_id = str(self._last_pet_id or self._current_live2d_model_id() or "").strip()
+    if pet_id and console is not None:
+      found = console._get_pet(pet_id)
+      if found:
+        return found
+    if console is not None:
+      norm = os.path.normpath(self.model_path)
+      for pet in console._live2d:
+        model_path = str(pet.get("model_path") or "")
+        if model_path and os.path.normpath(model_path) == norm:
+          return pet
+    return None
+
+  def stats_for_dashboard(self) -> dict[str, int | str]:
     raw = self.team_d.api_get_pet_status()
-    mood = raw.get("mood", "happy")
-    if isinstance(mood, (int, float)):
-      mood_val = int(mood)
+    mood_raw = raw.get("mood", "happy")
+    if isinstance(mood_raw, (int, float)):
+      mood_val = int(mood_raw)
+      mood_code = "happy"
     else:
-      mood_val = MOOD_STAT_VALUES.get(str(mood).lower(), 75)
+      mood_code = str(mood_raw or "happy").strip().lower() or "happy"
+      mood_val = MOOD_STAT_VALUES.get(mood_code, 75)
     energy = int(raw.get("energy", 72))
     intimacy = int(raw.get("intimacy", raw.get("affection", 72)))
-    return {"mood": mood_val, "energy": energy, "affection": intimacy}
+    return {
+      "mood": mood_val,
+      "mood_code": mood_code,
+      "mood_label": mood_display_label(mood_raw),
+      "energy": energy,
+      "affection": intimacy,
+    }
 
   def motions_for_dashboard(self, pet: dict) -> list[dict]:
     if pet.get("is_flat"):
@@ -3416,7 +3560,8 @@ class DesktopPet:
   def _append_chat_chunk(self, ch: str) -> None:
     if self.chat_bubble is None or not (self._chat_open or self._companion_bubble_active):
       return
-    next_text = self.chat_bubble.text + ch
+    prev = self.chat_bubble.text
+    next_text = (prev + ch) if prev else ch
     if not self.chat_bubble.visible or not self.chat_bubble.isVisible():
       if self._is_arc_menu_open():
         self.chat_bubble.set_text(next_text)
@@ -3429,6 +3574,7 @@ class DesktopPet:
       self._reflow_visible_bubbles()
     else:
       self.chat_bubble.update()
+      self.chat_bubble.repaint()
 
   def _stream_ui_callback(self, ch: str) -> None:
     if self._chat_stream is not None:
@@ -3788,12 +3934,15 @@ class DesktopPet:
     self._auto_walk_wait_timer = None
 
   def _start_auto_walk_target(self) -> None:
-    """随机生成屏幕内目标点（避开边缘）。"""
+    """在当前高度上随机选一个横向目标点。"""
     screen = QApplication.primaryScreen()
     if screen is None:
       return
     geo = screen.availableGeometry()
-    tx, ty = random_auto_walk_target(
+    wx, wy = self._get_pet_window_xy()
+    tx, ty = random_auto_walk_target_horizontal(
+      wx,
+      wy,
       float(geo.x()),
       float(geo.y()),
       float(geo.width()),
@@ -3841,18 +3990,16 @@ class DesktopPet:
       self._start_auto_walk_target()
 
     dx = self._auto_walk_target_x - wx
-    dy = self._auto_walk_target_y - wy
-    dist = math.hypot(dx, dy)
+    dist = abs(dx)
     if dist < AUTO_WALK_ARRIVE_EPS:
       self._auto_walk_has_target = False
       self._set_auto_walk_motion("idle")
       self._start_auto_walk_wait()
       return
 
-    speed = 0.05
-    ratio = min(1.0, max(0.8, dist * speed) / dist) if dist >= 1e-4 else 0.0
-    new_x = wx + dx * ratio
-    new_y = wy + dy * ratio
+    step = min(AUTO_WALK_PIXELS_PER_TICK, dist)
+    new_x = wx + (step if dx > 0 else -step)
+    new_y = wy
     new_x, new_y = self._clamp_window_to_screen(int(round(new_x)), int(round(new_y)))
     self._set_auto_walk_motion("walk")
     self._move_pet_window(new_x, new_y)
@@ -4013,18 +4160,11 @@ class DesktopPet:
       self._reflow_visible_bubbles()
 
   def _motion_should_pause(self) -> bool:
-    console_open = False
-    if self._console is not None:
-      try:
-        console_open = self._console.isVisible()
-      except RuntimeError:
-        console_open = False
     return bool(
       self._dragging
       or self._resizing_corner
       or self._chat_open
       or self._any_menu_open()
-      or console_open
     )
 
   def set_follow_mouse_mode(self, mode: int) -> None:
@@ -4086,7 +4226,7 @@ class DesktopPet:
     frame.setStyleSheet(_glass_style(16))
     flay = QVBoxLayout(frame)
     flay.addWidget(QLabel("<b>桌面行为（实时）</b>"))
-    chk = QCheckBox("自由游走（空闲时在桌面缓慢平移）")
+    chk = QCheckBox("自由游走（在同一高度缓慢横向平移）")
     chk.setChecked(self._auto_walk_enabled)
     chk.toggled.connect(self.set_auto_walk_enabled)
     flay.addWidget(chk)
@@ -5614,7 +5754,21 @@ class DesktopPet:
     self._save_pet_memory()
     self.cleanup(quit_app=True)
 
+  def _on_settings_console_closed(self) -> None:
+    self._console = None
+    self._last_pet_stats_key = None
+    self._update_pet_stats_poll_interval()
+
   def _open_settings_panel(self) -> None:
+    if self._console is not None:
+      try:
+        self._console.showNormal()
+        self._console.raise_()
+        self._console.activateWindow()
+        self._update_pet_stats_poll_interval()
+      except RuntimeError:
+        self._console = None
+      return
     self.arc_menu.hide()
     console = PetControlConsole(
       desktop_pet=self,
@@ -5624,12 +5778,12 @@ class DesktopPet:
       motion_name_map=self.motion_name_map,
     )
     self._console = console
+    console.destroyed.connect(self._on_settings_console_closed)
     _apply_control_console_theme(console)
     console.sync_dashboard_stats()
     self.refresh_pet_stats_ui(force=True)
-    console.run()
-    self._console = None
-    self._last_pet_stats_key = None
+    self._update_pet_stats_poll_interval()
+    console.show()
 
   def _open_chat(self) -> None:
     self._set_chat_open(True)

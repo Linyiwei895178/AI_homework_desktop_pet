@@ -1,8 +1,8 @@
 {
-  "last_pet_id": "doro",
+  "last_pet_id": "mao_pro_zh",
   "pin_top": true,
   "hover_fade": false,
-  "status_bar": false,
+  "status_bar": true,
   "chat_open": false,
   "voice_pack_id": "",
   "tts_settings": {
@@ -33,11 +33,11 @@
     "tts_volume": ""
   },
   "position": [
-    375,
-    251
+    131,
+    19
   ],
   "window_size": [
-    376,
-    475
+    382,
+    509
   ]
 }
