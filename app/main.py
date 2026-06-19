@@ -209,6 +209,20 @@ def main():
         "action_code": "",
         "last_trigger_time": None,
     }
+    last_runtime_response = {
+        "text": "",
+        "event_type": "",
+        "updated_at": None,
+    }
+
+    def record_runtime_response(text, event_type: str = "") -> None:
+        """Cache the latest real response text for the debug/status panel."""
+        value = str(text or "").strip()
+        if not value:
+            return
+        last_runtime_response["text"] = value
+        last_runtime_response["event_type"] = str(event_type or "")
+        last_runtime_response["updated_at"] = time.time()
 
     if GESTURE_FEATURE_ENABLED and GESTURE_START_ENABLED and shared_camera is not None:
         try:
@@ -309,9 +323,12 @@ def main():
                 "voice_action": "speak",
             })
             if hasattr(team_c, "api_on_status_event"):
-                team_c.api_on_status_event(event_data)
+                reply = team_c.api_on_status_event(event_data)
+                record_runtime_response(reply, "gesture_event")
             else:
-                speak("我看到你的手势啦！", state="happy", action="speak")
+                fallback_reply = "我看到你的手势啦！"
+                speak(fallback_reply, state="happy", action="speak")
+                record_runtime_response(fallback_reply, "gesture_event")
         except Exception as exc:
             logger.exception(f"[队员B] 手势检测轮询失败，已忽略本次结果: {exc}")
 
@@ -627,6 +644,9 @@ def main():
     def get_runtime_action_state() -> dict:
         return dict(last_runtime_action)
 
+    def get_runtime_response_state() -> dict:
+        return dict(last_runtime_response)
+
     vision_runtime_api = VisionRuntimeAPI(
         shared_camera_getter=lambda: shared_camera,
         camera_enabled_getter=lambda: bool(camera_detection_enabled),
@@ -737,6 +757,8 @@ def main():
                     else None
                 ),
                 camera_enabled_getter=lambda: camera_detection_enabled,
+                runtime_snapshot_getter=lambda: vision_runtime_api.get_latest_runtime_snapshot(),
+                response_getter=get_runtime_response_state,
                 refresh_ms=400,
             )
             vision_debug_panel.hide()
@@ -888,6 +910,7 @@ def main():
                     speak(reply, state=state_code, action="speak")
 
                 logger.info(f"[队员C] 用户状态主动回应: {reply}")
+                record_runtime_response(reply, "user_state_event")
                 last_user_state_response_at[state_code] = now
                 user_state_spoke = bool(reply)
 
@@ -923,6 +946,7 @@ def main():
                     logger.info(f"[队员D→队员C] 主动语音提示: {hint}")
                     last_speech_hint_text = hint
                     last_speech_hint_at = now
+                    record_runtime_response(hint, "pet_mood_hint")
                     # 播放提示语音（队员C TTS）
                     speak(hint, state="hint", action="speak")
                     # 注意：主动提示不计入对话字数，不更新状态

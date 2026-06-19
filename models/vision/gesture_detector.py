@@ -20,6 +20,8 @@ GESTURE_RAISED_HAND = "raised_hand"
 GESTURE_PINCH_ZOOM = "pinch_zoom"
 GESTURE_NONE = "none"
 
+GESTURE_ONLY_ZOOM_MODE = False
+GESTURE_ZOOM_OUTPUT_ENABLED = True
 ZOOM_MIN_PINCH_DISTANCE = 0.04
 ZOOM_MAX_PINCH_DISTANCE = 0.30
 ZOOM_MIN_SCALE = 0.75
@@ -493,17 +495,39 @@ class GestureDetector:
                 source=["mediapipe_hands"],
                 description="当前没有检测到手部。",
             )
-            state["zoom"] = self._zoom_controller.update(None, None, time.time())
+            state["zoom"] = self._inactive_zoom_state()
             self._cache_debug_snapshot(state, hands=[], handedness=[], source=["mediapipe_hands"])
             return state
 
+        if GESTURE_ONLY_ZOOM_MODE:
+            zoom_state = self._calculate_zoom_state(hands[0], blocked_by_gesture=False)
+            if zoom_state.get("active"):
+                state = create_gesture_state(
+                    GESTURE_PINCH_ZOOM,
+                    confidence=zoom_state.get("confidence", 0.82),
+                    source=["mediapipe_hands"],
+                    description="MediaPipe Hands 检测到拇指和食指距离变化，正在控制桌宠缩放。",
+                )
+            else:
+                state = create_gesture_state(
+                    GESTURE_NONE,
+                    confidence=0.0,
+                    source=["mediapipe_hands"],
+                    description="当前仅启用手势缩放，等待拇指和食指距离变化。",
+                )
+            state["zoom"] = zoom_state
+            self._cache_debug_snapshot(state, hands=hands, handedness=handedness, source=["mediapipe_hands"])
+            return state
+
         gesture_code, confidence = self._classify_hands(hands)
-        zoom_blocked = gesture_code == GESTURE_WAVE
-        zoom_state = self._calculate_zoom_state(hands[0], blocked_by_gesture=zoom_blocked)
+        zoom_state = self._inactive_zoom_state()
+        if GESTURE_ZOOM_OUTPUT_ENABLED:
+            zoom_blocked = gesture_code == GESTURE_WAVE
+            zoom_state = self._calculate_zoom_state(hands[0], blocked_by_gesture=zoom_blocked)
         description = f"MediaPipe Hands 检测到{GESTURE_NAME_MAP[gesture_code]}手势。"
         if gesture_code == GESTURE_NONE:
             description = "MediaPipe Hands 检测到手部，但没有匹配到明确手势。"
-        if zoom_state.get("active") and gesture_code == GESTURE_OK:
+        if GESTURE_ZOOM_OUTPUT_ENABLED and zoom_state.get("active") and gesture_code == GESTURE_OK:
             gesture_code = GESTURE_PINCH_ZOOM
             confidence = max(confidence, float(zoom_state.get("confidence", 0.0) or 0.0))
             description = "MediaPipe Hands 检测到拇指和食指距离变化，正在控制桌宠缩放。"
@@ -518,6 +542,9 @@ class GestureDetector:
         return state
 
     def _classify_hands(self, hands: list[Any]) -> tuple[str, float]:
+        if GESTURE_ONLY_ZOOM_MODE:
+            return GESTURE_NONE, 0.0
+
         if len(hands) >= 2 and self._is_heart(hands[0], hands[1]):
             return GESTURE_HEART, 0.86
 
