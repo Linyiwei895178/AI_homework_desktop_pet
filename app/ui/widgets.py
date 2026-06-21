@@ -3699,6 +3699,7 @@ def format_vision_runtime_snapshot(snapshot: dict[str, Any] | None) -> str:
         return "暂无识别数据"
 
     user = snapshot.get("user_state") if isinstance(snapshot.get("user_state"), dict) else {}
+    expression = snapshot.get("user_expression") if isinstance(snapshot.get("user_expression"), dict) else {}
     gesture = snapshot.get("gesture") if isinstance(snapshot.get("gesture"), dict) else {}
     pet = snapshot.get("pet_emotion") if isinstance(snapshot.get("pet_emotion"), dict) else {}
     action = snapshot.get("action") if isinstance(snapshot.get("action"), dict) else {}
@@ -3719,6 +3720,10 @@ def format_vision_runtime_snapshot(snapshot: dict[str, Any] | None) -> str:
     except (TypeError, ValueError):
         user_conf = 0.0
     try:
+        expression_conf = float(expression.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        expression_conf = 0.0
+    try:
         gesture_conf = float(gesture.get("confidence", 0.0))
     except (TypeError, ValueError):
         gesture_conf = 0.0
@@ -3734,6 +3739,11 @@ def format_vision_runtime_snapshot(snapshot: dict[str, Any] | None) -> str:
         f"状态：{user.get('state_name', '未知')} ({user.get('state_code', 'unknown')})",
         f"置信度：{user_conf:.0%}",
         f"来源：{user.get('source') or '--'}",
+        "",
+        "【用户表情】",
+        f"表情：{expression.get('expression_name', '未知')} ({expression.get('expression_code', 'unknown')})",
+        f"置信度：{expression_conf:.0%}",
+        f"来源：{expression.get('source') or '--'}",
         "",
         "【手势识别】",
         f"结果：{gesture.get('gesture_name', '无手势')}",

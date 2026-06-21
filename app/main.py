@@ -105,12 +105,12 @@ def main():
         "1", "true", "yes", "y", "on"
     }  # 摄像头不可用或演示阶段可开启模拟状态
     USER_STATE_ENABLED = env_bool("DESKTOP_PET_USER_STATE_ENABLED", True)
-    CAMERA_START_ENABLED = env_bool("DESKTOP_PET_CAMERA_ENABLED", False)
+    CAMERA_START_ENABLED = env_bool("DESKTOP_PET_CAMERA_ENABLED", USER_STATE_ENABLED and not MOCK_ENABLED)
     GESTURE_FEATURE_ENABLED = env_bool("DESKTOP_PET_GESTURE_FEATURE_ENABLED", True)
     GESTURE_START_ENABLED = env_bool("DESKTOP_PET_GESTURE_ENABLED", False)
     DEEPFACE_ENABLED = env_bool("DESKTOP_PET_DEEPFACE_ENABLED", False)
     VLM_ENABLED = env_bool("DESKTOP_PET_QWEN_VL_ENABLED", env_bool("DESKTOP_PET_VLM_ENABLED", False))
-    FACE_MIMIC_ENABLED = env_bool("DESKTOP_PET_FACE_MIMIC_ENABLED", False)
+    FACE_MIMIC_ENABLED = env_bool("DESKTOP_PET_FACE_MIMIC_ENABLED", USER_STATE_ENABLED and not MOCK_ENABLED)
     CAMERA_INDEX = int(os.getenv("DESKTOP_PET_CAMERA_INDEX", "0") or 0)
     CAMERA_WIDTH = max(160, int(os.getenv("DESKTOP_PET_CAMERA_WIDTH", "320") or 320))
     CAMERA_HEIGHT = max(120, int(os.getenv("DESKTOP_PET_CAMERA_HEIGHT", "240") or 240))
@@ -632,6 +632,21 @@ def main():
         except Exception:
             return None
 
+    def get_runtime_user_expression() -> dict | None:
+        """Read latest Face Mimic expression output without changing user state."""
+        if user_detector is None:
+            return None
+        result = {"face_mimic": {}}
+        try:
+            mimic_getter = getattr(user_detector, "get_face_mimic_state", None)
+            if callable(mimic_getter):
+                mimic = mimic_getter()
+                if isinstance(mimic, dict):
+                    result["face_mimic"] = mimic
+        except Exception:
+            pass
+        return result
+
     def get_runtime_gesture_state() -> dict | None:
         """Read latest gesture state without starting gesture detection."""
         if gesture_detector is None:
@@ -662,6 +677,7 @@ def main():
             )
         ),
         user_state_getter=get_runtime_user_state,
+        user_expression_getter=get_runtime_user_expression,
         gesture_state_getter=get_runtime_gesture_state,
         pet_state_getter=lambda: pet_state,
         action_state_getter=get_runtime_action_state,

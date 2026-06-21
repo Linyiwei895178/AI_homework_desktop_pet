@@ -82,6 +82,25 @@ class VisionDebugPanel(QWidget):
             """
         )
 
+        self.expression_label = QLabel("用户表情：暂无可靠结果")
+        self.expression_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.expression_label.setWordWrap(True)
+        self.expression_label.setMinimumHeight(110)
+        self.expression_label.setStyleSheet(
+            """
+            QLabel {
+                color: #ecfeff;
+                background: #12322f;
+                border-left: 1px solid #334155;
+                border-right: 1px solid #334155;
+                border-bottom: 1px solid #334155;
+                padding: 14px 16px;
+                font-size: 20px;
+                font-family: Microsoft YaHei, SimHei, sans-serif;
+            }
+            """
+        )
+
         self.pet_status_label = QLabel("桌宠状态：普通")
         self.pet_status_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self.pet_status_label.setWordWrap(True)
@@ -134,6 +153,7 @@ class VisionDebugPanel(QWidget):
         side_layout.setContentsMargins(0, 0, 0, 0)
         side_layout.setSpacing(0)
         side_layout.addWidget(self.result_label, 0)
+        side_layout.addWidget(self.expression_label, 0)
         side_layout.addWidget(self.pet_status_label, 0)
         side_layout.addWidget(self.response_label, 0)
         side_layout.addWidget(self.info_scroll, 1)
@@ -195,6 +215,7 @@ class VisionDebugPanel(QWidget):
         if not camera_enabled:
             self._show_placeholder("Camera Off")
             self.result_label.setText("识别结果：摄像头已关闭")
+            self.expression_label.setText("用户表情：摄像头已关闭")
             self.info_label.setText("camera: off\nstate: unknown\nsource: camera_off")
             return
 
@@ -221,6 +242,7 @@ class VisionDebugPanel(QWidget):
             self._log_waiting_frame_once()
             self._show_placeholder("Waiting for camera frame...")
             self.result_label.setText(self._format_result_summary(info, state, gesture_state))
+            self.expression_label.setText(self._format_user_expression(info))
             self.info_label.setText(self._format_info(info, state, gesture_state))
             return
 
@@ -228,6 +250,7 @@ class VisionDebugPanel(QWidget):
         display_frame = self._draw_hand_overlay(display_frame, gesture_state)
         self.set_frame(display_frame)
         self.result_label.setText(self._format_result_summary(info, state, gesture_state))
+        self.expression_label.setText(self._format_user_expression(info))
         self.info_label.setText(self._format_info(info, state, gesture_state))
 
     def _read_camera_frame(self) -> Any:
@@ -587,6 +610,25 @@ class VisionDebugPanel(QWidget):
             f"人脸状态：{face_text}"
         )
 
+    def _format_user_expression(self, info: dict) -> str:
+        mimic = info.get("face_mimic") if isinstance(info.get("face_mimic"), dict) else {}
+
+        mimic_expression = str(mimic.get("expression") or "unknown").lower() if mimic else "unknown"
+        mimic_available = bool(mimic.get("available")) if mimic else False
+        mimic_confidence = self._safe_float(mimic.get("confidence", 0.0)) if mimic else 0.0
+        smile = self._safe_float(mimic.get("smile", 0.0)) if mimic else 0.0
+        mouth_open = self._safe_float(mimic.get("mouth_open", 0.0)) if mimic else 0.0
+        brow_raise = self._safe_float(mimic.get("brow_raise", 0.0)) if mimic else 0.0
+        if not mimic_available or mimic_expression == "unknown":
+            return "用户表情：暂无可靠结果\nFace Mimic：未启用或暂无结果"
+
+        mimic_name = self._expression_name(mimic_expression)
+        return (
+            f"用户表情：{mimic_name} ({mimic_expression})\n"
+            f"Face Mimic：{mimic_name}  置信度：{mimic_confidence:.2f}\n"
+            f"微笑：{smile:.2f}  张嘴：{mouth_open:.2f}  抬眉：{brow_raise:.2f}"
+        )
+
     def _format_pet_status(self, snapshot: dict) -> str:
         pet_emotion = snapshot.get("pet_emotion") if isinstance(snapshot, dict) else {}
         action = snapshot.get("action") if isinstance(snapshot, dict) else {}
@@ -643,6 +685,22 @@ class VisionDebugPanel(QWidget):
             "": "无动作",
         }
         return names.get(action_code, action_code or "无动作")
+
+    @staticmethod
+    def _expression_name(expression: str) -> str:
+        names = {
+            "happy": "开心",
+            "neutral": "平静",
+            "sad": "难过",
+            "angry": "生气",
+            "surprise": "惊讶",
+            "surprised": "惊讶",
+            "fear": "紧张",
+            "disgust": "不适",
+            "tired": "疲惫",
+            "unknown": "未知",
+        }
+        return names.get(expression, expression or "未知")
 
     @staticmethod
     def _safe_float(value: Any) -> float:

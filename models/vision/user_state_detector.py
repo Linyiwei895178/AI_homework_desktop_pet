@@ -318,6 +318,11 @@ class UserStateDetector:
         with self._lock:
             return copy.deepcopy(self._face_mimic_state)
 
+    def get_emotion_state(self) -> dict:
+        """Return the latest DeepFace emotion output without changing get_state()."""
+        with self._lock:
+            return copy.deepcopy(self._last_emotion_result) if isinstance(self._last_emotion_result, dict) else {}
+
     def set_vlm_enabled(self, enabled: bool):
         self._vlm_enabled = bool(enabled)
         print(f"[UserStateDetector] Qwen-VL 启用状态: {self._vlm_enabled}")
@@ -1288,7 +1293,7 @@ class UserStateDetector:
         brow_down = self._avg_values(scores.get("browDownLeft", 0.0), scores.get("browDownRight", 0.0))
         if mouth_open > 0.45 and brow_raise > 0.25:
             return "surprised"
-        if smile > 0.35:
+        if smile > 0.25:
             return "happy"
         if blink_l > 0.65 and blink_r > 0.65:
             return "tired"

@@ -50,6 +50,27 @@ GESTURE_DISABLED = {
     "active": False,
 }
 
+EXPRESSION_NAME_MAP = {
+    "happy": "开心",
+    "neutral": "平静",
+    "sad": "难过",
+    "angry": "生气",
+    "surprise": "惊讶",
+    "surprised": "惊讶",
+    "fear": "紧张",
+    "disgust": "不适",
+    "tired": "疲惫",
+    "unknown": "未知",
+}
+
+USER_EXPRESSION_DEFAULT = {
+    "expression_code": "unknown",
+    "expression_name": "未知",
+    "confidence": 0.0,
+    "source": "face_mimic_unavailable",
+    "face_mimic": {},
+}
+
 
 class VisionRuntimeAPI:
     """Small read-only adapter around existing runtime objects.
@@ -69,12 +90,14 @@ class VisionRuntimeAPI:
         gesture_state_getter: Callable[[], dict | None],
         pet_state_getter: Callable[[], Any],
         action_state_getter: Callable[[], dict | None],
+        user_expression_getter: Callable[[], dict | None] | None = None,
     ) -> None:
         self._shared_camera_getter = shared_camera_getter
         self._camera_enabled_getter = camera_enabled_getter
         self._user_detector_running_getter = user_detector_running_getter
         self._gesture_detector_running_getter = gesture_detector_running_getter
         self._user_state_getter = user_state_getter
+        self._user_expression_getter = user_expression_getter
         self._gesture_state_getter = gesture_state_getter
         self._pet_state_getter = pet_state_getter
         self._action_state_getter = action_state_getter
@@ -126,6 +149,7 @@ class VisionRuntimeAPI:
             "user_detector_running": self._safe_bool(self._user_detector_running_getter),
             "gesture_detector_running": self._safe_bool(self._gesture_detector_running_getter),
             "user_state": self.get_latest_user_state(now),
+            "user_expression": self.get_latest_user_expression(now),
             "gesture": self.get_latest_gesture_state(now),
             "pet_emotion": self.get_latest_pet_emotion(now),
             "action": self.get_latest_action_state(),
@@ -145,6 +169,33 @@ class VisionRuntimeAPI:
             "state_name": str(state.get("state_name", "未知") or "未知"),
             "confidence": self._float(state.get("confidence", 0.0)),
             "source": self._source_text(state.get("source", "detector")),
+        }
+
+    def get_latest_user_expression(self, timestamp: float | None = None) -> dict:
+        if not callable(self._user_expression_getter):
+            return dict(USER_EXPRESSION_DEFAULT)
+
+        payload = self._safe_call(self._user_expression_getter)
+        if not isinstance(payload, dict):
+            return dict(USER_EXPRESSION_DEFAULT)
+
+        mimic = payload.get("face_mimic") if isinstance(payload.get("face_mimic"), dict) else {}
+
+        mimic_code = str(mimic.get("expression") or "unknown").lower()
+        mimic_confidence = self._float(mimic.get("confidence", 0.0))
+        mimic_available = bool(mimic.get("available")) and mimic_code != "unknown"
+
+        if not mimic_available:
+            result = dict(USER_EXPRESSION_DEFAULT)
+            result["face_mimic"] = self._json_safe_copy(mimic)
+            return result
+
+        return {
+            "expression_code": mimic_code,
+            "expression_name": EXPRESSION_NAME_MAP.get(mimic_code, mimic_code),
+            "confidence": mimic_confidence,
+            "source": self._source_text(mimic.get("source", "face_mimic")),
+            "face_mimic": self._json_safe_copy(mimic),
         }
 
     def get_latest_gesture_state(self, timestamp: float | None = None) -> dict:
@@ -259,6 +310,13 @@ class VisionRuntimeAPI:
             return int(value)
         except Exception:
             return None
+
+    @staticmethod
+    def _json_safe_copy(value: Any) -> Any:
+        try:
+            return copy.deepcopy(value)
+        except Exception:
+            return {}
 
 
 __all__ = ["VisionRuntimeAPI"]
