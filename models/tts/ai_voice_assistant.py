@@ -18,6 +18,7 @@ from models.nlp.deepseek_api import DeepSeekClient
 from models.nlp.prompt_builder import (
     normalize_response_language,
 )
+from models.nlp.reply_router import repair_template_reply, route_user_message
 from models.state.user_profile import UserProfile
 from models.tts.language_match import detect_text_language, language_family, languages_match
 from models.tts.proactive_speech import ProactiveSpeechPolicy, build_local_event_reply
@@ -88,22 +89,28 @@ class AIChatVoiceAssistant:
         if not text:
             return ""
 
-        weather_reply = _weather_intent_reply(text, current_state)
-        if weather_reply:
-            voice_state, voice_action = self._voice_context(current_state)
-            self._stream_to_ui(weather_reply, callback_ui)
-            with self._lock:
-                self.memory.append_user(text)
-                self.memory.append_assistant(weather_reply)
-                self._last_reply = weather_reply
-            if self.auto_tts:
-                self._safe_play_voice(weather_reply, state=voice_state, action=voice_action)
-            return weather_reply
-
-        self._chat_active = True
         voice_state, voice_action = self._voice_context(current_state)
         llm_state = self._state_with_response_language(current_state, voice_state, voice_action)
         response_language = self._response_language_from_state(llm_state)
+        route = route_user_message(text, llm_state, response_language=response_language)
+        if isinstance(llm_state, dict):
+            llm_state["reply_route"] = route.to_state()
+            llm_state["reply_intent"] = route.intent
+            llm_state["reply_mode"] = route.mode
+
+        if route.direct_reply:
+            direct_reply = route.direct_reply
+            self._stream_to_ui(direct_reply, callback_ui)
+            with self._lock:
+                if route.memory_policy != "skip":
+                    self.memory.append_user(text)
+                    self.memory.append_assistant(direct_reply)
+                self._last_reply = direct_reply
+            if self.auto_tts:
+                self._safe_play_voice(direct_reply, state=voice_state, action=voice_action)
+            return direct_reply
+
+        self._chat_active = True
         with self._lock:
             history = self._history_for_response_language(self.memory.get_messages(), response_language)
         try:
@@ -115,6 +122,7 @@ class AIChatVoiceAssistant:
             reply = _friendly_fallback_reply(llm_state)
         if _looks_like_internal_prompt(reply):
             reply = _status_event_fallback_reply(llm_state)
+        reply = repair_template_reply(reply, route, response_language=response_language)
         tts_started = False
         if self.auto_tts and _can_start_tts_before_display(reply, response_language):
             self._play_voice_async(reply, state=voice_state, action=voice_action)
@@ -125,8 +133,9 @@ class AIChatVoiceAssistant:
         self._stream_to_ui(display_reply, callback_ui)
 
         with self._lock:
-            self.memory.append_user(text)
-            self.memory.append_assistant(spoken_reply)
+            if route.memory_policy != "skip":
+                self.memory.append_user(text)
+                self.memory.append_assistant(spoken_reply)
             self._last_reply = display_reply
 
         if self.auto_tts and not tts_started:

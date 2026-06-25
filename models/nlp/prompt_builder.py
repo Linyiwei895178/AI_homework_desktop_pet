@@ -157,6 +157,9 @@ def build_system_prompt(
     full_context = state_context
     if personalization_context:
         full_context = f"{state_context}; {personalization_context}"
+    route_context = build_reply_route_context(current_state)
+    if route_context:
+        full_context = f"{full_context}; {route_context}"
 
     if language == "zh-HK":
         return _persona_intro_zh(
@@ -298,6 +301,24 @@ def build_personalization_context(current_state: Optional[Dict[str, Any]]) -> st
     if activity_summary:
         parts.append(activity_summary)
 
+    return "; ".join(parts)
+
+
+def build_reply_route_context(current_state: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(current_state, dict):
+        return ""
+    route = current_state.get("reply_route")
+    if not isinstance(route, dict):
+        return ""
+    intent = str(route.get("intent") or "").strip()
+    mode = str(route.get("mode") or "").strip()
+    hint = str(route.get("system_hint") or "").strip()
+    parts: list[str] = []
+    if intent or mode:
+        parts.append(f"reply_route={intent}/{mode}")
+    if hint:
+        parts.append(f"reply_strategy={hint}")
+    parts.append("avoid stock openings; answer the current intent directly")
     return "; ".join(parts)
 
 

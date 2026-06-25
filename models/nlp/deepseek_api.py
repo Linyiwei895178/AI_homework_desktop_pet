@@ -115,7 +115,10 @@ def _is_weather_query(text: str) -> bool:
     time_words = ("今天", "今日", "明天", "聽日", "现在", "而家", "实时", "即時", "最近", "这几天", "呢幾日", "周末")
     return (
         any(word in value for word in weather_words)
-        and any(word in value for word in time_words)
+        and (
+            any(word in value for word in time_words)
+            or any(word in value for word in ("怎么样", "怎麼樣", "点样", "點樣", "如何", "咋样", "幾多度", "多少度", "?", "？"))
+        )
     ) or "weather" in lowered
 
 
@@ -301,6 +304,7 @@ class DeepSeekClient:
     ) -> str:
         state_code = ""
         response_language = ""
+        reply_route = {}
         if isinstance(user_state, dict):
             state_code = str(user_state.get("state_code") or "").strip()
             response_language = normalize_response_language(
@@ -308,9 +312,15 @@ class DeepSeekClient:
                 or user_state.get("reply_language")
                 or user_state.get("language")
             )
+            if isinstance(user_state.get("reply_route"), dict):
+                reply_route = user_state.get("reply_route") or {}
             event_type = str(user_state.get("event_type") or user_state.get("event") or "").strip()
             if event_type:
                 return self._mock_status_event_reply(user_state)
+
+        routed_reply = self._mock_route_reply(text_prompt, reply_route, response_language)
+        if routed_reply:
+            return (self._state_prefix(state_code) + routed_reply)[:180]
 
         if response_language == "zh-HK":
             return self._mock_generate_cantonese(text_prompt, state_code=state_code, history=history)
@@ -343,6 +353,50 @@ class DeepSeekClient:
 
         reply = self._state_prefix(state_code) + base
         return reply[:160]
+
+    def _mock_route_reply(self, text_prompt: str, reply_route: dict[str, Any], response_language: str = "") -> str:
+        if not isinstance(reply_route, dict) or not reply_route:
+            return ""
+        intent = str(reply_route.get("intent") or "").strip()
+        mode = str(reply_route.get("mode") or "").strip()
+        direct_reply = str(reply_route.get("direct_reply") or "").strip()
+        if direct_reply:
+            return direct_reply
+        if response_language == "zh-HK":
+            return self._mock_route_reply_cantonese(intent, mode)
+        if intent == "quality_complaint":
+            return "对，这种模板感会很出戏。我会先判断你是在问信息、讲情绪，还是想闲聊，再直接接住这一句。"
+        if intent == "weather":
+            return "我现在还没接到实时天气数据，不能可靠地报天气；如果刚才乱接话，那确实是我走偏了。"
+        if mode == "care":
+            return "听起来确实有点压住人。你不用马上整理好，我在这儿听你慢慢说。"
+        if mode == "task":
+            return "可以，先别把它想成一整座山。我们只抓最小的第一步开始。"
+        if intent == "settings":
+            return "可以，我先确认一下：你是想改回复语言、声音音色，还是说话风格？"
+        if intent == "affection":
+            return "被你这么直接地说，我会很开心。那我也认真回你：我愿意好好陪着你。"
+        if intent == "greeting":
+            return "在呢，刚好等你开口。"
+        return ""
+
+    @staticmethod
+    def _mock_route_reply_cantonese(intent: str, mode: str) -> str:
+        if intent == "quality_complaint":
+            return "係，呢種模板感會好出戲。我會先分清你係問資料、講情緒，定係想閒傾，再直接接住你呢句。"
+        if intent == "weather":
+            return "我而家未接到即時天氣資料，唔敢亂報。你話我知邊個城市，我可以幫你整理要查啲咩。"
+        if mode == "care":
+            return "聽落真係有啲頂住。你唔使即刻整理好，我喺度聽你慢慢講。"
+        if mode == "task":
+            return "得，先唔好諗到成座山咁大。我哋搵最細嗰一步開頭。"
+        if intent == "settings":
+            return "可以，我先確認一下：你想改回覆語言、聲線，定係講嘢風格？"
+        if intent == "affection":
+            return "你咁直接講，我會開心。咁我都認真答你：我係願意陪住你。"
+        if intent == "greeting":
+            return "我喺度呀。你想由邊度開始講？"
+        return ""
 
     def _mock_generate_localized(
         self,
