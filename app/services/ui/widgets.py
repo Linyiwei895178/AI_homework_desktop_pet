@@ -1759,24 +1759,6 @@ class InputBox(QFrame, ScalableOverlay):
             _scaled_int(8, self._ui_scale, 4),
             _scaled_int(4, self._ui_scale, 2),
         )
-<<<<<<< HEAD
-        font_px = _scaled_int(15, self._ui_scale, 10)
-        btn_px = max(9, font_px - 1)
-        self._field.setFont(_app_font(font_px))
-        self._field.setStyleSheet(
-            f"QLineEdit {{ font-size: {font_px}px; background: transparent; border: none; color: #23232d; }}"
-            f"QLineEdit::placeholder {{ color: #94a3b8; font-size: {font_px}px; }}"
-        )
-        self._btn.setFont(_app_font(btn_px))
-        pad_v = _scaled_int(8, self._ui_scale, 4)
-        pad_h = _scaled_int(14, self._ui_scale, 8)
-        self._btn.setStyleSheet(
-            f"QPushButton {{ background-color: #1e293b; color: white; border: none;"
-            f" border-radius: {_scaled_int(12, self._ui_scale, 8)}px;"
-            f" padding: {pad_v}px {pad_h}px; font-size: {btn_px}px; }}"
-            f"QPushButton:hover {{ background-color: #334155; }}"
-        )
-=======
         self._lay.setSpacing(_scaled_int(4, self._ui_scale, 2))
         button_size = _scaled_int(28, self._ui_scale, 22)
         icon_size = _scaled_int(20, self._ui_scale, 16)
@@ -1784,7 +1766,6 @@ class InputBox(QFrame, ScalableOverlay):
         self._voice_btn.setIconSize(QSize(icon_size, icon_size))
         self._field.setFont(_app_font(_scaled_int(15, self._ui_scale, 10)))
         self._apply_field_style()
->>>>>>> 1360d08d5d0fccda2d7e04fc098499a58aacf455
         self.setStyleSheet(_glass_style(self.RADIUS))
 
     def _apply_field_style(self) -> None:
@@ -3073,7 +3054,7 @@ class Live2dUploadDialog(QDialog):
 
 
 class Live2dModelingDialog(QDialog):
-    """Live2D 白膜参数建模入口。"""
+    """Live2D 结构线稿参数建模入口。"""
 
     def __init__(self, project_root: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -3082,17 +3063,24 @@ class Live2dModelingDialog(QDialog):
             project_root,
             "assets",
             "live2d_modeling",
-            "base_front_template",
+            "anatomy_lineart_bases",
         )
-        self._schema = self._load_json("rig_parameters.json")
-        self._presets = self._load_json("parameter_presets.json").get("presets", {})
+        self._manifest = self._load_json("manifest.json")
+        self._schema = self._load_json("anatomy_parameters.json")
+        self._presets = {
+            "default": {
+                "label": "默认线稿",
+                "params": {},
+            }
+        }
+        self._base_id = str(self._manifest.get("default_base") or "male")
         self._defaults = self._default_params()
         self._params = dict(self._defaults)
         self._sliders: dict[str, QSlider] = {}
         self._value_labels: dict[str, QLabel] = {}
         self._param_units: dict[str, str] = {}
 
-        self.setWindowTitle("Live2D 白膜建模")
+        self.setWindowTitle("Live2D 线稿建模")
         self.resize(960, 680)
         self.setMinimumSize(820, 560)
 
@@ -3105,7 +3093,7 @@ class Live2dModelingDialog(QDialog):
         root.setSpacing(12)
 
         header = QHBoxLayout()
-        title = QLabel("<h2>Live2D 白膜建模</h2>")
+        title = QLabel("<h2>Live2D 线稿建模</h2>")
         header.addWidget(title)
         header.addStretch()
         self._status = QLabel("")
@@ -3128,7 +3116,7 @@ class Live2dModelingDialog(QDialog):
                 data = json.load(f)
             return data if isinstance(data, dict) else {}
         except (OSError, json.JSONDecodeError) as exc:
-            QMessageBox.warning(self, "白膜资源不可用", f"无法读取 {filename}: {exc}")
+            QMessageBox.warning(self, "线稿资源不可用", f"无法读取 {filename}: {exc}")
             return {}
 
     def _default_params(self) -> dict[str, float]:
@@ -3145,7 +3133,16 @@ class Live2dModelingDialog(QDialog):
         for key, data in self._presets.items():
             if isinstance(data, dict):
                 items.append((str(key), str(data.get("label") or key)))
-        return items or [("default", "默认白膜")]
+        return items or [("default", "默认线稿")]
+
+    def _base_items(self) -> list[tuple[str, str]]:
+        bases = self._manifest.get("bases", {})
+        items: list[tuple[str, str]] = []
+        if isinstance(bases, dict):
+            for key, data in bases.items():
+                if isinstance(data, dict):
+                    items.append((str(key), str(data.get("label") or key)))
+        return items or [("male", "男性结构线稿"), ("female", "女性结构线稿")]
 
     def _build_preview_panel(self) -> QFrame:
         panel = QFrame()
@@ -3164,12 +3161,12 @@ class Live2dModelingDialog(QDialog):
         )
         lay.addWidget(self._preview, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        lay.addWidget(QLabel("白膜名称"))
-        self._name_input = QLineEdit("我的Live2D白膜")
+        lay.addWidget(QLabel("线稿名称"))
+        self._name_input = QLineEdit("我的Live2D线稿")
         self._name_input.setPlaceholderText("用于导出文件夹和 PNG 名称")
         lay.addWidget(self._name_input)
 
-        export_btn = QPushButton("导出当前白膜")
+        export_btn = QPushButton("导出当前线稿")
         export_btn.setStyleSheet(BTN_PRIMARY)
         export_btn.clicked.connect(self._export_current)
         lay.addWidget(export_btn)
@@ -3186,6 +3183,18 @@ class Live2dModelingDialog(QDialog):
         lay = QVBoxLayout(wrap)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(10)
+
+        base_row = QHBoxLayout()
+        base_row.addWidget(QLabel("<b>基础线稿</b>"))
+        self._base_combo = QComboBox()
+        for key, label in self._base_items():
+            self._base_combo.addItem(label, key)
+        base_idx = self._base_combo.findData(self._base_id)
+        if base_idx >= 0:
+            self._base_combo.setCurrentIndex(base_idx)
+        self._base_combo.currentIndexChanged.connect(self._on_base_changed)
+        base_row.addWidget(self._base_combo, 1)
+        lay.addLayout(base_row)
 
         preset_row = QHBoxLayout()
         preset_row.addWidget(QLabel("<b>预设</b>"))
@@ -3262,6 +3271,10 @@ class Live2dModelingDialog(QDialog):
     def _on_preset_changed(self, *_args: Any) -> None:
         self._apply_preset(str(self._preset_combo.currentData() or "default"))
 
+    def _on_base_changed(self, *_args: Any) -> None:
+        self._base_id = str(self._base_combo.currentData() or self._base_id or "male")
+        self._schedule_render(delay_ms=10)
+
     def _apply_preset(self, preset_key: str) -> None:
         self._params = dict(self._defaults)
         preset = self._presets.get(preset_key, {})
@@ -3291,27 +3304,26 @@ class Live2dModelingDialog(QDialog):
 
         if self._root and self._root not in sys.path:
             sys.path.insert(0, self._root)
-        from tools import render_parametric_live2d_base as renderer
+        from tools import render_anatomy_lineart_model as renderer
 
         template_root = Path(self._template_root)
         renderer.ROOT = template_root
-        renderer.PARAM_FILE = template_root / "rig_parameters.json"
-        renderer.PRESET_FILE = template_root / "parameter_presets.json"
-        renderer.LAYER_DIR = template_root / "ai_cut_layers"
-        renderer.OUT_DIR = template_root / "parametric"
+        renderer.MANIFEST_FILE = template_root / "manifest.json"
+        renderer.PARAM_FILE = template_root / "anatomy_parameters.json"
+        renderer.OUT_DIR = Path(self._root) / "assets" / "live2d_modeling" / "custom_bases"
         return renderer
 
     def _render_to(self, out_dir: str, name: str) -> dict[str, str]:
         from pathlib import Path
 
         renderer = self._renderer()
-        return renderer.render(dict(self._params), Path(out_dir), name)
+        return renderer.render(self._base_id, dict(self._params), Path(out_dir), name)
 
     def _render_preview(self) -> None:
         try:
             out_dir = os.path.join(self._template_root, "ui_preview")
             result = self._render_to(out_dir, "live2d_base_editor")
-            preview = result.get("preview", "")
+            preview = result.get("lineart_reference", "")
             self._preview.setPixmap(_load_pixmap(preview, self._preview.size()))
             self._status.setText("预览已更新")
         except Exception as exc:
@@ -3337,7 +3349,9 @@ class Live2dModelingDialog(QDialog):
             )
             result = self._render_to(out_dir, name)
             manifest = {
+                "type": "anatomy_lineart",
                 "name": name,
+                "base": self._base_id,
                 "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
                 "params": dict(self._params),
                 "files": result,
@@ -3345,7 +3359,7 @@ class Live2dModelingDialog(QDialog):
             with open(os.path.join(out_dir, "modeling_manifest.json"), "w", encoding="utf-8") as f:
                 json.dump(manifest, f, ensure_ascii=False, indent=2)
             self._status.setText(f"已导出: {out_dir}")
-            QMessageBox.information(self, "导出完成", f"白膜文件已导出到：\n{out_dir}")
+            QMessageBox.information(self, "导出完成", f"线稿文件已导出到：\n{out_dir}")
         except Exception as exc:
             QMessageBox.warning(self, "导出失败", str(exc))
 
@@ -4264,7 +4278,7 @@ class ControlConsole(QMainWindow):
         entry.setStyleSheet(_glass_style(16))
         entry_lay = QHBoxLayout(entry)
         entry_lay.setContentsMargins(16, 12, 16, 12)
-        title = QLabel("<b>Live2D 白膜建模</b>")
+        title = QLabel("<b>Live2D 线稿建模</b>")
         title.setFont(_app_font(14, True))
         entry_lay.addWidget(title)
         entry_lay.addStretch()

@@ -1,0 +1,22 @@
+{
+  "base": "female",
+  "params": {
+    "overall_height": 97.0,
+    "head_size": 107.0,
+    "torso_length": 95.0,
+    "leg_length": 100.0,
+    "shoulder_width": 108.0,
+    "chest_width": 88.0,
+    "waist_width": 100.0,
+    "hip_width": 93.0,
+    "chest_muscle": 112.0,
+    "arm_muscle": 128.0,
+    "forearm_muscle": 78.0,
+    "thigh_muscle": 114.0,
+    "calf_muscle": 115.0,
+    "abdomen_definition": 99.0,
+    "muscle_definition": 78.0,
+    "construction_lines": 100.0,
+    "line_weight": 100.0
+  }
+}

@@ -12,6 +12,4 @@ The active modeling flow uses anatomy line-art bases:
 
 The app's Live2D modeling entry lets the user choose male or female first, then adjust anatomy sliders for proportion, torso shape, muscle volume, and line detail. It exports a modeling project under `custom_bases/`.
 
-`base_front_template/` is kept as a legacy reference folder. It is no longer the main modeling entry.
-
 `pose_study/` contains the PDF pose analysis, selected reference sheets, pose taxonomy, and the Live2D rig specification for converting these anatomy bases into layered, pose-aware models.
