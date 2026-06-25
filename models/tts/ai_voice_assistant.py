@@ -17,7 +17,6 @@ from models.nlp.chat_memory import ChatMemory
 from models.nlp.deepseek_api import DeepSeekClient
 from models.nlp.prompt_builder import (
     normalize_response_language,
-    response_language_from_edge_voice,
 )
 from models.state.user_profile import UserProfile
 from models.tts.language_match import detect_text_language, language_family, languages_match
@@ -88,6 +87,18 @@ class AIChatVoiceAssistant:
         text = (user_input or "").strip()
         if not text:
             return ""
+
+        weather_reply = _weather_intent_reply(text, current_state)
+        if weather_reply:
+            voice_state, voice_action = self._voice_context(current_state)
+            self._stream_to_ui(weather_reply, callback_ui)
+            with self._lock:
+                self.memory.append_user(text)
+                self.memory.append_assistant(weather_reply)
+                self._last_reply = weather_reply
+            if self.auto_tts:
+                self._safe_play_voice(weather_reply, state=voice_state, action=voice_action)
+            return weather_reply
 
         self._chat_active = True
         voice_state, voice_action = self._voice_context(current_state)
@@ -214,12 +225,12 @@ class AIChatVoiceAssistant:
         enriched = dict(current_state) if isinstance(current_state, dict) else {}
         self._inject_personalization_context(enriched)
 
-        language = self._response_language_for_voice_context(state=state, action=action)
+        if normalize_response_language(enriched.get("response_language")):
+            return enriched or current_state
+
+        language = self._explicit_response_language()
         if not language:
             return enriched or current_state
-        if isinstance(current_state, dict):
-            if normalize_response_language(enriched.get("response_language")):
-                return enriched
         enriched["response_language"] = language
         return enriched
 
@@ -235,34 +246,12 @@ class AIChatVoiceAssistant:
             except Exception as exc:
                 print(f"[AIChatVoiceAssistant] 用户画像读取失败: {exc}")
 
-    def _response_language_for_voice_context(self, state: str = "neutral", action: str = "speak") -> str:
-        explicit = normalize_response_language(
+    def _explicit_response_language(self) -> str:
+        return normalize_response_language(
             self._tts_settings.get("response_language")
             or self._tts_settings.get("reply_language")
             or self._tts_settings.get("language")
         )
-        if explicit:
-            return explicit
-
-        runtime_voice = str(self._tts_settings.get("edge_voice") or "").strip()
-        language = response_language_from_edge_voice(runtime_voice)
-        if language:
-            return language
-
-        voice_settings = getattr(self.tts, "_voice_settings", None)
-        if callable(voice_settings):
-            try:
-                settings = voice_settings(pet_id=self.pet_id, state=state, action=action)
-            except TypeError:
-                try:
-                    settings = voice_settings(state=state, action=action)
-                except Exception:
-                    settings = {}
-            except Exception:
-                settings = {}
-            if isinstance(settings, dict):
-                return response_language_from_edge_voice(settings.get("edge_voice"))
-        return ""
 
     @staticmethod
     def _response_language_from_state(state: Optional[Dict[str, Any]]) -> str:
@@ -281,6 +270,9 @@ class AIChatVoiceAssistant:
 
         if _is_chinese_language(response_language):
             return self._translate_reply_to_chinese(value, response_language=response_language) or reply
+
+        if normalize_response_language(response_language):
+            return reply
 
         bilingual = self._bilingual_reply_with_line_translations(value, response_language=response_language)
         if bilingual:
@@ -347,18 +339,29 @@ class AIChatVoiceAssistant:
             source_language = language
         if callable(translator):
             try:
-                return str(translator(text, source_language=source_language) or "").strip()
+                translation = str(translator(text, source_language=source_language) or "").strip()
+                if translation and not _translation_looks_untranslated(text, translation):
+                    return translation
             except Exception as exc:
                 print(f"[AIChatVoiceAssistant] 翻译到中文失败: {exc}")
 
         fallback = {
+            "その話をしよう。いちばん気になるところから聞かせて。": "我们来聊聊那件事吧。先从你最在意的地方说给我听。",
+            "その話をしよう。": "我们来聊聊那件事吧。",
+            "こんにちは、そばにいるよ。": "你好呀，我就在你身边。",
+            "こんにちは、そばにいるよ": "你好呀，我就在你身边。",
+            "こんにちは。そばにいるよ。": "你好呀，我就在你身边。",
             "I am here. What would you like me to stay with you for today?": "我在这里。今天你想让我陪你做点什么？",
             "Sure, I am here.": "当然，我在这里。",
             "Je suis la. Qu'aimerais-tu que je fasse avec toi aujourd'hui ?": "我在这里。今天你想让我陪你做点什么？",
             "Parlons-en. Dis-moi ce qui compte le plus pour toi.": "我们聊聊这个吧。告诉我对你来说最重要的部分。",
         }
         normalized = " ".join((text or "").strip().split())
-        return fallback.get(normalized, f"这句话的中文意思：{normalized}")
+        if normalized in fallback:
+            return fallback[normalized]
+        if _contains_japanese_kana(normalized):
+            return f"这句日文暂时没能自动翻译出来。原文：{normalized}"
+        return f"这句话暂时没能自动翻译出来。原文：{normalized}"
 
     @staticmethod
     def _history_for_response_language(history: List[Dict[str, str]], response_language: str = "") -> List[Dict[str, str]]:
@@ -433,6 +436,12 @@ def _needs_chinese_translation(text: str, response_language: str = "") -> bool:
 def _language_mismatch(text: str, expected_language: str = "") -> bool:
     expected = normalize_response_language(expected_language)
     detected = detect_text_language(text)
+    if expected == "zh-HK":
+        if detected and language_family(detected) == "zh":
+            return not _looks_like_cantonese_text(text)
+    if expected == "zh-CN":
+        if detected and language_family(detected) == "zh":
+            return _looks_like_cantonese_text(text)
     return bool(expected and detected and not languages_match(expected, detected))
 
 
@@ -450,6 +459,71 @@ def _can_start_tts_before_display(text: str, response_language: str = "") -> boo
 
 def _contains_cjk(value: str) -> bool:
     return any("\u4e00" <= char <= "\u9fff" for char in value or "")
+
+
+def _contains_japanese_kana(value: str) -> bool:
+    return any("\u3040" <= char <= "\u30ff" for char in value or "")
+
+
+def _looks_like_cantonese_text(text: str) -> bool:
+    value = str(text or "")
+    markers = (
+        "唔",
+        "冇",
+        "喺",
+        "係咪",
+        "咩",
+        "啲",
+        "嘅",
+        "嘢",
+        "嗰",
+        "咗",
+        "緊",
+        "而家",
+        "點樣",
+        "得唔得",
+        "可唔可以",
+        "我哋",
+        "你哋",
+        "㗎",
+        "啦",
+        "呀",
+    )
+    return any(marker in value for marker in markers)
+
+
+def _translation_looks_untranslated(source: str, translation: str) -> bool:
+    source_norm = " ".join((source or "").strip().split())
+    translation_norm = " ".join((translation or "").strip().split())
+    if not translation_norm:
+        return True
+    if source_norm == translation_norm:
+        return True
+    if _contains_japanese_kana(source_norm) and _contains_japanese_kana(translation_norm):
+        return True
+    return False
+
+
+def _weather_intent_reply(text: str, current_state: Optional[Dict[str, Any]] = None) -> str:
+    value = str(text or "").strip()
+    if not value:
+        return ""
+    weather_words = ("天气", "天氣", "气温", "氣溫", "温度", "溫度", "下雨", "下雪", "刮风", "颳風", "空气质量", "空氣質素", "穿什么", "著咩")
+    time_words = ("今天", "今日", "明天", "聽日", "现在", "而家", "实时", "即時", "最近", "这几天", "呢幾日", "周末")
+    if not any(word in value for word in weather_words):
+        return ""
+    if not any(word in value for word in time_words) and "weather" not in value.lower():
+        return ""
+    language = ""
+    if isinstance(current_state, dict):
+        language = normalize_response_language(
+            current_state.get("response_language")
+            or current_state.get("reply_language")
+            or current_state.get("language")
+        )
+    if language == "zh-HK":
+        return "我而家未接到即時天氣資料，唔敢亂報。你話我知邊個城市，我可以幫你整理要查啲咩。"
+    return "我现在还没接天气数据，不能可靠地报实时天气；刚才如果乱接话就是我的问题。你告诉我城市后，我可以先帮你整理该查哪些信息。"
 
 
 def _friendly_fallback_reply(current_state: Optional[Dict[str, Any]] = None) -> str:
