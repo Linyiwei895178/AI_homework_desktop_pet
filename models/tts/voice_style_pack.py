@@ -104,7 +104,7 @@ VOICE_STYLE_PACKS: tuple[dict[str, Any], ...] = (
         "voices": {
             **_DEFAULT_VOICES,
             "zh-CN": "zh-TW-HsiaoYuNeural",
-            "zh-HK": "zh-TW-HsiaoYuNeural",
+            "zh-HK": "zh-HK-HiuGaaiNeural",
             "zh-TW": "zh-TW-HsiaoYuNeural",
             "en-US": "en-US-AriaNeural",
             "en-GB": "en-GB-SoniaNeural",
