@@ -3,7 +3,7 @@
   "pin_top": true,
   "hover_fade": false,
   "status_bar": true,
-  "chat_open": false,
+  "chat_open": true,
   "voice_pack_id": "",
   "tts_settings": {
     "enabled": true,
@@ -11,19 +11,19 @@
     "quality": "basic",
     "edge_voice": "",
     "response_language": "zh-CN",
-    "voice_style_pack": "natural",
+    "voice_style_pack": "sharp_tongue",
     "voice_style_pack_enabled": true,
     "edge_playback_guard": true,
     "text_normalizer": "",
-    "prosody_style": "natural",
+    "prosody_style": "sharp",
     "voice_style_pack_locks_prosody": true,
     "voice_profile": "default",
     "emotion_style": "auto",
     "cute_style": false,
     "voice_pack_mode": "off",
-    "edge_rate": "+0%",
-    "edge_pitch": "+0Hz",
-    "edge_volume": "+0%",
+    "edge_rate": "+6%",
+    "edge_pitch": "-4Hz",
+    "edge_volume": "+5%",
     "openvoice_enabled": false,
     "openvoice_python": "",
     "openvoice_repo_dir": "",
@@ -33,11 +33,11 @@
     "tts_volume": ""
   },
   "position": [
-    131,
-    19
+    106,
+    60
   ],
   "window_size": [
-    382,
-    509
+    266,
+    354
   ]
 }

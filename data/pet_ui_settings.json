@@ -2,7 +2,7 @@
   "pin_top": true,
   "hover_fade": false,
   "status_bar": true,
-  "chat_open": false,
+  "chat_open": true,
   "voice_pack_id": "",
   "desktop_behavior": {
     "auto_walk": true,
@@ -14,19 +14,19 @@
     "quality": "basic",
     "edge_voice": "",
     "response_language": "zh-CN",
-    "voice_style_pack": "natural",
+    "voice_style_pack": "sharp_tongue",
     "voice_style_pack_enabled": true,
     "edge_playback_guard": true,
     "text_normalizer": "",
-    "prosody_style": "natural",
+    "prosody_style": "sharp",
     "voice_style_pack_locks_prosody": true,
     "voice_profile": "default",
     "emotion_style": "auto",
     "cute_style": false,
     "voice_pack_mode": "off",
-    "edge_rate": "+0%",
-    "edge_pitch": "+0Hz",
-    "edge_volume": "+0%",
+    "edge_rate": "+6%",
+    "edge_pitch": "-4Hz",
+    "edge_volume": "+5%",
     "openvoice_enabled": false,
     "openvoice_python": "",
     "openvoice_repo_dir": "",
@@ -44,7 +44,7 @@
   "input_box_y": 1.2818181818181817,
   "personalization_settings": {
     "speech_style": {
-      "tone": "电子管家",
+      "tone": "温柔撒娇",
       "nickname": "主人",
       "catchphrase": "我在呢",
       "use_emoji": true
@@ -52,7 +52,7 @@
     "interaction_frequency": {
       "proactive_level": 45,
       "quiet_when_busy": true,
-      "quiet_hours": "00:00-09:00"
+      "quiet_hours": "无"
     },
     "desktop_access": {
       "foreground_observation_authorized": false,
@@ -61,7 +61,7 @@
       "comment_interval_seconds": 150
     },
     "appearance_actions": {
-      "theme_color": "天空蓝",
+      "theme_color": "极简灰",
       "idle_action": "小步走动",
       "transparency": 92
     },
@@ -81,7 +81,7 @@
       "pomodoro": false,
       "meal": false,
       "sleep": true,
-      "style": "安静弹窗"
+      "style": "温柔提醒"
     },
     "memory_relationship": {
       "relationship": "朋友",
@@ -91,8 +91,8 @@
     },
     "voice_expression": {
       "voice_enabled": true,
-      "voice_style": "御姐音",
-      "speech_rate": 46,
+      "voice_style": "自然可爱",
+      "speech_rate": 39,
       "bubble_density": 50
     },
     "desktop_behavior": {
